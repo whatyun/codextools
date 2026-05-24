@@ -77,4 +77,4 @@ GitHub Pages can publish the `docs/` folder automatically through the included w
 ## Notes
 
 - The backend still targets the Codex/Codex++ local workflow and keeps compatibility-oriented command names where that reduces migration risk.
-- Watcher install and removal remain marked as not implemented in the Go backend, matching the current refactor state.
+- Watcher install and removal are implemented for Windows. macOS shows an explicit platform limitation and keeps only the local enable/disable flag controls.

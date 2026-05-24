@@ -567,6 +567,238 @@ body {
   gap: 14px;
 }
 
+.onboarding-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.onboarding-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.52fr);
+  gap: 18px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.74);
+  border-radius: 30px;
+  background:
+    linear-gradient(135deg, hsl(0 0% 100%), hsl(205 78% 97%) 48%, hsl(149 66% 96%)),
+    hsl(var(--card));
+  box-shadow: 0 22px 62px hsl(217 33% 40% / 0.1);
+  padding: 24px;
+}
+
+.dark .onboarding-hero {
+  background:
+    linear-gradient(135deg, hsl(222 25% 13%), hsl(217 32% 12%) 52%, hsl(157 43% 12%)),
+    hsl(var(--card));
+}
+
+.onboarding-hero-copy {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
+.onboarding-hero-copy h2 {
+  margin: 0;
+  font-size: clamp(30px, 4vw, 46px);
+  font-weight: 780;
+  letter-spacing: 0;
+  line-height: 1.08;
+}
+
+.onboarding-hero-copy p {
+  max-width: 660px;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.onboarding-summary {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  border: 1px solid hsl(var(--border) / 0.78);
+  border-radius: 24px;
+  background: hsl(var(--card) / 0.78);
+  padding: 16px;
+}
+
+.onboarding-summary div,
+.guide-facts div {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid hsl(var(--border) / 0.72);
+  padding: 7px 0;
+}
+
+.onboarding-summary div:last-child,
+.guide-facts div:last-child {
+  border-bottom: 0;
+}
+
+.onboarding-summary span,
+.guide-facts span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.onboarding-summary strong,
+.guide-facts strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.onboarding-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.onboarding-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.onboarding-step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 50px;
+  width: 100%;
+  border: 1px solid hsl(var(--border));
+  border-radius: 18px;
+  background: hsl(var(--background) / 0.72);
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.onboarding-step span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 12px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.onboarding-step strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-step.active {
+  border-color: hsl(var(--ring) / 0.52);
+  background: hsl(var(--accent));
+}
+
+.onboarding-step.done span {
+  background: hsl(148 78% 92%);
+  color: hsl(151 82% 30%);
+}
+
+.dark .onboarding-step.done span {
+  background: hsl(151 62% 18%);
+  color: hsl(148 76% 70%);
+}
+
+.guide-pane {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 444px;
+}
+
+.guide-pane-head {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.guide-pane-head > svg {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  background: hsl(var(--accent));
+  color: hsl(var(--primary));
+  padding: 10px;
+}
+
+.guide-pane-head h3 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.guide-pane-head p {
+  margin: 5px 0 0;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.55;
+}
+
+.guide-facts {
+  display: grid;
+  border: 1px solid hsl(var(--border));
+  border-radius: 20px;
+  background: hsl(var(--background) / 0.66);
+  padding: 7px 14px;
+}
+
+.install-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid hsl(var(--border));
+  border-radius: 22px;
+  background: hsl(var(--card));
+  padding: 16px;
+}
+
+.install-card div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.install-card strong {
+  font-size: 16px;
+}
+
+.install-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.guide-import-row {
+  margin-bottom: 0;
+}
+
+.onboarding-mode-panel {
+  margin-top: 0;
+}
+
+.finish-pane {
+  min-height: 380px;
+}
+
 .panel {
   border-color: hsl(var(--border) / 0.82);
   border-radius: 24px;
@@ -1243,6 +1475,38 @@ body {
   color: hsl(var(--primary));
 }
 
+.platform-note {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  border: 1px solid hsl(var(--border));
+  border-radius: 18px;
+  background: hsl(var(--muted) / 0.56);
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  line-height: 1.48;
+  padding: 12px 14px;
+}
+
+.platform-note.limited {
+  border-color: hsl(35 92% 66% / 0.46);
+  background: hsl(39 100% 92% / 0.56);
+}
+
+.dark .platform-note.limited {
+  background: hsl(36 70% 18% / 0.38);
+}
+
+.platform-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: hsl(var(--primary));
+}
+
+.platform-note.limited svg {
+  color: hsl(35 92% 46%);
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -1574,6 +1838,8 @@ body {
 
   .home-hero,
   .home-columns,
+  .onboarding-hero,
+  .onboarding-layout,
   .quick-grid,
   .grid.two,
   .form-row,
@@ -1615,6 +1881,15 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-content: stretch;
     gap: 10px;
+  }
+
+  .onboarding-hero,
+  .onboarding-layout {
+    gap: 12px;
+  }
+
+  .guide-pane {
+    min-height: auto;
   }
 
   .ready-ring,
@@ -1689,7 +1964,8 @@ body {
 
   .topbar-actions,
   .hero-actions,
-  .home-command {
+  .home-command,
+  .install-card {
     align-items: stretch;
     flex-direction: column;
   }

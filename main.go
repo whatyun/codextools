@@ -22,7 +22,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -41,15 +44,30 @@ const (
 	localRelayProxyPort      = 57323
 	protocolProxyBaseURL     = "http://127.0.0.1:57321/v1"
 	scriptMarketIndexURL     = "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlusScriptMarket/main/index.json"
+	codexAppMirrorAPIURL     = "https://api.github.com/repos/Wangnov/codex-app-mirror/releases/latest"
+	codexAppMirrorReleaseURL = "https://github.com/Wangnov/codex-app-mirror/releases/latest"
+	codexAppMirrorProjectURL = "https://github.com/Wangnov/codex-app-mirror"
+	codexOfficialInstallURL  = "https://openai.com/codex/"
 	defaultRelayTestModel    = "gpt-5-mini"
 	defaultAPIKeyEnvironment = "CUSTOM_OPENAI_API_KEY"
 	defaultGUIPath           = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	cdpConnectTimeout        = 5 * time.Second
+	cdpCommandTimeout        = 5 * time.Second
+	launcherCheckInterval    = 5 * time.Second
+	bridgeBindingName        = "codexSessionDeleteV2"
+	defaultWatcherDebugPort  = 9229
+	watcherRunName           = "CodexPlusPlusWatcher"
+	watcherRunKey            = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	watcherStartupLinkName   = "CodexPlusPlusWatcher.lnk"
 )
 
 var binaryRole = "manager"
 
 //go:embed all:web/dist
 var embeddedDist embed.FS
+
+//go:embed assets/inject/renderer-inject.js
+var rendererInjectScript string
 
 type commandResult map[string]any
 
@@ -94,6 +112,42 @@ type launchStatus struct {
 	DebugPort   *uint16 `json:"debug_port"`
 	HelperPort  *uint16 `json:"helper_port"`
 	CodexApp    *string `json:"codex_app"`
+}
+
+type launcherRuntime struct {
+	settings  backendSettings
+	debugPort uint16
+	helper    *http.Server
+	relay     *http.Server
+	helperURL string
+	relayURL  string
+}
+
+type cdpTarget struct {
+	ID                   string `json:"id"`
+	Type                 string `json:"type"`
+	URL                  string `json:"url"`
+	Title                string `json:"title"`
+	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+}
+
+type cdpResponse struct {
+	ID     int64           `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *cdpError       `json:"error,omitempty"`
+}
+
+type cdpError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type bridgePayload struct {
+	ID      string          `json:"id"`
+	Path    string          `json:"path"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 type userScriptInventory struct {
@@ -179,6 +233,21 @@ type ccsProviderImport struct {
 	Protocol       string `json:"protocol"`
 	ConfigContents string `json:"configContents"`
 	AuthContents   string `json:"authContents"`
+}
+
+type codexAppMirrorRelease struct {
+	TagName     string                `json:"tag_name"`
+	Name        string                `json:"name"`
+	HTMLURL     string                `json:"html_url"`
+	PublishedAt string                `json:"published_at"`
+	Assets      []codexAppMirrorAsset `json:"assets"`
+}
+
+type codexAppMirrorAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
+	ContentType        string `json:"content_type"`
 }
 
 func main() {
@@ -274,21 +343,75 @@ func runLauncher(args []string) error {
 	}
 	helperPort := options.helperPort
 	if helperPort == 0 {
-		helperPort = localRelayProxyPort
+		helperPort = 57321
+	}
+	runtimeState := &launcherRuntime{settings: settings, debugPort: debugPort}
+	if settings.ProviderSync {
+		result := runProviderSync(codexHomeDir())
+		appendDiagnosticLog("provider_sync."+result.Status, map[string]any{
+			"targetProvider":      result.TargetProvider,
+			"changedSessionFiles": result.ChangedSessionFiles,
+			"sqliteRowsUpdated":   result.SQLiteRowsUpdated,
+			"message":             result.Message,
+		})
+	}
+	if helperNeeded(settings) {
+		if err := runtimeState.startHelper(helperPort); err != nil {
+			failure := launchStatus{
+				Status:      "failed",
+				Message:     "启动 Codex++ helper 失败：" + err.Error(),
+				StartedAtMS: uint64(time.Now().UnixMilli()),
+				DebugPort:   &debugPort,
+				HelperPort:  &helperPort,
+				CodexApp:    &appPath,
+			}
+			_ = atomicWriteJSON(latestStatusPath(), failure)
+			appendDiagnosticLog("launcher.helper_failed", map[string]any{"helper_port": helperPort, "error": err.Error()})
+			return err
+		}
+		defer runtimeState.shutdownHelper()
+	}
+	if activeRelayProfile(settings).needsLocalRelayProxy() {
+		if err := runtimeState.startRelayProxy(localRelayProxyPort); err != nil {
+			failure := launchStatus{
+				Status:      "failed",
+				Message:     "启动 Codex++ 本地中转代理失败：" + err.Error(),
+				StartedAtMS: uint64(time.Now().UnixMilli()),
+				DebugPort:   &debugPort,
+				HelperPort:  &helperPort,
+				CodexApp:    &appPath,
+			}
+			_ = atomicWriteJSON(latestStatusPath(), failure)
+			appendDiagnosticLog("launcher.relay_proxy_failed", map[string]any{"port": localRelayProxyPort, "error": err.Error()})
+			return err
+		}
+		defer runtimeState.shutdownRelayProxy()
 	}
 	status := launchStatus{
-		Status:      "running",
-		Message:     "CodexTools launcher running.",
+		Status:      "starting",
+		Message:     "Codex++ launcher starting Codex and waiting for injection.",
 		StartedAtMS: uint64(time.Now().UnixMilli()),
 		DebugPort:   &debugPort,
 		HelperPort:  &helperPort,
 		CodexApp:    &appPath,
 	}
 	_ = atomicWriteJSON(latestStatusPath(), status)
+	appendDiagnosticLog("launcher.starting", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "enhancements": settings.Enhancements})
 
 	command := buildCodexLaunchCommand(appPath, debugPort, settings.CodexExtraArgs)
 	if len(command) == 0 {
 		return errors.New("无法构建 Codex 启动命令")
+	}
+	if shouldQuitRunningCodexBeforeLaunch(appPath, debugPort) {
+		appendDiagnosticLog("launcher.quit_existing_codex", map[string]any{"codex_app": appPath, "debug_port": debugPort})
+		if err := quitMacOSApp(appPath); err != nil {
+			appendDiagnosticLog("launcher.quit_existing_codex_failed", map[string]any{"codex_app": appPath, "error": err.Error()})
+		}
+		if !waitForMacOSAppExit(appPath, 8*time.Second) {
+			appendDiagnosticLog("launcher.force_kill_existing_codex", map[string]any{"codex_app": appPath})
+			_ = forceKillMacOSApp(appPath)
+			_ = waitForMacOSAppExit(appPath, 4*time.Second)
+		}
 	}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Env = append(os.Environ(), codexLaunchEnvironment()...)
@@ -304,8 +427,37 @@ func runLauncher(args []string) error {
 			CodexApp:    &appPath,
 		}
 		_ = atomicWriteJSON(latestStatusPath(), failure)
+		appendDiagnosticLog("launcher.codex_start_failed", map[string]any{"error": err.Error(), "command": safeCommandForLog(command)})
 		return err
 	}
+	if settings.Enhancements {
+		if err := runtimeState.retryInjection(helperPort); err != nil {
+			failure := launchStatus{
+				Status:      "failed",
+				Message:     "Codex++ 注入失败：" + err.Error(),
+				StartedAtMS: uint64(time.Now().UnixMilli()),
+				DebugPort:   &debugPort,
+				HelperPort:  &helperPort,
+				CodexApp:    &appPath,
+			}
+			_ = atomicWriteJSON(latestStatusPath(), failure)
+			appendDiagnosticLog("launcher.inject_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
+			terminateLaunchedCodex(cmd, command, appPath)
+			_ = cmd.Wait()
+			return err
+		}
+		go runtimeState.bridgeWatchdog(helperPort)
+	}
+	ready := launchStatus{
+		Status:      "running",
+		Message:     "Codex++ launcher ready.",
+		StartedAtMS: uint64(time.Now().UnixMilli()),
+		DebugPort:   &debugPort,
+		HelperPort:  &helperPort,
+		CodexApp:    &appPath,
+	}
+	_ = atomicWriteJSON(latestStatusPath(), ready)
+	appendDiagnosticLog("launcher.ready", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
 	return reapLauncherChild(cmd, appPath, debugPort, helperPort)
 }
 
@@ -350,7 +502,7 @@ func buildCodexLaunchCommand(appPath string, debugPort uint16, extraArgs []strin
 	}
 	args = append(args, normalizeExtraArgs(extraArgs)...)
 	if runtime.GOOS == "darwin" && strings.EqualFold(filepath.Ext(appPath), ".app") {
-		command := []string{"open", "-n", appPath, "--args"}
+		command := []string{"open", "-W", "-a", appPath, "--args"}
 		return append(command, args...)
 	}
 	executable := buildCodexExecutable(appPath)
@@ -395,6 +547,89 @@ func codexLaunchEnvironment() []string {
 	}
 }
 
+func shouldQuitRunningCodexBeforeLaunch(appPath string, debugPort uint16) bool {
+	if runtime.GOOS != "darwin" || !strings.EqualFold(filepath.Ext(appPath), ".app") {
+		return false
+	}
+	if !macOSAppRunning(appPath) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	if _, err := listCDPTargets(ctx, debugPort); err == nil {
+		return false
+	}
+	return true
+}
+
+func macOSAppRunning(appPath string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	name := strings.TrimSuffix(filepath.Base(appPath), ".app")
+	if strings.TrimSpace(name) == "" {
+		name = "Codex"
+	}
+	out, err := exec.Command("osascript", "-e", fmt.Sprintf(`application "%s" is running`, strings.ReplaceAll(name, `"`, `\"`))).Output()
+	return err == nil && strings.EqualFold(strings.TrimSpace(string(out)), "true")
+}
+
+func quitMacOSApp(appPath string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	name := strings.TrimSuffix(filepath.Base(appPath), ".app")
+	if strings.TrimSpace(name) == "" {
+		name = "Codex"
+	}
+	return exec.Command("osascript", "-e", fmt.Sprintf(`tell application "%s" to quit`, strings.ReplaceAll(name, `"`, `\"`))).Run()
+}
+
+func waitForMacOSAppExit(appPath string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !macOSAppRunning(appPath) {
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return !macOSAppRunning(appPath)
+}
+
+func forceKillMacOSApp(appPath string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	executable := buildCodexExecutable(appPath)
+	if executable != "" {
+		_ = exec.Command("pkill", "-x", filepath.Base(executable)).Run()
+	}
+	name := strings.TrimSuffix(filepath.Base(appPath), ".app")
+	if strings.TrimSpace(name) != "" {
+		_ = exec.Command("pkill", "-x", name).Run()
+	}
+	return nil
+}
+
+func terminateLaunchedCodex(cmd *exec.Cmd, command []string, appPath string) {
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	if runtime.GOOS == "darwin" && len(command) > 0 && command[0] == "open" {
+		_ = quitMacOSApp(appPath)
+	}
+}
+
+func safeCommandForLog(command []string) []string {
+	out := append([]string(nil), command...)
+	for i, part := range out {
+		if strings.Contains(strings.ToLower(part), "key") || strings.Contains(strings.ToLower(part), "token") {
+			out[i] = "[redacted]"
+		}
+	}
+	return out
+}
+
 func reapLauncherChild(cmd *exec.Cmd, appPath string, debugPort, helperPort uint16) error {
 	err := cmd.Wait()
 	message := "Codex exited."
@@ -412,7 +647,912 @@ func reapLauncherChild(cmd *exec.Cmd, appPath string, debugPort, helperPort uint
 		CodexApp:    &appPath,
 	}
 	_ = atomicWriteJSON(latestStatusPath(), status)
+	appendDiagnosticLog("launcher."+statusText, map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "message": message})
 	return err
+}
+
+func helperNeeded(settings backendSettings) bool {
+	return settings.Enhancements || activeRelayProfile(settings).Protocol == "chatCompletions" || activeRelayProfile(settings).needsLocalRelayProxy()
+}
+
+func (r relayProfile) needsLocalRelayProxy() bool {
+	return r.Protocol == "responses" && (disablesImageGeneration(r) || usesSeparateImageGenerationAPI(r))
+}
+
+func (r *launcherRuntime) startHelper(helperPort uint16) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", r.handleHelperHTTP)
+	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", helperPort), Handler: mux}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+	r.helper = server
+	r.helperURL = "http://" + server.Addr
+	appendDiagnosticLog("helper.listening", map[string]any{"helper_port": helperPort, "address": r.helperURL})
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			appendDiagnosticLog("helper.failed", map[string]any{"helper_port": helperPort, "error": err.Error()})
+		}
+	}()
+	return nil
+}
+
+func (r *launcherRuntime) shutdownHelper() {
+	if r.helper == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = r.helper.Shutdown(ctx)
+	appendDiagnosticLog("helper.shutdown", map[string]any{"address": r.helperURL})
+}
+
+func (r *launcherRuntime) startRelayProxy(port uint16) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodOptions {
+			writeCORSHeaders(w)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(req.Body, 32*1024*1024))
+		_ = req.Body.Close()
+		r.forwardRelayProxy(w, req, body)
+	})
+	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+	r.relay = server
+	r.relayURL = "http://" + server.Addr
+	appendDiagnosticLog("relay_proxy.listening", map[string]any{"port": port, "address": r.relayURL})
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			appendDiagnosticLog("relay_proxy.failed", map[string]any{"port": port, "error": err.Error()})
+		}
+	}()
+	return nil
+}
+
+func (r *launcherRuntime) shutdownRelayProxy() {
+	if r.relay == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = r.relay.Shutdown(ctx)
+	appendDiagnosticLog("relay_proxy.shutdown", map[string]any{"address": r.relayURL})
+}
+
+func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodOptions {
+		writeCORSHeaders(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(req.Body, 32*1024*1024))
+	_ = req.Body.Close()
+	appendDiagnosticLog("helper.request", map[string]any{
+		"method":     req.Method,
+		"path":       req.URL.Path,
+		"body_bytes": len(body),
+		"remote":     req.RemoteAddr,
+	})
+	switch req.URL.Path {
+	case "/backend/status", "/backend/repair":
+		writeHelperJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "后端已连接", "version": version, "transport": "http-helper"})
+	case "/diagnostics/log":
+		payload := json.RawMessage(body)
+		if len(payload) == 0 {
+			payload = json.RawMessage(`{}`)
+		}
+		r.logRendererDiagnostic(payload)
+		writeHelperJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "日志已记录"})
+	case "/v1/responses", "/responses", "/v1/responses/compact", "/responses/compact", "/v1/models", "/models":
+		r.forwardRelayProxy(w, req, body)
+	default:
+		writeHelperJSON(w, http.StatusNotFound, map[string]any{"status": "failed", "message": "未知后端路径"})
+	}
+}
+
+func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Request, body []byte) {
+	profile := activeRelayProfile(r.settings)
+	baseURL := strings.TrimRight(strings.TrimSpace(profile.BaseURL), "/")
+	apiKey := strings.TrimSpace(profile.APIKey)
+	if profile.Protocol == "responses" && profile.needsLocalRelayProxy() {
+		if isImageRequest(body) && usesSeparateImageGenerationAPI(profile) {
+			baseURL = strings.TrimRight(strings.TrimSpace(profile.ImageGenerationBaseURL), "/")
+			apiKey = strings.TrimSpace(profile.ImageGenerationAPIKey)
+		}
+	}
+	if baseURL == "" || apiKey == "" {
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy missing base URL or API key"}})
+		return
+	}
+	target := relayTargetURL(baseURL, req.URL.Path)
+	ctx, cancel := context.WithTimeout(req.Context(), 120*time.Second)
+	defer cancel()
+	method := req.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+	upstreamReq, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
+	if err != nil {
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": err.Error()}})
+		return
+	}
+	upstreamReq.Header.Set("authorization", "Bearer "+apiKey)
+	upstreamReq.Header.Set("user-agent", "CodexPlusPlus-GoRelay/"+version)
+	copyProxyHeaders(req.Header, upstreamReq.Header)
+	resp, err := http.DefaultClient.Do(upstreamReq)
+	if err != nil {
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
+		return
+	}
+	defer resp.Body.Close()
+	writeCORSHeaders(w)
+	for _, name := range []string{"content-type", "cache-control", "openai-request-id", "x-request-id"} {
+		if value := resp.Header.Get(name); value != "" {
+			w.Header().Set(name, value)
+		}
+	}
+	if w.Header().Get("content-type") == "" {
+		w.Header().Set("content-type", "application/json")
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+	appendDiagnosticLog("relay_proxy.response", map[string]any{"path": req.URL.Path, "status": resp.StatusCode, "target": target})
+}
+
+func relayTargetURL(baseURL, path string) string {
+	path = "/" + strings.TrimLeft(path, "/")
+	switch {
+	case strings.HasSuffix(path, "/responses") || path == "/responses":
+		return baseURL + "/responses"
+	case strings.HasSuffix(path, "/models") || path == "/models":
+		return baseURL + "/models"
+	default:
+		return baseURL + path
+	}
+}
+
+func copyProxyHeaders(source http.Header, target http.Header) {
+	for name, values := range source {
+		lower := strings.ToLower(name)
+		if lower == "authorization" || lower == "host" || lower == "connection" || lower == "content-length" {
+			continue
+		}
+		for _, value := range values {
+			target.Add(name, value)
+		}
+	}
+}
+
+func isImageRequest(body []byte) bool {
+	var value map[string]any
+	if json.Unmarshal(body, &value) != nil {
+		return false
+	}
+	tools, _ := value["tools"].([]any)
+	for _, tool := range tools {
+		if object, ok := tool.(map[string]any); ok {
+			kind := strings.ToLower(stringFromAny(firstNonNil(object["type"], object["name"])))
+			if strings.Contains(kind, "image") {
+				return true
+			}
+		}
+	}
+	return strings.Contains(strings.ToLower(string(body)), "image_generation")
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func (r *launcherRuntime) logRendererDiagnostic(raw json.RawMessage) {
+	var detail map[string]any
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		detail = map[string]any{"parse_error": err.Error(), "raw_bytes": len(raw)}
+	}
+	event := sanitizeDiagnosticEvent(stringFromAny(detail["event"]))
+	appendDiagnosticLog("renderer."+event, detail)
+}
+
+func writeCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("access-control-allow-origin", "*")
+	w.Header().Set("access-control-allow-methods", "GET, POST, OPTIONS")
+	w.Header().Set("access-control-allow-headers", "Content-Type, Authorization")
+}
+
+func writeHelperJSON(w http.ResponseWriter, status int, value any) {
+	writeCORSHeaders(w)
+	w.Header().Set("content-type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(value)
+}
+
+func sanitizeDiagnosticEvent(event string) string {
+	var b strings.Builder
+	for _, ch := range event {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-' || ch == '.' {
+			b.WriteRune(ch)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	out := strings.Trim(b.String(), "._-")
+	if out == "" {
+		return "event"
+	}
+	return out
+}
+
+func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessage) map[string]any {
+	started := time.Now()
+	var payloadMap map[string]any
+	_ = json.Unmarshal(payload, &payloadMap)
+	appendDiagnosticLog("bridge.request", map[string]any{"path": path, "payload_keys": mapKeys(payloadMap)})
+	var result map[string]any
+	switch path {
+	case "/backend/status", "/backend/repair":
+		result = map[string]any{"status": "ok", "message": "后端已连接", "version": version}
+	case "/settings/get":
+		result = bridgeSettingsValue(loadSettings())
+	case "/settings/set":
+		result = r.setBridgeSettings(payloadMap)
+	case "/diagnostics/log":
+		r.logRendererDiagnostic(payload)
+		result = map[string]any{"status": "ok", "message": "日志已记录"}
+	case "/user-scripts/list":
+		result = userScriptInventoryValue()
+	case "/user-scripts/set-enabled":
+		config := loadUserScriptConfig()
+		config.Enabled = boolFromAny(payloadMap["enabled"])
+		if err := saveUserScriptConfig(config); err != nil {
+			result = map[string]any{"status": "failed", "message": err.Error()}
+		} else {
+			result = userScriptInventoryValue()
+		}
+	case "/user-scripts/set-script-enabled":
+		key := strings.TrimSpace(stringFromAny(payloadMap["key"]))
+		if key == "" {
+			result = map[string]any{"status": "failed", "message": "脚本 key 不能为空"}
+			break
+		}
+		config := loadUserScriptConfig()
+		config.Scripts[key] = boolFromAny(payloadMap["enabled"])
+		if err := saveUserScriptConfig(config); err != nil {
+			result = map[string]any{"status": "failed", "message": err.Error()}
+		} else {
+			result = userScriptInventoryValue()
+		}
+	case "/user-scripts/reload":
+		bundle := enabledUserScriptBundle()
+		if strings.TrimSpace(bundle) != "" {
+			if _, err := r.evaluateOnCodex(bundle, false); err != nil {
+				result = map[string]any{"status": "failed", "message": err.Error()}
+				break
+			}
+		}
+		result = userScriptInventoryValue()
+	case "/devtools/open":
+		result = r.openDevTools()
+	case "/manager/open":
+		if err := openManagerApp(); err != nil {
+			result = map[string]any{"status": "failed", "message": "打开管理工具失败：" + err.Error()}
+		} else {
+			result = map[string]any{"status": "ok", "message": "管理工具已打开"}
+		}
+	case "/codex-model-catalog", "/codex-config-model":
+		result = codexModelCatalogValue()
+	case "/zed-remote/status":
+		result = zedRemoteStatusValue()
+	case "/zed-remote/resolve-host", "/zed-remote/fallback-request", "/zed-remote/open":
+		result = map[string]any{"status": "failed", "message": "Go 管理器暂未实现 Zed Remote 桥接"}
+	case "/delete", "/undo", "/export-markdown", "/archived-thread", "/move-thread-workspace", "/thread-sort-key", "/thread-sort-keys":
+		result = unsupportedBridgeDataRoute(path, payloadMap)
+	default:
+		result = map[string]any{"status": "failed", "message": "Unknown bridge path", "path": path}
+		appendDiagnosticLog("bridge.unknown_path", map[string]any{"path": path})
+	}
+	appendDiagnosticLog("bridge.response", map[string]any{
+		"path":       path,
+		"elapsed_ms": time.Since(started).Milliseconds(),
+		"status":     stringFromAny(result["status"]),
+	})
+	return result
+}
+
+func mapKeys(value map[string]any) []string {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func bridgeSettingsValue(settings backendSettings) map[string]any {
+	return map[string]any{
+		"providerSyncEnabled": settings.ProviderSync,
+		"enhancementsEnabled": settings.Enhancements,
+		"launchMode":          settings.LaunchMode,
+	}
+}
+
+func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]any {
+	settings := loadSettings()
+	if _, ok := payload["providerSyncEnabled"]; ok {
+		settings.ProviderSync = boolFromAny(payload["providerSyncEnabled"])
+	}
+	if _, ok := payload["enhancementsEnabled"]; ok {
+		settings.Enhancements = boolFromAny(payload["enhancementsEnabled"])
+	}
+	if value := strings.TrimSpace(stringFromAny(payload["launchMode"])); value == "patch" || value == "relay" {
+		settings.LaunchMode = value
+	}
+	if err := saveSettings(settings); err != nil {
+		return map[string]any{"status": "failed", "message": err.Error()}
+	}
+	r.settings = settings
+	result := bridgeSettingsValue(settings)
+	result["status"] = "ok"
+	return result
+}
+
+func enabledUserScriptBundle() string {
+	config := loadUserScriptConfig()
+	if !config.Enabled {
+		return ""
+	}
+	var parts []string
+	inventory := scanUserScripts()
+	for _, item := range inventory.Scripts {
+		if !item.Enabled {
+			continue
+		}
+		var dir string
+		switch item.Source {
+		case "builtin":
+			dir = inventory.BuiltinDir
+		case "user":
+			dir = inventory.UserDir
+		default:
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, item.Name))
+		if err != nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("\n;(() => {\n%s\n})();\n", string(data)))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func unsupportedBridgeDataRoute(path string, payload map[string]any) map[string]any {
+	sessionID := stringFromAny(payload["session_id"])
+	if path == "/thread-sort-key" {
+		return map[string]any{"status": "ok", "session_id": sessionID}
+	}
+	if path == "/thread-sort-keys" {
+		return map[string]any{"status": "ok", "sessions": []any{}}
+	}
+	return map[string]any{"status": "failed", "session_id": sessionID, "message": "Go 管理器暂未实现该页面数据操作：" + path}
+}
+
+func openManagerApp() error {
+	if runtime.GOOS == "darwin" {
+		app := entrypointPath(true)
+		if fileExists(app) {
+			return exec.Command("open", "-a", app).Start()
+		}
+	}
+	return exec.Command(companionBinaryPath(managerBinary)).Start()
+}
+
+func zedRemoteStatusValue() map[string]any {
+	return map[string]any{
+		"status":            "ok",
+		"platformSupported": runtime.GOOS == "darwin",
+		"zedAppFound":       fileExists("/Applications/Zed.app"),
+		"zedCliFound":       executableInPath("zed") != "",
+	}
+}
+
+func executableInPath(name string) string {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH") + string(os.PathListSeparator) + defaultGUIPath) {
+		if candidate := filepath.Join(dir, name); fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func codexModelCatalogValue() map[string]any {
+	configPath := filepath.Join(codexHomeDir(), "config.toml")
+	data, _ := os.ReadFile(configPath)
+	contents := string(data)
+	modelProvider := rootKeyString(contents, "model_provider")
+	model := rootKeyString(contents, "model")
+	defaultModel := rootKeyString(contents, "default_model")
+	providerValues := tableValues(contents, "model_providers."+modelProvider)
+	providerName := unquoteToml(providerValues["name"])
+	if providerName == "" {
+		providerName = modelProvider
+	}
+	models := uniqueStrings([]string{model, defaultModel, defaultRelayTestModel})
+	if len(models) == 0 {
+		models = []string{defaultRelayTestModel}
+	}
+	if defaultModel == "" {
+		defaultModel = firstNonEmpty(model, models[0])
+	}
+	return map[string]any{
+		"status":         "ok",
+		"model":          model,
+		"default_model":  defaultModel,
+		"model_provider": modelProvider,
+		"provider_name":  providerName,
+		"models":         models,
+		"sources":        []any{},
+		"responses_api":  map[string]any{"status": "unknown", "endpoint": "", "message": ""},
+	}
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func appendDiagnosticLog(event string, detail map[string]any) {
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	redacted := redactForLog(detail)
+	record := map[string]any{
+		"timestamp_ms": time.Now().UnixMilli(),
+		"pid":          os.Getpid(),
+		"event":        event,
+		"detail":       redacted,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	path := diagnosticLogPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_, _ = file.Write(append(data, '\n'))
+}
+
+func redactForLog(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for key, item := range typed {
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "key") || strings.Contains(lower, "token") || strings.Contains(lower, "authorization") || strings.Contains(lower, "secret") {
+				out[key] = "[redacted]"
+			} else {
+				out[key] = redactForLog(item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = redactForLog(item)
+		}
+		return out
+	case []string:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = redactForLog(item)
+		}
+		return out
+	case string:
+		if strings.HasPrefix(typed, "sk-") || strings.HasPrefix(typed, "Bearer ") {
+			return "[redacted]"
+		}
+		return typed
+	default:
+		return typed
+	}
+}
+
+func (r *launcherRuntime) retryInjection(helperPort uint16) error {
+	var lastErr error
+	for attempt := 1; attempt <= 24; attempt++ {
+		if err := r.inject(helperPort); err != nil {
+			lastErr = err
+			appendDiagnosticLog("inject.retry", map[string]any{"attempt": attempt, "debug_port": r.debugPort, "helper_port": helperPort, "error": err.Error()})
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		appendDiagnosticLog("inject.ok", map[string]any{"debug_port": r.debugPort, "helper_port": helperPort, "attempt": attempt})
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("Codex injection failed")
+	}
+	return lastErr
+}
+
+func (r *launcherRuntime) inject(helperPort uint16) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	targets, err := listCDPTargets(ctx, r.debugPort)
+	if err != nil {
+		return err
+	}
+	target, err := pickCDPPageTarget(targets)
+	if err != nil {
+		return err
+	}
+	if target.WebSocketDebuggerURL == "" {
+		return errors.New("selected CDP target has no websocket URL")
+	}
+	return r.installBridge(ctx, target.WebSocketDebuggerURL, helperPort)
+}
+
+func (r *launcherRuntime) bridgeWatchdog(helperPort uint16) {
+	ticker := time.NewTicker(launcherCheckInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		ok, err := r.bridgeHealthy()
+		if err != nil {
+			appendDiagnosticLog("bridge.health_error", map[string]any{"error": err.Error()})
+		}
+		if ok {
+			continue
+		}
+		appendDiagnosticLog("bridge.reinject_start", map[string]any{"debug_port": r.debugPort, "helper_port": helperPort})
+		if err := r.retryInjection(helperPort); err != nil {
+			appendDiagnosticLog("bridge.reinject_failed", map[string]any{"error": err.Error()})
+		}
+	}
+}
+
+func (r *launcherRuntime) bridgeHealthy() (bool, error) {
+	result, err := r.evaluateOnCodex(bridgeHealthCheckScript(), true)
+	if err != nil {
+		return false, err
+	}
+	return cdpResultBool(result), nil
+}
+
+func (r *launcherRuntime) openDevTools() map[string]any {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	targets, err := listCDPTargets(ctx, r.debugPort)
+	if err != nil {
+		return map[string]any{"status": "failed", "message": err.Error()}
+	}
+	target, err := pickCDPPageTarget(targets)
+	if err != nil {
+		return map[string]any{"status": "failed", "message": err.Error()}
+	}
+	if strings.TrimSpace(target.ID) == "" {
+		return map[string]any{"status": "failed", "message": "CDP target id 为空"}
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/devtools/inspector.html?ws=127.0.0.1:%d/devtools/page/%s", r.debugPort, r.debugPort, target.ID)
+	if err := openURL(url); err != nil {
+		return map[string]any{"status": "failed", "message": "打开 DevTools 失败：" + err.Error(), "url": url}
+	}
+	return map[string]any{"status": "ok", "message": "DevTools 已打开", "url": url, "target_id": target.ID}
+}
+
+func (r *launcherRuntime) evaluateOnCodex(script string, awaitPromise bool) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	targets, err := listCDPTargets(ctx, r.debugPort)
+	if err != nil {
+		return nil, err
+	}
+	target, err := pickCDPPageTarget(targets)
+	if err != nil {
+		return nil, err
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, target.WebSocketDebuggerURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	session := newCDPSession(conn, nil)
+	return session.send(ctx, "Runtime.evaluate", runtimeEvaluateParams(script, awaitPromise))
+}
+
+func listCDPTargets(ctx context.Context, debugPort uint16) ([]cdpTarget, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/json", debugPort), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("CDP target list HTTP %d", resp.StatusCode)
+	}
+	var targets []cdpTarget
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func pickCDPPageTarget(targets []cdpTarget) (cdpTarget, error) {
+	var fallback *cdpTarget
+	for i := range targets {
+		target := targets[i]
+		if target.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if fallback == nil {
+			fallback = &targets[i]
+		}
+		if target.Type == "page" {
+			return target, nil
+		}
+	}
+	if fallback != nil {
+		return *fallback, nil
+	}
+	return cdpTarget{}, errors.New("未找到可注入的 Codex CDP 页面 target")
+}
+
+func (r *launcherRuntime) installBridge(ctx context.Context, websocketURL string, helperPort uint16) error {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, websocketURL, nil)
+	if err != nil {
+		return err
+	}
+	handler := func(path string, payload json.RawMessage) map[string]any {
+		return r.handleBridgeRequest(path, payload)
+	}
+	session := newCDPSession(conn, handler)
+	if _, err := session.send(ctx, "Runtime.enable", map[string]any{}); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	_, _ = session.send(ctx, "Runtime.removeBinding", map[string]any{"name": bridgeBindingName})
+	if _, err := session.send(ctx, "Runtime.addBinding", map[string]any{"name": bridgeBindingName}); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	bridge := bridgeScript(bridgeBindingName)
+	if _, err := session.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": bridge}); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	if _, err := session.send(ctx, "Runtime.evaluate", runtimeEvaluateParams(bridge, false)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	scripts := []string{injectionScript(helperPort)}
+	if bundle := enabledUserScriptBundle(); strings.TrimSpace(bundle) != "" {
+		scripts = append(scripts, bundle)
+	}
+	for _, script := range scripts {
+		if _, err := session.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": script}); err != nil {
+			_ = conn.Close()
+			return err
+		}
+		if _, err := session.send(ctx, "Runtime.evaluate", runtimeEvaluateParams(script, false)); err != nil {
+			_ = conn.Close()
+			return err
+		}
+	}
+	return nil
+}
+
+func runtimeEvaluateParams(script string, awaitPromise bool) map[string]any {
+	return map[string]any{"expression": script, "awaitPromise": awaitPromise, "allowUnsafeEvalBlockedByCSP": true}
+}
+
+func injectionScript(helperPort uint16) string {
+	helperURL := fmt.Sprintf("http://127.0.0.1:%d", helperPort)
+	helperJSON, _ := json.Marshal(helperURL)
+	versionJSON, _ := json.Marshal(version)
+	buildJSON, _ := json.Marshal("go-20260524-1")
+	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\n%s", helperJSON, versionJSON, buildJSON, rendererInjectScript)
+}
+
+func bridgeScript(bindingName string) string {
+	return fmt.Sprintf(`
+(() => {
+  window.__codexSessionDeleteCallbacks = new Map();
+  window.__codexSessionDeleteSeq = 0;
+  window.__codexSessionDeleteResolve = (id, result) => {
+    const callback = window.__codexSessionDeleteCallbacks.get(id);
+    if (!callback) return;
+    window.__codexSessionDeleteCallbacks.delete(id);
+    callback.resolve(result);
+  };
+  window.__codexSessionDeleteReject = (id, message) => {
+    const callback = window.__codexSessionDeleteCallbacks.get(id);
+    if (!callback) return;
+    window.__codexSessionDeleteCallbacks.delete(id);
+    callback.resolve({ status: "failed", message });
+  };
+  window.__codexSessionDeleteBridge = (path, payload) => new Promise((resolve) => {
+    const id = String(++window.__codexSessionDeleteSeq);
+    window.__codexSessionDeleteCallbacks.set(id, { resolve });
+    window.%s(JSON.stringify({ id, path, payload }));
+  });
+})();
+`, bindingName)
+}
+
+func bridgeHealthCheckScript() string {
+	return `
+(() => {
+  const bridge = window.__codexSessionDeleteBridge;
+  if (typeof bridge !== "function") return false;
+  try {
+    return Promise.race([
+      Promise.resolve(bridge("/backend/status", {})).then((result) => !!result && result.status === "ok"),
+      new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
+    ]);
+  } catch (error) {
+    return false;
+  }
+})()
+`
+}
+
+func cdpResultBool(result json.RawMessage) bool {
+	var envelope struct {
+		Result struct {
+			Type  string `json:"type"`
+			Value bool   `json:"value"`
+		} `json:"result"`
+	}
+	return json.Unmarshal(result, &envelope) == nil && envelope.Result.Value
+}
+
+type cdpSession struct {
+	conn    *websocket.Conn
+	handler func(string, json.RawMessage) map[string]any
+	nextID  int64
+	pending map[int64]chan cdpResponse
+	mu      sync.Mutex
+	writeMu sync.Mutex
+}
+
+func newCDPSession(conn *websocket.Conn, handler func(string, json.RawMessage) map[string]any) *cdpSession {
+	session := &cdpSession{
+		conn:    conn,
+		handler: handler,
+		nextID:  1,
+		pending: map[int64]chan cdpResponse{},
+	}
+	go session.readLoop()
+	return session
+}
+
+func (s *cdpSession) send(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	s.mu.Lock()
+	id := s.nextID
+	s.nextID++
+	responseCh := make(chan cdpResponse, 1)
+	s.pending[id] = responseCh
+	s.mu.Unlock()
+	payload := map[string]any{"id": id, "method": method, "params": params}
+	s.writeMu.Lock()
+	if err := s.conn.WriteJSON(payload); err != nil {
+		s.writeMu.Unlock()
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+		return nil, err
+	}
+	s.writeMu.Unlock()
+	timer := time.NewTimer(cdpCommandTimeout)
+	defer timer.Stop()
+	select {
+	case response := <-responseCh:
+		if response.Error != nil {
+			return nil, fmt.Errorf("CDP command %s failed: %s", method, response.Error.Message)
+		}
+		return response.Result, nil
+	case <-ctx.Done():
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+		return nil, ctx.Err()
+	case <-timer.C:
+		s.mu.Lock()
+		delete(s.pending, id)
+		s.mu.Unlock()
+		return nil, fmt.Errorf("timed out waiting for CDP command %s", method)
+	}
+}
+
+func (s *cdpSession) readLoop() {
+	defer s.conn.Close()
+	for {
+		var response cdpResponse
+		if err := s.conn.ReadJSON(&response); err != nil {
+			return
+		}
+		if response.ID != 0 {
+			s.mu.Lock()
+			if ch, ok := s.pending[response.ID]; ok {
+				delete(s.pending, response.ID)
+				s.mu.Unlock()
+				ch <- response
+			} else {
+				s.mu.Unlock()
+			}
+			continue
+		}
+		if response.Method == "Runtime.bindingCalled" && s.handler != nil {
+			go s.handleBinding(response.Params)
+			continue
+		}
+	}
+}
+
+func (s *cdpSession) handleBinding(params json.RawMessage) {
+	var raw struct {
+		Payload string `json:"payload"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		appendDiagnosticLog("bridge.payload_parse_failed", map[string]any{"error": err.Error()})
+		return
+	}
+	var payload bridgePayload
+	if err := json.Unmarshal([]byte(raw.Payload), &payload); err != nil {
+		appendDiagnosticLog("bridge.payload_parse_failed", map[string]any{"error": err.Error()})
+		return
+	}
+	result := s.handler(payload.Path, payload.Payload)
+	expr := bridgeResolveExpression(payload.ID, result)
+	ctx, cancel := context.WithTimeout(context.Background(), cdpCommandTimeout)
+	defer cancel()
+	if _, err := s.send(ctx, "Runtime.evaluate", runtimeEvaluateParams(expr, false)); err != nil {
+		appendDiagnosticLog("bridge.resolve_failed", map[string]any{"request_id": payload.ID, "error": err.Error()})
+	}
+}
+
+func bridgeResolveExpression(requestID string, result map[string]any) string {
+	id, _ := json.Marshal(requestID)
+	value, _ := json.Marshal(result)
+	return fmt.Sprintf("window.__codexSessionDeleteResolve(%s, %s)", id, value)
 }
 
 type server struct {
@@ -492,6 +1632,8 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return ok("后端版本已读取。", map[string]any{"version": version})
 	case "load_overview":
 		return s.loadOverview()
+	case "load_install_guide_status":
+		return s.loadInstallGuideStatus(ctx)
 	case "launch_codex_plus":
 		return s.launchCodex(args, false)
 	case "restart_codex_plus":
@@ -525,9 +1667,9 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 	case "load_watcher_state":
 		return ok("watcher 状态已加载。", watcherPayload())
 	case "install_watcher":
-		return failed("Go 管理器暂未实现 watcher 安装，原版 Rust 管理工具仍支持此能力。", watcherPayload())
+		return s.installWatcher()
 	case "uninstall_watcher":
-		return failed("Go 管理器暂未实现 watcher 移除，原版 Rust 管理工具仍支持此能力。", watcherPayload())
+		return s.uninstallWatcher()
 	case "enable_watcher":
 		return s.setWatcherDisabled(false)
 	case "disable_watcher":
@@ -827,6 +1969,173 @@ func (s *server) loadOverview() commandResult {
 		"logs_path":           diagnosticLogPath(),
 	}
 	return ok("概览已加载。", payload)
+}
+
+func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
+	settings := loadSettings()
+	codexApp := resolveCodexApp(settings.CodexAppPath)
+	ccsDBPath := defaultCCSDBPath()
+	ccsProviders, ccsErr := listCCSProviders(ccsDBPath)
+	download := latestCodexDownload(ctx, runtime.GOOS, runtime.GOARCH)
+	payload := map[string]any{
+		"platform":                    runtime.GOOS,
+		"arch":                        runtime.GOARCH,
+		"codexApp":                    pathState(codexApp),
+		"codexVersion":                codexAppVersion(codexApp),
+		"codexInstallUrl":             codexInstallURL(download),
+		"codexInstallSource":          codexInstallSource(download),
+		"codexMirrorProjectUrl":       codexAppMirrorProjectURL,
+		"codexMirrorLatestReleaseUrl": codexMirrorLatestReleaseURL(download),
+		"codexLatestDownload":         download,
+		"ccs": map[string]any{
+			"installed":     fileExists(ccsDBPath),
+			"dbPath":        ccsDBPath,
+			"providerCount": len(ccsProviders),
+			"readError":     optionalErrorString(ccsErr),
+		},
+		"settingsPath": settingsPath(),
+		"activeMode":   activeRelayProfile(settings).RelayMode,
+	}
+	if ccsErr != nil {
+		return failed("新手引导状态已读取，但 CCSwitch 数据库读取失败："+ccsErr.Error(), payload)
+	}
+	return ok("新手引导状态已读取。", payload)
+}
+
+func codexInstallURL(download map[string]any) string {
+	if url := stringFromAny(download["downloadUrl"]); url != "" {
+		return url
+	}
+	if runtime.GOOS == "darwin" {
+		return codexOfficialInstallURL
+	}
+	return codexAppMirrorReleaseURL
+}
+
+func codexInstallSource(download map[string]any) string {
+	if source := stringFromAny(download["source"]); source != "" {
+		return source
+	}
+	if runtime.GOOS == "darwin" {
+		return "official"
+	}
+	return "mirror"
+}
+
+func codexMirrorLatestReleaseURL(download map[string]any) string {
+	if url := stringFromAny(download["releaseUrl"]); url != "" {
+		return url
+	}
+	return codexAppMirrorReleaseURL
+}
+
+func latestCodexDownload(ctx context.Context, goos, goarch string) map[string]any {
+	payload := map[string]any{
+		"status":     "not_checked",
+		"source":     "mirror",
+		"projectUrl": codexAppMirrorProjectURL,
+		"releaseUrl": codexAppMirrorReleaseURL,
+	}
+	if goos == "darwin" {
+		payload["status"] = "available"
+		payload["source"] = "official"
+		payload["downloadUrl"] = codexOfficialInstallURL
+		payload["message"] = "macOS 默认打开 Codex 官方安装页面。"
+	}
+	release, err := getJSON[codexAppMirrorRelease](ctx, codexAppMirrorAPIURL)
+	if err != nil {
+		payload["status"] = "failed"
+		payload["message"] = "获取镜像最新版本失败：" + err.Error()
+		return payload
+	}
+	payload["releaseName"] = release.Name
+	payload["tagName"] = release.TagName
+	payload["publishedAt"] = release.PublishedAt
+	if release.HTMLURL != "" {
+		payload["releaseUrl"] = release.HTMLURL
+	}
+	if goos == "darwin" {
+		return payload
+	}
+	asset, ok := selectCodexMirrorAsset(release.Assets, goos, goarch)
+	if !ok {
+		payload["status"] = "missing"
+		payload["message"] = "最新镜像版本没有找到当前系统对应安装包。"
+		return payload
+	}
+	payload["status"] = "available"
+	payload["source"] = "mirror"
+	payload["assetName"] = asset.Name
+	payload["downloadUrl"] = asset.BrowserDownloadURL
+	payload["size"] = asset.Size
+	payload["contentType"] = asset.ContentType
+	payload["message"] = "已找到镜像项目最新对应系统安装包。"
+	return payload
+}
+
+func selectCodexMirrorAsset(assets []codexAppMirrorAsset, goos, goarch string) (codexAppMirrorAsset, bool) {
+	var candidates []codexAppMirrorAsset
+	for _, asset := range assets {
+		name := strings.ToLower(asset.Name)
+		url := strings.ToLower(asset.BrowserDownloadURL)
+		value := name + " " + url
+		if asset.BrowserDownloadURL == "" {
+			continue
+		}
+		switch goos {
+		case "windows":
+			if strings.HasSuffix(name, ".msix") || strings.HasSuffix(name, ".appx") || strings.Contains(value, "windows") || strings.Contains(value, "win") {
+				candidates = append(candidates, asset)
+			}
+		case "darwin":
+			if strings.HasSuffix(name, ".dmg") && (strings.Contains(value, "mac") || strings.Contains(value, "darwin")) {
+				candidates = append(candidates, asset)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return codexAppMirrorAsset{}, false
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return codexAssetScore(candidates[i].Name, goarch) > codexAssetScore(candidates[j].Name, goarch)
+	})
+	return candidates[0], true
+}
+
+func codexAssetScore(name, goarch string) int {
+	lower := strings.ToLower(name)
+	score := 0
+	switch goarch {
+	case "arm64":
+		if strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64") {
+			score += 20
+		}
+	case "amd64":
+		if strings.Contains(lower, "x64") || strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") {
+			score += 20
+		}
+	}
+	if strings.HasSuffix(lower, ".msix") || strings.HasSuffix(lower, ".dmg") {
+		score += 10
+	}
+	if strings.Contains(lower, "sha256") || strings.Contains(lower, "manifest") || strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".txt") || strings.HasSuffix(lower, ".json") {
+		score -= 100
+	}
+	return score
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	return err.Error()
+}
+
+func optionalErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func entrypointPath(manager bool) string {
@@ -2245,6 +3554,40 @@ $shortcut.Save()
 	return exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script).Run()
 }
 
+func createWindowsShortcutWithArgs(shortcutPath, target, arguments, description string) error {
+	if runtime.GOOS != "windows" {
+		return errors.New("Windows shortcuts are only supported on Windows")
+	}
+	if err := os.MkdirAll(filepath.Dir(shortcutPath), 0o755); err != nil {
+		return err
+	}
+	script := fmt.Sprintf(`$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut(%s)
+$shortcut.TargetPath = %s
+$shortcut.Arguments = %s
+$shortcut.WorkingDirectory = %s
+$shortcut.Description = %s
+$shortcut.IconLocation = %s
+$shortcut.WindowStyle = 7
+$shortcut.Save()
+`, psQuote(shortcutPath), psQuote(target), psQuote(arguments), psQuote(filepath.Dir(target)), psQuote(description), psQuote(target))
+	return exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script).Run()
+}
+
+func windowsRegAddCurrentUserString(key, name, value string) error {
+	if runtime.GOOS != "windows" {
+		return errors.New("Windows registry is only supported on Windows")
+	}
+	return exec.Command("reg", "add", key, "/v", name, "/t", "REG_SZ", "/d", value, "/f").Run()
+}
+
+func windowsRegDeleteCurrentUserValue(key, name string) error {
+	if runtime.GOOS != "windows" {
+		return errors.New("Windows registry is only supported on Windows")
+	}
+	return exec.Command("reg", "delete", key, "/v", name, "/f").Run()
+}
+
 func psQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
@@ -2266,7 +3609,98 @@ func writeDesktopEntry(manager bool) error {
 
 func watcherPayload() map[string]any {
 	flag := filepath.Join(stateDir(), "watcher.disabled")
-	return map[string]any{"enabled": !fileExists(flag), "disabled_flag": flag}
+	install := watcherInstallState()
+	return map[string]any{
+		"enabled":            !fileExists(flag),
+		"disabled_flag":      flag,
+		"platform":           runtime.GOOS,
+		"install_supported":  runtime.GOOS == "windows",
+		"run_value_name":     watcherRunName,
+		"run_value":          install.RunValue,
+		"startup_shortcut":   install.ShortcutPath,
+		"launcher_path":      install.LauncherPath,
+		"launcher_arguments": install.Arguments,
+	}
+}
+
+type watcherInstallPlan struct {
+	LauncherPath string
+	Arguments    string
+	RunValue     string
+	ShortcutPath string
+}
+
+func watcherInstallState() watcherInstallPlan {
+	launcher := companionBinaryPath(silentBinary)
+	if runtime.GOOS == "windows" {
+		launcher += ".exe"
+	}
+	return buildWatcherInstallPlan(launcher, defaultWatcherDebugPort, watcherStartupShortcutPath())
+}
+
+func buildWatcherInstallPlan(launcherPath string, debugPort int, shortcutPath string) watcherInstallPlan {
+	arguments := fmt.Sprintf("--debug-port %d", debugPort)
+	return watcherInstallPlan{
+		LauncherPath: launcherPath,
+		Arguments:    arguments,
+		RunValue:     fmt.Sprintf("\"%s\" %s", strings.ReplaceAll(launcherPath, `"`, `\"`), arguments),
+		ShortcutPath: shortcutPath,
+	}
+}
+
+func watcherStartupShortcutPath() string {
+	appdata := os.Getenv("APPDATA")
+	if appdata == "" {
+		return ""
+	}
+	return filepath.Join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", watcherStartupLinkName)
+}
+
+func (s *server) installWatcher() commandResult {
+	payload := watcherPayload()
+	if runtime.GOOS != "windows" {
+		return failed("watcher 安装仅支持 Windows；macOS 只能手动从 Codex++ 入口启动并用启用/禁用控制本地标志。", payload)
+	}
+	install := watcherInstallState()
+	if install.ShortcutPath == "" {
+		return failed("安装 watcher 失败：无法定位 Windows 启动目录。", watcherPayload())
+	}
+	if !fileExists(install.LauncherPath) {
+		return failed("安装 watcher 失败：未找到静默启动器 "+install.LauncherPath, watcherPayload())
+	}
+	if err := windowsRegAddCurrentUserString(watcherRunKey, watcherRunName, install.RunValue); err != nil {
+		return failed("安装 watcher 失败："+err.Error(), watcherPayload())
+	}
+	if err := createWindowsShortcutWithArgs(install.ShortcutPath, install.LauncherPath, install.Arguments, "Codex++ watcher"); err != nil {
+		return failed("安装 watcher 失败："+err.Error(), watcherPayload())
+	}
+	spawnWatcherLauncher(install.LauncherPath, defaultWatcherDebugPort)
+	return ok("watcher 已安装。", watcherPayload())
+}
+
+func (s *server) uninstallWatcher() commandResult {
+	if runtime.GOOS != "windows" {
+		return ok("watcher 安装仅支持 Windows；当前平台没有需要移除的自动启动项。", watcherPayload())
+	}
+	if err := windowsRegDeleteCurrentUserValue(watcherRunKey, watcherRunName); err != nil {
+		// reg delete returns an error when the value does not exist; removal should remain idempotent.
+		_ = err
+	}
+	if shortcut := watcherStartupShortcutPath(); shortcut != "" {
+		_ = os.Remove(shortcut)
+	}
+	return ok("watcher 已移除。", watcherPayload())
+}
+
+func spawnWatcherLauncher(launcherPath string, debugPort int) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	cmd := exec.Command(launcherPath, "--debug-port", strconv.Itoa(debugPort))
+	cmd.Stdin = nil
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	_ = cmd.Start()
 }
 
 func (s *server) setWatcherDisabled(disabled bool) commandResult {
@@ -3030,13 +4464,6 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
-}
-
-func errorString(err error) string {
-	if err == nil {
-		return "unknown error"
-	}
-	return err.Error()
 }
 
 func minRunes(value string, max int) int {
