@@ -2,6 +2,20 @@ package main
 
 import "testing"
 
+func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
+	request := parseLaunchRequest([]string{"--launcher", "--debug-port", "9229", "--helper-port", "57321", "--restart"})
+
+	if !request.restart {
+		t.Fatal("restart flag should be true")
+	}
+	if request.debugPort != 9229 {
+		t.Fatalf("debug port mismatch: %d", request.debugPort)
+	}
+	if request.helperPort != 57321 {
+		t.Fatalf("helper port mismatch: %d", request.helperPort)
+	}
+}
+
 func TestBuildWatcherInstallPlanMatchesOriginalWindowsShape(t *testing.T) {
 	plan := buildWatcherInstallPlan(`C:\Tools\Codex++.exe`, 9229, `C:\Users\A\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CodexPlusPlusWatcher.lnk`)
 

@@ -346,6 +346,20 @@ func runLauncher(args []string) error {
 		helperPort = 57321
 	}
 	runtimeState := &launcherRuntime{settings: settings, debugPort: debugPort}
+	if shouldQuitRunningCodexBeforeLaunch(appPath, debugPort, options.restart) {
+		appendDiagnosticLog("launcher.quit_existing_codex", map[string]any{"codex_app": appPath, "debug_port": debugPort, "restart": options.restart})
+		if err := quitMacOSApp(appPath); err != nil {
+			appendDiagnosticLog("launcher.quit_existing_codex_failed", map[string]any{"codex_app": appPath, "error": err.Error()})
+		}
+		if !waitForMacOSAppExit(appPath, 8*time.Second) {
+			appendDiagnosticLog("launcher.force_kill_existing_codex", map[string]any{"codex_app": appPath})
+			_ = forceKillMacOSApp(appPath)
+			_ = waitForMacOSAppExit(appPath, 4*time.Second)
+		}
+		if activeRelayProfile(settings).needsLocalRelayProxy() {
+			waitForTCPPortFree(localRelayProxyPort, 5*time.Second)
+		}
+	}
 	if settings.ProviderSync {
 		result := runProviderSync(codexHomeDir())
 		appendDiagnosticLog("provider_sync."+result.Status, map[string]any{
@@ -402,17 +416,6 @@ func runLauncher(args []string) error {
 	if len(command) == 0 {
 		return errors.New("无法构建 Codex 启动命令")
 	}
-	if shouldQuitRunningCodexBeforeLaunch(appPath, debugPort) {
-		appendDiagnosticLog("launcher.quit_existing_codex", map[string]any{"codex_app": appPath, "debug_port": debugPort})
-		if err := quitMacOSApp(appPath); err != nil {
-			appendDiagnosticLog("launcher.quit_existing_codex_failed", map[string]any{"codex_app": appPath, "error": err.Error()})
-		}
-		if !waitForMacOSAppExit(appPath, 8*time.Second) {
-			appendDiagnosticLog("launcher.force_kill_existing_codex", map[string]any{"codex_app": appPath})
-			_ = forceKillMacOSApp(appPath)
-			_ = waitForMacOSAppExit(appPath, 4*time.Second)
-		}
-	}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Env = append(os.Environ(), codexLaunchEnvironment()...)
 	cmd.Stdout = io.Discard
@@ -465,6 +468,7 @@ type launchRequest struct {
 	appPath    string
 	debugPort  uint16
 	helperPort uint16
+	restart    bool
 }
 
 func parseLaunchRequest(args []string) launchRequest {
@@ -490,6 +494,8 @@ func parseLaunchRequest(args []string) launchRequest {
 				}
 				i++
 			}
+		case "--restart":
+			request.restart = true
 		}
 	}
 	return request
@@ -547,12 +553,15 @@ func codexLaunchEnvironment() []string {
 	}
 }
 
-func shouldQuitRunningCodexBeforeLaunch(appPath string, debugPort uint16) bool {
+func shouldQuitRunningCodexBeforeLaunch(appPath string, debugPort uint16, restart bool) bool {
 	if runtime.GOOS != "darwin" || !strings.EqualFold(filepath.Ext(appPath), ".app") {
 		return false
 	}
 	if !macOSAppRunning(appPath) {
 		return false
+	}
+	if restart {
+		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
 	defer cancel()
@@ -560,6 +569,22 @@ func shouldQuitRunningCodexBeforeLaunch(appPath string, debugPort uint16) bool {
 		return false
 	}
 	return true
+}
+
+func waitForTCPPortFree(port uint16, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	address := fmt.Sprintf("127.0.0.1:%d", port)
+	for {
+		listener, err := net.Listen("tcp", address)
+		if err == nil {
+			_ = listener.Close()
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 }
 
 func macOSAppRunning(appPath string) bool {
@@ -2299,6 +2324,9 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	cmd := exec.Command(launcher, "--launcher", "--debug-port", strconv.Itoa(int(debugPort)), "--helper-port", strconv.Itoa(int(helperPort)))
 	if appPath != "" {
 		cmd.Args = append(cmd.Args, "--app-path", appPath)
+	}
+	if restart {
+		cmd.Args = append(cmd.Args, "--restart")
 	}
 	if err := cmd.Start(); err != nil {
 		return failed("启动静默入口失败："+err.Error(), map[string]any{"debugPort": debugPort, "helperPort": helperPort})
