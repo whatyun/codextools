@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +36,63 @@ func TestBuildWatcherInstallPlanMatchesOriginalWindowsShape(t *testing.T) {
 	}
 	if plan.ShortcutPath == "" {
 		t.Fatal("shortcut path should be preserved")
+	}
+}
+
+func TestRepairCodexGoalsConfigEnablesGoalsFeature(t *testing.T) {
+	contents := strings.Join([]string{
+		`model_provider = "CodexPlusPlus"`,
+		"",
+		"[features]",
+		"remote_connections = true",
+		"",
+	}, "\n")
+
+	updated := repairCodexGoalsConfig(contents)
+
+	if !strings.Contains(updated, "[features]\nremote_connections = true\ngoals = true") {
+		t.Fatalf("goals feature was not added to features table:\n%s", updated)
+	}
+	if strings.Count(updated, "goals = true") != 1 {
+		t.Fatalf("goals feature should be written exactly once:\n%s", updated)
+	}
+}
+
+func TestRepairCodexPluginConfigRestoresCachedPluginTables(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeTestFile(t, filepath.Join(home, ".tmp", "plugins", ".agents", "plugins", "marketplace.json"), `{"name":"openai-curated"}`)
+	writeTestFile(t, filepath.Join(home, "plugins", "cache", "openai-curated", "github", "6188456f", ".codex-plugin", "plugin.json"), `{"name":"github"}`)
+	writeTestFile(t, filepath.Join(home, "plugins", "cache", "openai-bundled", "browser", "26.519.41501", ".codex-plugin", "plugin.json"), `{"name":"browser"}`)
+
+	updated, pluginCount, marketplaceCount, _ := repairCodexPluginConfig(home, `model_provider = "CodexPlusPlus"`+"\n")
+
+	if pluginCount != 2 {
+		t.Fatalf("plugin count mismatch: %d", pluginCount)
+	}
+	if marketplaceCount != 1 {
+		t.Fatalf("marketplace count mismatch: %d", marketplaceCount)
+	}
+	for _, expected := range []string{
+		`[marketplaces.openai-curated]`,
+		`source = "` + filepath.Join(home, ".tmp", "plugins") + `"`,
+		`[plugins."browser@openai-bundled"]`,
+		`[plugins."github@openai-curated"]`,
+		`enabled = true`,
+	} {
+		if !strings.Contains(updated, expected) {
+			t.Fatalf("updated config missing %q:\n%s", expected, updated)
+		}
+	}
+}
+
+func writeTestFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create test dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
 	}
 }
 

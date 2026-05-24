@@ -34,7 +34,7 @@ const (
 	managerName              = "Codex++ 管理工具"
 	silentBinary             = "codextools-launcher"
 	managerBinary            = "codextools"
-	version                  = "1.1.9"
+	version                  = "1.1.10"
 	stateDirName             = ".codex-session-delete"
 	settingsFileName         = "settings.json"
 	latestStatusFileName     = "latest-status.json"
@@ -194,6 +194,33 @@ type providerSyncResult struct {
 	BackupDir           *string `json:"backupDir"`
 	ChangedSessionFiles int     `json:"changedSessionFiles"`
 	SQLiteRowsUpdated   int     `json:"sqliteRowsUpdated"`
+}
+
+type codexConfigRepairResult struct {
+	Status              string
+	Message             string
+	BackupPath          *string
+	PluginCount         int
+	MarketplaceCount    int
+	MCPServerCount      int
+	GoalsEnabled        bool
+	PluginConfigChanged bool
+	GoalsConfigChanged  bool
+}
+
+type codexConfigRepairOptions struct {
+	Plugins bool
+	Goals   bool
+}
+
+type pluginEnableSpec struct {
+	Name        string
+	Marketplace string
+}
+
+type marketplaceSpec struct {
+	Name   string
+	Source string
 }
 
 type sessionChange struct {
@@ -362,11 +389,18 @@ func runLauncher(args []string) error {
 	}
 	if settings.ProviderSync {
 		result := runProviderSync(codexHomeDir())
+		repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true})
 		appendDiagnosticLog("provider_sync."+result.Status, map[string]any{
 			"targetProvider":      result.TargetProvider,
 			"changedSessionFiles": result.ChangedSessionFiles,
 			"sqliteRowsUpdated":   result.SQLiteRowsUpdated,
 			"message":             result.Message,
+		})
+		appendDiagnosticLog("codex_plugin_repair."+repairResult.Status, map[string]any{
+			"pluginCount":      repairResult.PluginCount,
+			"marketplaceCount": repairResult.MarketplaceCount,
+			"changed":          repairResult.PluginConfigChanged,
+			"message":          repairResult.Message,
 		})
 	}
 	if helperNeeded(settings) {
@@ -1911,6 +1945,10 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.importCCSProviders()
 	case "sync_providers_now":
 		return s.syncProvidersNow()
+	case "repair_codex_plugins":
+		return s.repairCodexPlugins()
+	case "repair_codex_goals":
+		return s.repairCodexGoals()
 	case "refresh_script_market":
 		return s.refreshScriptMarket(ctx)
 	case "install_market_script":
@@ -2648,6 +2686,7 @@ func (s *server) importCCSProviders() commandResult {
 
 func (s *server) syncProvidersNow() commandResult {
 	result := runProviderSync(codexHomeDir())
+	repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true})
 	payload := map[string]any{
 		"syncStatus":          result.Status,
 		"targetProvider":      result.TargetProvider,
@@ -2660,15 +2699,62 @@ func (s *server) syncProvidersNow() commandResult {
 	if result.Status == "skipped" {
 		status = "not_checked"
 	}
+	if repairResult.Status == "failed" {
+		status = "failed"
+	}
+	message := fmt.Sprintf("供应商已同步一次：%d 个会话文件，%d 行索引。%s", result.ChangedSessionFiles, result.SQLiteRowsUpdated, providerSyncExtraMessage(result.Message))
+	if strings.TrimSpace(repairResult.Message) != "" {
+		message = strings.TrimSpace(message + " " + repairResult.Message)
+	}
 	return commandResult{
 		"status":              status,
-		"message":             fmt.Sprintf("供应商已同步一次：%d 个会话文件，%d 行索引。%s", result.ChangedSessionFiles, result.SQLiteRowsUpdated, providerSyncExtraMessage(result.Message)),
+		"message":             message,
 		"syncStatus":          payload["syncStatus"],
 		"targetProvider":      payload["targetProvider"],
 		"changedSessionFiles": payload["changedSessionFiles"],
 		"sqliteRowsUpdated":   payload["sqliteRowsUpdated"],
 		"backupDir":           payload["backupDir"],
 		"syncMessage":         payload["syncMessage"],
+		"pluginCount":         repairResult.PluginCount,
+		"marketplaceCount":    repairResult.MarketplaceCount,
+		"pluginBackupPath":    repairResult.BackupPath,
+	}
+}
+
+func (s *server) repairCodexPlugins() commandResult {
+	result := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true})
+	status := "ok"
+	if result.Status == "failed" {
+		status = "failed"
+	}
+	return commandResult{
+		"status":           status,
+		"message":          result.Message,
+		"backupPath":       result.BackupPath,
+		"pluginCount":      result.PluginCount,
+		"marketplaceCount": result.MarketplaceCount,
+		"mcpServerCount":   result.MCPServerCount,
+		"configChanged":    result.PluginConfigChanged,
+		"goalsEnabled":     result.GoalsEnabled,
+		"configPath":       filepath.Join(codexHomeDir(), "config.toml"),
+		"codexHome":        codexHomeDir(),
+	}
+}
+
+func (s *server) repairCodexGoals() commandResult {
+	result := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Goals: true})
+	status := "ok"
+	if result.Status == "failed" {
+		status = "failed"
+	}
+	return commandResult{
+		"status":        status,
+		"message":       result.Message,
+		"backupPath":    result.BackupPath,
+		"goalsEnabled":  result.GoalsEnabled,
+		"configChanged": result.GoalsConfigChanged,
+		"configPath":    filepath.Join(codexHomeDir(), "config.toml"),
+		"codexHome":     codexHomeDir(),
 	}
 }
 
@@ -2678,6 +2764,338 @@ func providerSyncExtraMessage(message string) string {
 		return ""
 	}
 	return message
+}
+
+func repairCodexConfig(home string, options codexConfigRepairOptions) codexConfigRepairResult {
+	if !isDir(home) {
+		return codexConfigRepairResult{Status: "failed", Message: "Codex home 不存在：" + home}
+	}
+	configPath := filepath.Join(home, "config.toml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return codexConfigRepairResult{Status: "failed", Message: "读取 config.toml 失败：" + err.Error()}
+	}
+	original := string(data)
+	updated := original
+	result := codexConfigRepairResult{Status: "ok"}
+	if options.Plugins {
+		var pluginCount, marketplaceCount, mcpCount int
+		updated, pluginCount, marketplaceCount, mcpCount = repairCodexPluginConfig(home, updated)
+		result.PluginCount = pluginCount
+		result.MarketplaceCount = marketplaceCount
+		result.MCPServerCount = mcpCount
+		result.PluginConfigChanged = updated != original
+	}
+	beforeGoals := updated
+	if options.Goals {
+		updated = repairCodexGoalsConfig(updated)
+		result.GoalsEnabled = true
+		result.GoalsConfigChanged = updated != beforeGoals
+	}
+	if updated != original {
+		backupPath, err := backupCodexConfig(configPath, "config-repair")
+		if err != nil {
+			return codexConfigRepairResult{Status: "failed", Message: "备份 config.toml 失败：" + err.Error()}
+		}
+		result.BackupPath = &backupPath
+		if err := atomicWrite(configPath, []byte(updated)); err != nil {
+			return codexConfigRepairResult{Status: "failed", Message: "写入 config.toml 失败：" + err.Error(), BackupPath: &backupPath}
+		}
+	}
+	result.Message = codexConfigRepairMessage(result, options, updated != original)
+	return result
+}
+
+func repairCodexPluginConfig(home, contents string) (string, int, int, int) {
+	updated := contents
+	marketplaces := discoverCodexMarketplaces(home)
+	for _, marketplace := range marketplaces {
+		if strings.TrimSpace(marketplace.Source) == "" {
+			continue
+		}
+		if !hasTable(updated, "marketplaces."+marketplace.Name) {
+			updated = appendTomlBlock(updated, []string{
+				"[marketplaces." + marketplace.Name + "]",
+				"last_updated = " + quoteToml(time.Now().UTC().Format(time.RFC3339)),
+				`source_type = "local"`,
+				"source = " + quoteToml(marketplace.Source),
+			})
+		}
+	}
+	plugins := discoverCachedPluginEnables(home)
+	for _, plugin := range plugins {
+		table := fmt.Sprintf("plugins.%s", quoteToml(plugin.Name+"@"+plugin.Marketplace))
+		if !hasTable(updated, table) {
+			updated = appendTomlBlock(updated, []string{
+				"[" + table + "]",
+				"enabled = true",
+			})
+		}
+	}
+	updated, mcpCount := repairNodeReplMCPConfig(home, updated)
+	return updated, len(plugins), len(marketplaces), mcpCount
+}
+
+func repairCodexGoalsConfig(contents string) string {
+	return upsertTableKey(contents, "features", "goals", "true")
+}
+
+func codexConfigRepairMessage(result codexConfigRepairResult, options codexConfigRepairOptions, changed bool) string {
+	var parts []string
+	if options.Plugins {
+		if result.PluginCount == 0 {
+			parts = append(parts, "未发现可恢复的插件缓存")
+		} else if result.PluginConfigChanged {
+			parts = append(parts, fmt.Sprintf("已恢复插件配置：%d 个插件、%d 个市场源", result.PluginCount, result.MarketplaceCount))
+		} else {
+			parts = append(parts, fmt.Sprintf("插件配置已完整：%d 个插件、%d 个市场源", result.PluginCount, result.MarketplaceCount))
+		}
+	}
+	if options.Goals {
+		if result.GoalsConfigChanged {
+			parts = append(parts, "已开启追求目标功能 features.goals")
+		} else {
+			parts = append(parts, "追求目标功能已开启")
+		}
+	}
+	if changed && result.BackupPath != nil {
+		parts = append(parts, "已备份原配置："+*result.BackupPath)
+	}
+	if len(parts) == 0 {
+		return "没有需要修复的配置。"
+	}
+	return strings.Join(parts, "；") + "。"
+}
+
+func backupCodexConfig(configPath, label string) (string, error) {
+	backupPath := fmt.Sprintf("%s.before-%s-%s.bak", configPath, label, time.Now().Format("20060102150405"))
+	if fileExists(backupPath) {
+		for index := 2; ; index++ {
+			candidate := fmt.Sprintf("%s.before-%s-%s-%d.bak", configPath, label, time.Now().Format("20060102150405"), index)
+			if !fileExists(candidate) {
+				backupPath = candidate
+				break
+			}
+		}
+	}
+	return backupPath, copyFileIfExists(configPath, backupPath)
+}
+
+func discoverCodexMarketplaces(home string) []marketplaceSpec {
+	paths := []marketplaceSpec{
+		{Name: "openai-bundled", Source: filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled")},
+		{Name: "openai-curated", Source: filepath.Join(home, ".tmp", "plugins")},
+	}
+	if userHome, err := os.UserHomeDir(); err == nil && userHome != "" {
+		paths = append(paths, marketplaceSpec{Name: "openai-primary-runtime", Source: filepath.Join(userHome, ".cache", "codex-runtimes", "codex-primary-runtime", "plugins", "openai-primary-runtime")})
+	}
+	var marketplaces []marketplaceSpec
+	for _, marketplace := range paths {
+		if codexMarketplaceExists(marketplace.Source) {
+			marketplaces = append(marketplaces, marketplace)
+		}
+	}
+	return marketplaces
+}
+
+func codexMarketplaceExists(path string) bool {
+	if !isDir(path) {
+		return false
+	}
+	return fileExists(filepath.Join(path, ".agents", "plugins", "marketplace.json")) || isDir(filepath.Join(path, "plugins"))
+}
+
+func discoverCachedPluginEnables(home string) []pluginEnableSpec {
+	cacheRoot := filepath.Join(home, "plugins", "cache")
+	marketplaces := []string{"openai-curated", "openai-primary-runtime", "openai-bundled"}
+	var plugins []pluginEnableSpec
+	seen := map[string]bool{}
+	for _, marketplace := range marketplaces {
+		root := filepath.Join(cacheRoot, marketplace)
+		if !isDir(root) {
+			continue
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !cachedPluginExists(filepath.Join(root, name)) {
+				continue
+			}
+			key := name + "@" + marketplace
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			plugins = append(plugins, pluginEnableSpec{Name: name, Marketplace: marketplace})
+		}
+	}
+	sort.Slice(plugins, func(i, j int) bool {
+		left := plugins[i].Marketplace + "/" + plugins[i].Name
+		right := plugins[j].Marketplace + "/" + plugins[j].Name
+		return left < right
+	})
+	return plugins
+}
+
+func cachedPluginExists(path string) bool {
+	if fileExists(filepath.Join(path, ".codex-plugin", "plugin.json")) {
+		return true
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && fileExists(filepath.Join(path, entry.Name(), ".codex-plugin", "plugin.json")) {
+			return true
+		}
+	}
+	return false
+}
+
+func repairNodeReplMCPConfig(home, contents string) (string, int) {
+	resourcesDir := codexResourcesDir()
+	nodeReplPath := filepath.Join(resourcesDir, "node_repl")
+	nodePath := filepath.Join(resourcesDir, "node")
+	codexCLIPath := filepath.Join(resourcesDir, "codex")
+	if !fileExists(nodeReplPath) || !fileExists(nodePath) {
+		return contents, 0
+	}
+	updated := removeTable(removeTable(contents, "mcp_servers.node_repl"), "mcp_servers.node_repl.env")
+	lines := []string{
+		"[mcp_servers.node_repl]",
+		"args = []",
+		"command = " + quoteToml(nodeReplPath),
+		"startup_timeout_sec = 120",
+		"",
+		"[mcp_servers.node_repl.env]",
+		`BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"`,
+		`BROWSER_USE_MARKETPLACE_NAME = "openai-bundled"`,
+		"CODEX_CLI_PATH = " + quoteToml(codexCLIPath),
+		"CODEX_HOME = " + quoteToml(home),
+		`NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"`,
+		`NODE_REPL_NODE_MODULE_DIRS = ""`,
+		"NODE_REPL_NODE_PATH = " + quoteToml(nodePath),
+	}
+	if hashes := trustedBrowserClientHashes(home); len(hashes) > 0 {
+		lines = append(lines, "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "+quoteToml(strings.Join(hashes, ",")))
+	}
+	lines = append(lines,
+		"NODE_REPL_TRUSTED_CODE_PATHS = "+quoteToml(home),
+		`NODE_REPL_UNTRUSTED_ENV_ALLOWLIST = "BROWSER_USE_MARKETPLACE_NAME"`,
+	)
+	if servicePath := bundledComputerUseServicePath(home); servicePath != "" {
+		lines = append(lines, "SKY_CUA_SERVICE_PATH = "+quoteToml(servicePath))
+	}
+	return appendTomlBlock(updated, lines), 1
+}
+
+func trustedBrowserClientHashes(home string) []string {
+	var hashes []string
+	seen := map[string]bool{}
+	pattern := filepath.Join(home, "plugins", "cache", "openai-bundled", "browser", "*", "scripts", "browser-client.mjs")
+	matches, _ := filepath.Glob(pattern)
+	sort.Strings(matches)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(data)
+		hash := hex.EncodeToString(sum[:])
+		if !seen[hash] {
+			seen[hash] = true
+			hashes = append(hashes, hash)
+		}
+	}
+	return hashes
+}
+
+func bundledComputerUseServicePath(home string) string {
+	candidates := []string{
+		filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", "plugins", "computer-use", "Codex Computer Use.app"),
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "*", "Codex Computer Use.app"))
+	sort.Strings(matches)
+	candidates = append(candidates, matches...)
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if isDir(candidates[i]) {
+			return candidates[i]
+		}
+	}
+	return ""
+}
+
+func codexResourcesDir() string {
+	if path := resolveCodexApp(loadSettings().CodexAppPath); path != "" && runtime.GOOS == "darwin" && strings.EqualFold(filepath.Ext(path), ".app") {
+		return filepath.Join(path, "Contents", "Resources")
+	}
+	if runtime.GOOS == "darwin" && isDir("/Applications/Codex.app/Contents/Resources") {
+		return "/Applications/Codex.app/Contents/Resources"
+	}
+	return filepath.Dir(companionBinaryPath("codex"))
+}
+
+func appendTomlBlock(contents string, lines []string) string {
+	trimmedLines := append([]string{}, lines...)
+	for len(trimmedLines) > 0 && strings.TrimSpace(trimmedLines[len(trimmedLines)-1]) == "" {
+		trimmedLines = trimmedLines[:len(trimmedLines)-1]
+	}
+	if len(trimmedLines) == 0 {
+		return ensureTrailingNewline(contents)
+	}
+	updated := strings.TrimRight(contents, "\n")
+	if strings.TrimSpace(updated) != "" {
+		updated += "\n\n"
+	}
+	updated += strings.Join(trimmedLines, "\n")
+	return ensureTrailingNewline(updated)
+}
+
+func hasTable(contents, table string) bool {
+	header := "[" + table + "]"
+	for _, line := range splitLines(contents) {
+		if strings.TrimSpace(line) == header {
+			return true
+		}
+	}
+	return false
+}
+
+func upsertTableKey(contents, table, key, value string) string {
+	lines := splitLines(contents)
+	header := "[" + table + "]"
+	tableStart := -1
+	tableEnd := len(lines)
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			if tableStart >= 0 {
+				tableEnd = i
+				break
+			}
+			if trimmed == header {
+				tableStart = i
+			}
+		}
+	}
+	if tableStart < 0 {
+		return appendTomlBlock(contents, []string{header, key + " = " + value})
+	}
+	for i := tableStart + 1; i < tableEnd; i++ {
+		if rootLineKey(lines[i]) == key {
+			lines[i] = key + " = " + value
+			return ensureTrailingNewline(strings.Join(lines, "\n"))
+		}
+	}
+	lines = append(lines[:tableEnd], append([]string{key + " = " + value}, lines[tableEnd:]...)...)
+	return ensureTrailingNewline(strings.Join(lines, "\n"))
 }
 
 func runProviderSync(home string) providerSyncResult {
@@ -4196,7 +4614,13 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 				return failed("切换完整中转配置失败："+err.Error(), relayStatusFromHome(home))
 			}
 		}
-		return ok("已切换到当前中转的完整 config.toml / auth.json。", relayStatusFromHome(home))
+		repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true})
+		payload := relayStatusFromHome(home)
+		payload["pluginRepair"] = map[string]any{"status": repairResult.Status, "pluginCount": repairResult.PluginCount, "marketplaceCount": repairResult.MarketplaceCount, "backupPath": repairResult.BackupPath}
+		if repairResult.Status == "failed" {
+			return failed("已切换完整中转配置，但插件恢复失败："+repairResult.Message, payload)
+		}
+		return ok("已切换到当前中转的完整 config.toml / auth.json，并恢复插件配置。", payload)
 	}
 	if err := applyRelayConfig(home, relay, pure); err != nil {
 		if pure {
@@ -4204,10 +4628,19 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 		}
 		return failed("写入中转配置失败："+err.Error(), relayStatusFromHome(home))
 	}
-	if pure {
-		return ok("中转 API 模式已写入：auth.json 已切换为 OPENAI_API_KEY，config.toml 已写入 CodexPlusPlus provider。", relayStatusFromHome(home))
+	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true})
+	payload := relayStatusFromHome(home)
+	payload["pluginRepair"] = map[string]any{"status": repairResult.Status, "pluginCount": repairResult.PluginCount, "marketplaceCount": repairResult.MarketplaceCount, "backupPath": repairResult.BackupPath}
+	if repairResult.Status == "failed" {
+		if pure {
+			return failed("中转 API 模式已写入，但插件恢复失败："+repairResult.Message, payload)
+		}
+		return failed("中转配置已写入，但插件恢复失败："+repairResult.Message, payload)
 	}
-	return ok("中转配置已写入，密钥未在界面明文显示。", relayStatusFromHome(home))
+	if pure {
+		return ok("中转 API 模式已写入：auth.json 已切换为 OPENAI_API_KEY，config.toml 已写入 CodexPlusPlus provider，并恢复插件配置。", payload)
+	}
+	return ok("中转配置已写入，密钥未在界面明文显示，并恢复插件配置。", payload)
 }
 
 func activeRelayProfile(settings backendSettings) relayProfile {

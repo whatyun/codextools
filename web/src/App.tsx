@@ -257,6 +257,17 @@ type WatcherResult = CommandResult<{
   launcher_arguments?: string;
 }>;
 
+type CodexConfigRepairResult = CommandResult<{
+  backupPath?: string | null;
+  pluginCount?: number;
+  marketplaceCount?: number;
+  mcpServerCount?: number;
+  configChanged?: boolean;
+  goalsEnabled?: boolean;
+  configPath?: string;
+  codexHome?: string;
+}>;
+
 type InstallResult = CommandResult<{
   silent_shortcut: { installed: boolean; path: string | null };
   management_shortcut: { installed: boolean; path: string | null };
@@ -667,6 +678,22 @@ export function App() {
     }
   };
 
+  const repairCodexPlugins = async () => {
+    const result = await run(() => call<CodexConfigRepairResult>("repair_codex_plugins"));
+    if (result) {
+      showNotice("插件配置恢复", result.message, result.status);
+      await refreshRelayFiles(true);
+    }
+  };
+
+  const repairCodexGoals = async () => {
+    const result = await run(() => call<CodexConfigRepairResult>("repair_codex_goals"));
+    if (result) {
+      showNotice("追求目标修复", result.message, result.status);
+      await refreshRelayFiles(true);
+    }
+  };
+
   const applyRelayInjection = async (silent = false) => {
     const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: settingsForm }));
     if (settingsResult) {
@@ -944,6 +971,8 @@ export function App() {
         }
       },
       syncProvidersNow,
+      repairCodexPlugins,
+      repairCodexGoals,
       setLaunchMode: async (launchMode: LaunchMode) => {
         await saveLaunchMode(launchMode);
       },
@@ -1129,6 +1158,8 @@ type Actions = {
   clearCodexAppPath: () => Promise<void>;
   saveManualCodexAppPath: () => Promise<void>;
   syncProvidersNow: () => Promise<void>;
+  repairCodexPlugins: () => Promise<void>;
+  repairCodexGoals: () => Promise<void>;
   setLaunchMode: (launchMode: LaunchMode) => Promise<void>;
   refreshRelay: () => Promise<void>;
   refreshInstallGuideStatus: () => Promise<InstallGuideStatusResult | null>;
@@ -2168,17 +2199,26 @@ function ProviderSyncScreen({
               <RefreshCw className="h-4 w-4" />
               立刻修复历史会话
             </Button>
+            <Button onClick={() => void actions.repairCodexPlugins()} variant="secondary">
+              <Sparkles className="h-4 w-4" />
+              恢复插件配置
+            </Button>
+            <Button onClick={() => void actions.repairCodexGoals()} variant="secondary">
+              <CheckCircle2 className="h-4 w-4" />
+              修复追求目标
+            </Button>
           </Toolbar>
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="说明" detail="这是独立于页面增强的会话数据维护功能" />
+        <CardHead title="说明" detail="会话、插件和追求目标都可以在这里一键整理" />
         <CardContent>
           <GuideList
             items={[
-              "自动修复只在 Codex++ 启动 Codex 前运行，不会常驻监控或反复改写。",
+              "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属并补回插件配置。",
               "需要马上整理旧对话时，可以点击“立刻修复历史会话”。",
-              "它不控制页面功能，也不影响 API URL 或 Key。",
+              "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置。",
+              "修复追求目标会开启 config.toml 里的 features.goals，用于恢复 Codex 的目标模式入口。",
               "切回官方时历史会话会整理为 openai；切到 API 时会整理为 CodexPlusPlus。",
             ]}
           />
