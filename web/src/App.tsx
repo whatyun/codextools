@@ -743,6 +743,7 @@ export function App() {
       }
       await refreshRelay(true);
     }
+    return result;
   };
 
   const testRelayProfile = async (profile: RelayProfile) => {
@@ -960,6 +961,7 @@ export function App() {
       applyPureApiInjection,
       clearRelayInjection,
       saveRelayFile,
+      showNotice,
       testRelayProfile,
       switchRelayProfile,
       switchOfficialMode,
@@ -1141,7 +1143,8 @@ type Actions = {
   applyRelayInjection: () => Promise<boolean>;
   applyPureApiInjection: () => Promise<boolean>;
   clearRelayInjection: () => Promise<boolean>;
-  saveRelayFile: (kind: "config" | "auth", contents: string, silent?: boolean) => Promise<void>;
+  saveRelayFile: (kind: "config" | "auth", contents: string, silent?: boolean) => Promise<RelayFilesResult | null>;
+  showNotice: (title: string, message: string, status?: Status) => void;
   testRelayProfile: (profile: RelayProfile) => Promise<void>;
   switchRelayProfile: (settings: BackendSettings) => Promise<void>;
   switchOfficialMode: () => Promise<void>;
@@ -2740,10 +2743,27 @@ function RelayProfileDetail({
   const saveDraft = async () => {
     const next = isNew ? addRelayProfile(form, draft) : updateRelayProfile(form, profile.id, draft);
     onFormChange(next);
+    let savedActiveFile = false;
+    let saveFailed = false;
     if (isActive) {
       const files = withGeneratedRelayFiles(draft);
-      if (files.configContents.trim()) await actions.saveRelayFile("config", files.configContents, true);
-      if (files.authContents.trim()) await actions.saveRelayFile("auth", files.authContents, true);
+      if (files.configContents.trim()) {
+        const result = await actions.saveRelayFile("config", files.configContents, true);
+        savedActiveFile = savedActiveFile || !!result;
+        saveFailed = saveFailed || (!!result && !isSuccessStatus(result.status));
+      }
+      if (files.authContents.trim()) {
+        const result = await actions.saveRelayFile("auth", files.authContents, true);
+        savedActiveFile = savedActiveFile || !!result;
+        saveFailed = saveFailed || (!!result && !isSuccessStatus(result.status));
+      }
+    }
+    if (savedActiveFile && !saveFailed) {
+      actions.showNotice("供应商保存", "保存成功，当前供应商配置已写入真实 config.toml。", "ok");
+    } else if (saveFailed) {
+      actions.showNotice("供应商保存", "保存失败，请查看 config.toml / auth.json 的具体错误。", "failed");
+    } else if (!isActive) {
+      actions.showNotice("供应商保存", "保存成功，切换到此供应商时会写入 config.toml。", "ok");
     }
     onSaved?.();
   };
@@ -3493,6 +3513,7 @@ function buildRelayConfigToml(
   }
   if (profile.protocol === "responses" && profile.imageGenerationEnabled && profile.imageGenerationUseSeparateApi) {
     lines.push(`codex_plus_image_base_url = "${tomlString(normalizeRelayBaseUrl(profile.imageGenerationBaseUrl))}"`);
+    lines.push("# codex_plus_image_api_key 只保存在 Codex++ 设置里，图片路由命中时由本地代理使用。");
   }
   lines.push(`experimental_bearer_token = "${tomlString(apiKey)}"`, "");
   return lines.join("\n");

@@ -146,8 +146,25 @@ func TestDecideRelayRouteUsesImageForChineseImageIntent(t *testing.T) {
 	if !decision.useImageAPI {
 		t.Fatal("clear Chinese image generation intent should use image relay")
 	}
-	if decision.reason != "input_image_intent" {
+	if decision.reason != "latest_user_image_intent" {
 		t.Fatalf("unexpected reason: %q", decision.reason)
+	}
+}
+
+func TestDecideRelayRouteIgnoresOlderImageIntentHistory(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","input":[{"role":"user","content":"帮我生成一个猫猫图标"},{"role":"assistant","content":"好的"},{"role":"user","content":"检查图片中转逻辑 / 图标中转配置"}],"tools":[{"type":"image_generation"}]}`)
+	decision := decideRelayRoute(body, relayProfile{
+		ImageGenerationEnabled:        true,
+		ImageGenerationUseSeparateAPI: true,
+		ImageGenerationBaseURL:        "https://image.example/v1",
+		ImageGenerationAPIKey:         "image-key",
+	})
+
+	if decision.useImageAPI {
+		t.Fatal("older image intent in history should not route latest text request to image relay")
+	}
+	if decision.keySource != "default" {
+		t.Fatalf("text route should use default key, got %q", decision.keySource)
 	}
 }
 

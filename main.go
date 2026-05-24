@@ -783,6 +783,9 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		if decision.useImageAPI && usesSeparateImageGenerationAPI(profile) {
 			baseURL = strings.TrimRight(strings.TrimSpace(profile.ImageGenerationBaseURL), "/")
 			apiKey = strings.TrimSpace(profile.ImageGenerationAPIKey)
+			decision.keySource = "image"
+		} else {
+			decision.keySource = "default"
 		}
 	}
 	if baseURL == "" || apiKey == "" {
@@ -827,6 +830,7 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		"target":              target,
 		"route":               decision.route,
 		"reason":              decision.reason,
+		"key_source":          decision.keySource,
 		"stripped_image_tool": decision.strippedImageTool,
 	})
 }
@@ -860,11 +864,12 @@ type relayRouteDecision struct {
 	body              []byte
 	route             string
 	reason            string
+	keySource         string
 	strippedImageTool bool
 }
 
 func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
-	decision := relayRouteDecision{body: body, route: "text", reason: "default_text"}
+	decision := relayRouteDecision{body: body, route: "text", reason: "default_text", keySource: "default"}
 	var value map[string]any
 	if json.Unmarshal(body, &value) != nil {
 		decision.reason = "invalid_json"
@@ -882,18 +887,21 @@ func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
 			decision.useImageAPI = true
 			decision.route = "image"
 			decision.reason = "tool_choice_image"
+			decision.keySource = "image"
 			return decision
 		}
 		if relayBodyContainsImageGenerationCall(value) {
 			decision.useImageAPI = true
 			decision.route = "image"
 			decision.reason = "image_generation_call"
+			decision.keySource = "image"
 			return decision
 		}
-		if relayInputRequestsImage(value["input"]) {
+		if relayLatestUserInputRequestsImage(value["input"]) {
 			decision.useImageAPI = true
 			decision.route = "image"
-			decision.reason = "input_image_intent"
+			decision.reason = "latest_user_image_intent"
+			decision.keySource = "image"
 			return decision
 		}
 	}
@@ -990,13 +998,38 @@ func relayNodeContainsImageGenerationCall(node any) bool {
 	return false
 }
 
-func relayInputRequestsImage(input any) bool {
-	for _, text := range relayTextFragments(input) {
+func relayLatestUserInputRequestsImage(input any) bool {
+	texts := relayLatestUserTextFragments(input)
+	if len(texts) == 0 {
+		texts = relayTextFragments(input)
+	}
+	for _, text := range texts {
 		if relayTextRequestsImage(text) {
 			return true
 		}
 	}
 	return false
+}
+
+func relayLatestUserTextFragments(input any) []string {
+	messages, ok := input.([]any)
+	if !ok {
+		return nil
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		message, ok := messages[index].(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.ToLower(stringFromAny(message["role"])) != "user" {
+			continue
+		}
+		texts := relayTextFragments(firstNonNil(message["content"], message["text"], message["input"], message["prompt"]))
+		if len(texts) > 0 {
+			return texts
+		}
+	}
+	return nil
 }
 
 func relayTextFragments(node any) []string {
@@ -4269,6 +4302,7 @@ func upsertModelProviderConfig(contents, baseURL, bearerToken string, relay rela
 	}
 	if usesSeparateImageGenerationAPI(relay) {
 		providerLines = append(providerLines, "codex_plus_image_base_url = "+quoteToml(normalizeResponsesBaseURL(relay.ImageGenerationBaseURL)))
+		providerLines = append(providerLines, "# codex_plus_image_api_key is stored only in Codex++ settings and used by the local relay proxy for image routes.")
 	}
 	providerLines = append(providerLines, "experimental_bearer_token = "+quoteToml(bearerToken), "")
 	lines = append(lines[:insertAt], append(providerLines, lines[insertAt:]...)...)
