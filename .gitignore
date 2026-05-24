@@ -3,5 +3,7 @@ web/dist/
 .venv/
 codextools
 codextools.exe
+dist/build/
+dist/releases/
 *.log
 .DS_Store

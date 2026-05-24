@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CodexTools Downloads</title>
+    <style>
+      :root {
+        --bg: #eef5fb;
+        --card: rgba(255,255,255,.9);
+        --text: #152033;
+        --muted: #566377;
+        --line: rgba(114,142,175,.22);
+        --primary: #1367d1;
+        --accent: #0f766e;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "SF Pro Text","Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .page {
+        width: min(980px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 32px 0 56px;
+      }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 48px);
+        line-height: 1.02;
+      }
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .lang-switch {
+        display: inline-flex;
+        gap: 8px;
+      }
+      .lang-switch button {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 10px 16px;
+        font: inherit;
+        font-weight: 700;
+        background: var(--card);
+        cursor: pointer;
+      }
+      .lang-switch button.active {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 24px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: var(--card);
+        padding: 22px;
+      }
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 24px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      .actions a {
+        border-radius: 999px;
+        padding: 11px 16px;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .primary {
+        background: var(--primary);
+        color: #fff;
+      }
+      .secondary {
+        background: #dbeafe;
+        color: var(--primary);
+      }
+      .note {
+        margin-top: 20px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--card);
+        padding: 20px 22px;
+      }
+      ul { margin: 12px 0 0; color: var(--muted); line-height: 1.7; }
+      [data-lang] { display: none; }
+      [data-lang].active { display: block; }
+      @media (max-width: 860px) {
+        .grid { grid-template-columns: 1fr; }
+        .topbar { flex-direction: column; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="topbar">
+        <div>
+          <h1>CodexTools Downloads</h1>
+          <p data-lang="en" class="active">
+            Download the standalone manager builds for macOS and Windows. These packages are prepared for non-technical users: open the app, set the Codex path if needed, and use the manager directly.
+          </p>
+          <p data-lang="zh">
+            在这里下载 CodexTools 的 macOS 和 Windows 独立版本。下载包面向非技术用户，打开应用后如有需要只需设置 Codex 路径即可使用。
+          </p>
+        </div>
+        <div class="lang-switch">
+          <button class="active" data-switch="en" type="button">English</button>
+          <button data-switch="zh" type="button">中文</button>
+        </div>
+      </div>
+
+      <div class="grid">
+        <section class="card">
+          <div data-lang="en" class="active">
+            <h2>macOS</h2>
+            <p>Native app bundle packaged from the standalone Go manager and launcher binaries.</p>
+            <div class="actions">
+              <a class="primary" href="./releases/CodexTools-1.1.6-macos-arm64.zip">Download macOS</a>
+              <a class="secondary" href="https://github.com/hereww/codextools">Repository</a>
+            </div>
+          </div>
+          <div data-lang="zh">
+            <h2>macOS</h2>
+            <p>使用独立 Go 管理器和启动器打包的原生应用版本。</p>
+            <div class="actions">
+              <a class="primary" href="./releases/CodexTools-1.1.6-macos-arm64.zip">下载 macOS 版</a>
+              <a class="secondary" href="https://github.com/hereww/codextools">仓库主页</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div data-lang="en" class="active">
+            <h2>Windows</h2>
+            <p>Portable build with the manager executable, launcher executable, icon asset, and quick-start notes.</p>
+            <div class="actions">
+              <a class="primary" href="./releases/CodexTools-1.1.6-windows-x64.zip">Download Windows</a>
+              <a class="secondary" href="https://t.me/wanai8">Telegram</a>
+            </div>
+          </div>
+          <div data-lang="zh">
+            <h2>Windows</h2>
+            <p>便携版下载包，包含管理器、启动器、图标资源和快速开始说明。</p>
+            <div class="actions">
+              <a class="primary" href="./releases/CodexTools-1.1.6-windows-x64.zip">下载 Windows 版</a>
+              <a class="secondary" href="https://t.me/wanai8">Telegram 群</a>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="note">
+        <div data-lang="en" class="active">
+          <strong>Notes</strong>
+          <ul>
+            <li>macOS package is built on Apple Silicon and targets `arm64`.</li>
+            <li>Windows package is delivered as a portable zip for direct download from GitHub Pages.</li>
+            <li>The manager still expects a local Codex installation and keeps the current Go refactor feature scope.</li>
+          </ul>
+        </div>
+        <div data-lang="zh">
+          <strong>说明</strong>
+          <ul>
+            <li>macOS 包基于 Apple Silicon 构建，目标架构为 `arm64`。</li>
+            <li>Windows 版本当前以便携 zip 形式提供，适合直接从 GitHub Pages 下载。</li>
+            <li>管理器仍然需要本地已有 Codex 安装，并保持当前 Go 重构版的功能范围。</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const buttons = document.querySelectorAll("[data-switch]");
+      const blocks = document.querySelectorAll("[data-lang]");
+      function setLanguage(lang) {
+        document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+        buttons.forEach((button) => {
+          button.classList.toggle("active", button.getAttribute("data-switch") === lang);
+        });
+        blocks.forEach((block) => {
+          block.classList.toggle("active", block.getAttribute("data-lang") === lang);
+        });
+      }
+      buttons.forEach((button) => button.addEventListener("click", () => setLanguage(button.getAttribute("data-switch"))));
+      setLanguage("en");
+    </script>
+  </body>
+</html>

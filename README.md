@@ -53,6 +53,10 @@ go build -o codextools .
 
 Telegram: `https://t.me/wanai8`
 
+## Downloads
+
+- GitHub Pages download page: [docs/downloads.html](./docs/downloads.html)
+
 ## Project introduction page
 
 The repository includes an English-first project page with a Chinese switch button:

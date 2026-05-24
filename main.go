@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -23,11 +26,11 @@ import (
 )
 
 const (
-	appName                  = "Codex++ 管理工具"
-	silentName               = "Codex++"
-	managerName              = "Codex++ 管理工具"
-	silentBinary             = "codex-plus-plus"
-	managerBinary            = "codex-plus-plus-manager"
+	appName                  = "CodexTools"
+	silentName               = "CodexTools Launcher"
+	managerName              = "CodexTools"
+	silentBinary             = "codextools-launcher"
+	managerBinary            = "codextools"
 	version                  = "1.1.6"
 	stateDirName             = ".codex-session-delete"
 	settingsFileName         = "settings.json"
@@ -42,6 +45,11 @@ const (
 	defaultAPIKeyEnvironment = "CUSTOM_OPENAI_API_KEY"
 	defaultGUIPath           = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 )
+
+var binaryRole = "manager"
+
+//go:embed all:web/dist
+var embeddedDist embed.FS
 
 type commandResult map[string]any
 
@@ -174,24 +182,26 @@ type ccsProviderImport struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	var err error
+	if shouldRunLauncher(os.Args) {
+		err = runLauncher(os.Args[1:])
+	} else {
+		err = runManager()
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	root, err := repoRoot()
+func runManager() error {
+	root, _ := repoRoot()
+	distFS, distLabel, err := managerDistFS(root)
 	if err != nil {
 		return err
 	}
-	dist := filepath.Join(root, "web", "dist")
-	if _, err := os.Stat(filepath.Join(dist, "index.html")); err != nil {
-		return fmt.Errorf("未找到前端构建产物 %s，请先运行 npm --prefix web run vite:build", dist)
-	}
-
 	mux := http.NewServeMux()
-	manager := &server{root: root, dist: dist}
+	manager := &server{root: root, dist: distLabel, distFS: distFS}
 	mux.HandleFunc("/api/commands/", manager.handleCommand)
 	mux.HandleFunc("/api/dialog/open", manager.handleOpenDialog)
 	mux.HandleFunc("/", manager.handleStatic)
@@ -207,9 +217,185 @@ func run() error {
 	return http.Serve(listener, mux)
 }
 
+func shouldRunLauncher(args []string) bool {
+	if binaryRole == "launcher" {
+		return true
+	}
+	if len(args) > 0 {
+		base := strings.ToLower(filepath.Base(args[0]))
+		if strings.Contains(base, "launcher") {
+			return true
+		}
+	}
+	for _, arg := range args[1:] {
+		if arg == "--launcher" {
+			return true
+		}
+	}
+	return false
+}
+
+func runLauncher(args []string) error {
+	settings := loadSettings()
+	options := parseLaunchRequest(args)
+	appPath := resolveCodexApp(options.appPath)
+	if appPath == "" {
+		appPath = resolveCodexApp(settings.CodexAppPath)
+	}
+	if appPath == "" {
+		return errors.New("未找到 Codex 安装目录，请先在管理器中设置 Codex App 路径")
+	}
+	debugPort := options.debugPort
+	if debugPort == 0 {
+		debugPort = 9229
+	}
+	helperPort := options.helperPort
+	if helperPort == 0 {
+		helperPort = localRelayProxyPort
+	}
+	status := launchStatus{
+		Status:      "running",
+		Message:     "CodexTools launcher running.",
+		StartedAtMS: uint64(time.Now().UnixMilli()),
+		DebugPort:   &debugPort,
+		HelperPort:  &helperPort,
+		CodexApp:    &appPath,
+	}
+	_ = atomicWriteJSON(latestStatusPath(), status)
+
+	command := buildCodexLaunchCommand(appPath, debugPort, settings.CodexExtraArgs)
+	if len(command) == 0 {
+		return errors.New("无法构建 Codex 启动命令")
+	}
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Env = append(os.Environ(), codexLaunchEnvironment()...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		failure := launchStatus{
+			Status:      "failed",
+			Message:     "启动 Codex 失败：" + err.Error(),
+			StartedAtMS: uint64(time.Now().UnixMilli()),
+			DebugPort:   &debugPort,
+			HelperPort:  &helperPort,
+			CodexApp:    &appPath,
+		}
+		_ = atomicWriteJSON(latestStatusPath(), failure)
+		return err
+	}
+	return reapLauncherChild(cmd, appPath, debugPort, helperPort)
+}
+
+type launchRequest struct {
+	appPath    string
+	debugPort  uint16
+	helperPort uint16
+}
+
+func parseLaunchRequest(args []string) launchRequest {
+	var request launchRequest
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--app-path":
+			if i+1 < len(args) {
+				request.appPath = strings.TrimSpace(args[i+1])
+				i++
+			}
+		case "--debug-port":
+			if i+1 < len(args) {
+				if value, err := strconv.ParseUint(args[i+1], 10, 16); err == nil {
+					request.debugPort = uint16(value)
+				}
+				i++
+			}
+		case "--helper-port":
+			if i+1 < len(args) {
+				if value, err := strconv.ParseUint(args[i+1], 10, 16); err == nil {
+					request.helperPort = uint16(value)
+				}
+				i++
+			}
+		}
+	}
+	return request
+}
+
+func buildCodexLaunchCommand(appPath string, debugPort uint16, extraArgs []string) []string {
+	args := []string{
+		fmt.Sprintf("--remote-debugging-port=%d", debugPort),
+		fmt.Sprintf("--remote-allow-origins=http://127.0.0.1:%d", debugPort),
+	}
+	args = append(args, normalizeExtraArgs(extraArgs)...)
+	if runtime.GOOS == "darwin" && strings.EqualFold(filepath.Ext(appPath), ".app") {
+		command := []string{"open", "-n", appPath, "--args"}
+		return append(command, args...)
+	}
+	executable := buildCodexExecutable(appPath)
+	return append([]string{executable}, args...)
+}
+
+func buildCodexExecutable(appPath string) string {
+	if runtime.GOOS == "windows" {
+		candidates := []string{
+			filepath.Join(appPath, "Codex.exe"),
+			filepath.Join(appPath, "codex.exe"),
+			filepath.Join(appPath, "app", "Codex.exe"),
+			filepath.Join(appPath, "app", "codex.exe"),
+		}
+		for _, candidate := range candidates {
+			if fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	if strings.EqualFold(filepath.Ext(appPath), ".app") {
+		name := strings.TrimSuffix(filepath.Base(appPath), ".app")
+		candidates := []string{
+			filepath.Join(appPath, "Contents", "MacOS", name),
+			filepath.Join(appPath, "Contents", "MacOS", "Codex"),
+		}
+		for _, candidate := range candidates {
+			if fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	return appPath
+}
+
+func codexLaunchEnvironment() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{"PATH=" + defaultGUIPath}
+	default:
+		return nil
+	}
+}
+
+func reapLauncherChild(cmd *exec.Cmd, appPath string, debugPort, helperPort uint16) error {
+	err := cmd.Wait()
+	message := "Codex exited."
+	statusText := "exited"
+	if err != nil {
+		message = "Codex exited with error: " + err.Error()
+		statusText = "failed"
+	}
+	status := launchStatus{
+		Status:      statusText,
+		Message:     message,
+		StartedAtMS: uint64(time.Now().UnixMilli()),
+		DebugPort:   &debugPort,
+		HelperPort:  &helperPort,
+		CodexApp:    &appPath,
+	}
+	_ = atomicWriteJSON(latestStatusPath(), status)
+	return err
+}
+
 type server struct {
-	root string
-	dist string
+	root   string
+	dist   string
+	distFS fs.FS
 }
 
 func (s *server) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -253,19 +439,28 @@ func (s *server) handleOpenDialog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.dist, filepath.Clean(r.URL.Path))
-	if r.URL.Path == "/" || !fileExists(path) || isDir(path) {
-		index, err := os.ReadFile(filepath.Join(s.dist, "index.html"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		injected := bytes.Replace(index, []byte("<head>"), []byte(`<head><script>window.__CODEX_PLUS_GO_MANAGER__={apiBase:""};</script>`), 1)
-		w.Header().Set("content-type", "text/html; charset=utf-8")
-		_, _ = w.Write(injected)
+	assetPath := strings.TrimPrefix(pathpkg.Clean("/"+r.URL.Path), "/")
+	if assetPath == "" || assetPath == "." {
+		s.serveIndex(w)
 		return
 	}
-	http.FileServer(http.Dir(s.dist)).ServeHTTP(w, r)
+	info, err := fs.Stat(s.distFS, assetPath)
+	if err != nil || info.IsDir() {
+		s.serveIndex(w)
+		return
+	}
+	http.FileServer(http.FS(s.distFS)).ServeHTTP(w, r)
+}
+
+func (s *server) serveIndex(w http.ResponseWriter) {
+	index, err := fs.ReadFile(s.distFS, "index.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	injected := bytes.Replace(index, []byte("<head>"), []byte(`<head><script>window.__CODEX_PLUS_GO_MANAGER__={apiBase:""};</script>`), 1)
+	w.Header().Set("content-type", "text/html; charset=utf-8")
+	_, _ = w.Write(injected)
 }
 
 func (s *server) dispatch(ctx context.Context, command string, args map[string]any) commandResult {
@@ -380,6 +575,25 @@ func repoRoot() (string, error) {
 		}
 		dir = parent
 	}
+}
+
+func managerDistFS(root string) (fs.FS, string, error) {
+	if root != "" {
+		dist := filepath.Join(root, "web", "dist")
+		if fileExists(filepath.Join(dist, "index.html")) {
+			return os.DirFS(dist), dist, nil
+		}
+	}
+	dist, err := fs.Sub(embeddedDist, "web/dist")
+	if err == nil {
+		if _, statErr := fs.Stat(dist, "index.html"); statErr == nil {
+			return dist, "embedded:web/dist", nil
+		}
+	}
+	if root != "" {
+		return nil, filepath.Join(root, "web", "dist"), fmt.Errorf("未找到前端构建产物 %s，请先运行 npm --prefix web run vite:build 并重新构建下载包", filepath.Join(root, "web", "dist"))
+	}
+	return nil, "embedded:web/dist", errors.New("内嵌前端资源缺失，请先运行 npm --prefix web run vite:build 后重新执行 go build")
 }
 
 func stateDir() string {
@@ -729,14 +943,14 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	appPath := stringArg(request, "appPath")
 	debugPort := uint16Arg(request, "debugPort", 9229)
 	helperPort := uint16Arg(request, "helperPort", 57321)
-	launcher := companionBinaryPath("codex-plus-plus")
+	launcher := companionBinaryPath(silentBinary)
 	if runtime.GOOS == "windows" {
 		launcher += ".exe"
 	}
 	if !fileExists(launcher) {
 		return failed("启动静默入口失败：未找到 "+launcher, map[string]any{"debugPort": debugPort, "helperPort": helperPort})
 	}
-	cmd := exec.Command(launcher, "--debug-port", strconv.Itoa(int(debugPort)), "--helper-port", strconv.Itoa(int(helperPort)))
+	cmd := exec.Command(launcher, "--launcher", "--debug-port", strconv.Itoa(int(debugPort)), "--helper-port", strconv.Itoa(int(helperPort)))
 	if appPath != "" {
 		cmd.Args = append(cmd.Args, "--app-path", appPath)
 	}

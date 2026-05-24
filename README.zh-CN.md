@@ -53,6 +53,10 @@ go build -o codextools .
 
 地址：`https://t.me/wanai8`
 
+## 下载
+
+- GitHub Pages 下载页：[docs/downloads.html](./docs/downloads.html)
+
 ## 项目介绍页
 
 仓库内附带英文默认、可切换中文按钮的介绍页：
