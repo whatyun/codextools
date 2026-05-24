@@ -69,6 +69,8 @@ go build -o codextools .
 
 - [打开项目介绍页](./docs/index.html)
 
+仓库推送到 GitHub 后，可以直接用内置工作流把 `docs/` 发布为 GitHub Pages 页面。
+
 ## 说明
 
 - 当前 Go 后端为了兼容已有工作流，仍保留部分面向 Codex/Codex++ 的命令命名。

@@ -69,6 +69,8 @@ The repository includes an English-first project page with a Chinese switch butt
 
 - [Open project intro](./docs/index.html)
 
+GitHub Pages can publish the `docs/` folder automatically through the included workflow after the repository is pushed.
+
 ## Notes
 
 - The backend still targets the Codex/Codex++ local workflow and keeps compatibility-oriented command names where that reduces migration risk.
