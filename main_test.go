@@ -186,6 +186,9 @@ func TestDecideRelayRouteStripsImageToolWhenImageDisabled(t *testing.T) {
 	if hasImageGenerationTool(t, decision.body) {
 		t.Fatal("disabled image generation request still contains image_generation tool")
 	}
+	if hasToolChoice(t, decision.body) {
+		t.Fatal("disabled image generation request still contains image tool_choice")
+	}
 }
 
 func hasImageGenerationTool(t *testing.T, body []byte) bool {
@@ -201,4 +204,14 @@ func hasImageGenerationTool(t *testing.T, body []byte) bool {
 		}
 	}
 	return false
+}
+
+func hasToolChoice(t *testing.T, body []byte) bool {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("failed to unmarshal body: %v", err)
+	}
+	_, ok := value["tool_choice"]
+	return ok
 }
