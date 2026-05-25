@@ -69,6 +69,18 @@ go build -o codextools .
 
 项目介绍页已加入真实管理器截图和文字功能描述：
 
+### 首页仪表盘
+
+![CodexTools 首页仪表盘，展示启动状态、连接模式、界面增强模式和修复入口](./docs/assets/screenshot-home.png)
+
+首页直接显示本地环境是否就绪，提供主要启动按钮，并把连接服务、界面功能、入口修复和关键状态集中到一个页面。
+
+### 新手安装引导
+
+![CodexTools 新手引导，展示系统识别、Codex 安装状态、CCSwitch 导入、模式选择和启动步骤](./docs/assets/screenshot-onboarding.png)
+
+新手流程按顺序完成系统识别、Codex 安装检查、CCSwitch 导入、连接模式选择和启动，降低第一次配置成本。
+
 - 首页仪表盘：展示启动状态、当前连接、界面增强模式、入口路径和关键状态。
 - 新手安装引导：按系统识别、Codex 安装、CCSwitch 导入、模式选择、启动 Codex++ 的顺序完成首次配置。
 - 连接服务：集中管理官方登录、官方混合 API、中转 API、供应商列表、CCSwitch 导入和连通性测试。

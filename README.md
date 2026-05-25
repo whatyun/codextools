@@ -69,6 +69,18 @@ go build -o codextools .
 
 The project introduction page now includes real manager screenshots with feature descriptions:
 
+### Home dashboard
+
+![CodexTools home dashboard showing launch status, connection mode, UI enhancement mode, and repair entry points](./docs/assets/screenshot-home.png)
+
+The first screen shows whether the local setup is ready, exposes the primary launch button, and keeps connection, UI features, and repair entry points close together.
+
+### Beginner guide
+
+![CodexTools beginner guide showing system detection, Codex install status, CCSwitch import, mode selection, and launch steps](./docs/assets/screenshot-onboarding.png)
+
+The guided flow checks platform and architecture, confirms Codex installation, imports CCSwitch providers, selects the connection mode, and ends at launch.
+
 - Home dashboard: launch status, active connection, UI enhancement mode, entry paths, and key health checks.
 - Beginner guide: system detection, Codex install check, CCSwitch import, mode selection, and Codex++ launch flow.
 - Connection service: official login, mixed API mode, relay/API providers, CCSwitch import, and connectivity testing.
