@@ -14,14 +14,14 @@
       content="Standalone Go + React manager for Codex workflows, relay setup, script tooling, diagnostics, and repair operations."
     />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://github.com/hereww/codextools" />
+    <meta property="og:image" content="./assets/screenshot-home.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="CodexTools" />
     <meta
       name="twitter:description"
       content="Standalone Go + React manager for Codex workflows, relay setup, script tooling, diagnostics, and repair operations."
     />
-    <meta name="twitter:image" content="https://github.com/hereww/codextools" />
+    <meta name="twitter:image" content="./assets/screenshot-home.png" />
     <style>
       :root {
         --bg: #eef5fb;
@@ -213,6 +213,57 @@
         margin-top: 18px;
       }
 
+      .screenshots {
+        display: grid;
+        gap: 18px;
+      }
+
+      .screenshot-lead {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .screenshot-lead p {
+        margin: 0;
+        max-width: 760px;
+      }
+
+      .shot-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .shot-card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.72);
+        overflow: hidden;
+      }
+
+      .shot-card img {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: #f8fafc;
+      }
+
+      .shot-caption {
+        border-top: 1px solid var(--line);
+        padding: 16px 18px 18px;
+      }
+
+      .shot-caption h4 {
+        margin: 0 0 6px;
+        font-size: 18px;
+      }
+
+      .shot-caption p {
+        margin: 0;
+      }
+
       .release {
         overflow: hidden;
         position: relative;
@@ -355,10 +406,15 @@
       @media (max-width: 920px) {
         .hero,
         .grid,
+        .screenshot-lead,
         .release-grid,
         .origin,
         .telegram {
           grid-template-columns: 1fr;
+        }
+
+        .screenshot-lead {
+          display: block;
         }
 
         .release-head {
@@ -485,6 +541,61 @@ docs/                GitHub Pages 资源</pre>
           </div>
         </article>
       </div>
+
+      <section class="section screenshots">
+        <div data-lang="en" class="active">
+          <div class="screenshot-lead">
+            <div>
+              <h3>Manager screenshots</h3>
+              <p>
+                The desktop manager is organized around everyday actions: start Codex, confirm connection mode, finish first-run setup, and keep page enhancements visible without editing local files by hand.
+              </p>
+            </div>
+          </div>
+          <div class="shot-grid">
+            <article class="shot-card">
+              <img src="./assets/screenshot-home.png" alt="CodexTools home dashboard showing launch status, connection mode, UI enhancement mode, and repair entry points" />
+              <div class="shot-caption">
+                <h4>Home dashboard</h4>
+                <p>The first screen shows whether the local setup is ready, exposes the primary launch button, and keeps connection, UI features, and repair entry points close together.</p>
+              </div>
+            </article>
+            <article class="shot-card">
+              <img src="./assets/screenshot-onboarding.png" alt="CodexTools beginner guide showing system detection, Codex install status, CCSwitch import, mode selection, and launch steps" />
+              <div class="shot-caption">
+                <h4>Beginner guide</h4>
+                <p>The guided flow checks platform and architecture, confirms Codex installation, imports CCSwitch providers, selects the connection mode, and ends at launch.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+        <div data-lang="zh">
+          <div class="screenshot-lead">
+            <div>
+              <h3>管理器界面截图</h3>
+              <p>
+                桌面管理器围绕日常操作组织：启动 Codex、确认连接模式、完成新手配置，并把页面增强能力放在可见位置，不需要手动找本地配置文件。
+              </p>
+            </div>
+          </div>
+          <div class="shot-grid">
+            <article class="shot-card">
+              <img src="./assets/screenshot-home.png" alt="CodexTools 首页仪表盘，展示启动状态、连接模式、界面增强模式和修复入口" />
+              <div class="shot-caption">
+                <h4>首页仪表盘</h4>
+                <p>首页直接显示本地环境是否就绪，提供主要启动按钮，并把连接服务、界面功能、入口修复和关键状态集中到一个页面。</p>
+              </div>
+            </article>
+            <article class="shot-card">
+              <img src="./assets/screenshot-onboarding.png" alt="CodexTools 新手引导，展示系统识别、Codex 安装状态、CCSwitch 导入、模式选择和启动步骤" />
+              <div class="shot-caption">
+                <h4>新手安装引导</h4>
+                <p>新手流程按顺序完成系统识别、Codex 安装检查、CCSwitch 导入、连接模式选择和启动，降低第一次配置成本。</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
 
       <section class="section release">
         <div data-lang="en" class="active">

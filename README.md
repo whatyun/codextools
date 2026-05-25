@@ -65,6 +65,17 @@ go build -o codextools .
 6. Legacy conversation repair
    Provider sync tools help recover visibility for older local conversations.
 
+## Screenshots
+
+The project introduction page now includes real manager screenshots with feature descriptions:
+
+- Home dashboard: launch status, active connection, UI enhancement mode, entry paths, and key health checks.
+- Beginner guide: system detection, Codex install check, CCSwitch import, mode selection, and Codex++ launch flow.
+- Connection service: official login, mixed API mode, relay/API providers, CCSwitch import, and connectivity testing.
+- UI features: session delete, Markdown export, project move, Timeline, plugin entry unlock, and forced plugin install controls.
+
+Screenshot assets live in `docs/assets/` and are referenced directly by the public project page.
+
 ## New in 1.1.8
 
 - Published standalone macOS and Windows desktop packages from this repository.
