@@ -60,6 +60,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { defaultLanguage, languageOptions, localizeDocument, normalizeLanguage, type LanguageCode } from "@/i18n";
 
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
@@ -132,6 +133,7 @@ type InstallGuideStatusResult = CommandResult<{
 type BackendSettings = {
   codexAppPath: string;
   codexExtraArgs: string[];
+  language: LanguageCode;
   providerSyncEnabled: boolean;
   enhancementsEnabled: boolean;
   launchMode: LaunchMode;
@@ -344,6 +346,7 @@ const routes: Array<{ id: Route; label: string; helper: string; group: "main" | 
 const defaultSettings: BackendSettings = {
   codexAppPath: "",
   codexExtraArgs: [],
+  language: defaultLanguage,
   providerSyncEnabled: false,
   enhancementsEnabled: true,
   launchMode: "patch",
@@ -396,6 +399,7 @@ export function App() {
   });
   const [settingsForm, setSettingsForm] = useState<BackendSettings>({ ...defaultSettings });
   const [removeOwnedData, setRemoveOwnedData] = useState(false);
+  const currentLanguage = normalizeLanguage(settingsForm.language);
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => backendInvoke<T>(command, args);
 
@@ -904,6 +908,11 @@ export function App() {
     document.documentElement.classList.toggle("light", theme === "light");
     window.localStorage.setItem("codex-plus-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.lang = currentLanguage;
+    requestAnimationFrame(() => localizeDocument(document, currentLanguage));
+  });
 
   const saveCodexAppPath = async (appPath: string) => {
     const next = { ...settingsForm, codexAppPath: appPath };
@@ -2426,6 +2435,23 @@ function SettingsScreen({
       <Panel>
         <CardHead title="基础设置" detail={settings?.settings_path ?? ""} />
         <CardContent>
+          <Field label="语言">
+            <select
+              className="field-select"
+              value={normalizeLanguage(form.language)}
+              onChange={(event) => onFormChange({ ...form, language: normalizeLanguage(event.currentTarget.value) })}
+            >
+              {languageOptions.map((language) => (
+                <option key={language.code} value={language.code}>
+                  {language.nativeName} · {language.englishName}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="language-note">
+            <strong>多语言模块</strong>
+            <span>其他维护者可以在 web/src/i18n/translations.ts 中继续补充翻译。</span>
+          </div>
           <div className="theme-row">
             <div>
               <strong>界面主题</strong>
@@ -3365,7 +3391,13 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
   const activeRelayId = profiles.some((profile) => profile.id === settings.activeRelayId)
     ? settings.activeRelayId
     : profiles[0]?.id || "default";
-  return syncLegacyRelayFields({ ...defaultSettings, ...settings, relayProfiles: profiles, activeRelayId });
+  return syncLegacyRelayFields({
+    ...defaultSettings,
+    ...settings,
+    language: normalizeLanguage(settings.language),
+    relayProfiles: profiles,
+    activeRelayId,
+  });
 }
 
 function codexExtraArgsToInput(args: string[] | undefined) {

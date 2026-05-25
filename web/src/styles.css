@@ -1386,6 +1386,26 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.language-note {
+  display: grid;
+  gap: 3px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 20px;
+  background: hsl(var(--background) / 0.72);
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.language-note strong {
+  font-weight: 750;
+}
+
+.language-note span {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .switch-row {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
