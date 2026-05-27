@@ -177,6 +177,26 @@
         gap: 18px;
       }
 
+      .philosophy {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.7fr);
+        gap: 18px;
+      }
+
+      .philosophy-note {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.72);
+        padding: 18px;
+      }
+
+      .philosophy-note strong {
+        color: var(--text);
+        display: block;
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+
       .origin-actions {
         display: flex;
         flex-wrap: wrap;
@@ -408,6 +428,7 @@
         .grid,
         .screenshot-lead,
         .capability-grid,
+        .philosophy,
         .origin,
         .telegram {
           grid-template-columns: 1fr;
@@ -680,6 +701,43 @@ docs/                GitHub Pages 资源</pre>
             <li><strong>修复与维护</strong>处理入口路径、快捷方式、后端状态和其他本地环境问题。</li>
             <li><strong>日志与诊断</strong>提供可读日志和可复制诊断报告，方便排查和支持沟通。</li>
           </ul>
+        </div>
+      </section>
+
+      <section class="section philosophy">
+        <div>
+          <div data-lang="en" class="active">
+            <h3>Project philosophy</h3>
+            <p>
+              The reason for rebuilding this project is simple: I want more people to be able to use it. The original project created a useful foundation, but as the code, product direction, and community expectations evolved, there were differences in direction and some practical reasons to explore a separate branch.
+            </p>
+            <p>
+              CodexTools is that branch. It is built from my own thinking about the manager experience, while still respecting the open-source spirit that made this work possible in the first place. The goal is not to close the door behind one path, but to keep another path open for people who need a simpler, more accessible, and more actively shaped tool.
+            </p>
+          </div>
+          <div data-lang="zh">
+            <h3>项目理念</h3>
+            <p>
+              重构这个项目的第一个原因，是希望让更多人真正用得上。原项目提供了有价值的基础，但随着代码、产品方向和社区需求变化，项目路线中也出现了一些分歧，以及一些现实层面的原因，所以我希望基于自己的想法继续重构，并发展出一个独立分支。
+            </p>
+            <p>
+              CodexTools 就是这个分支。它延续开源开放的精神，不是为了否定原项目，而是为了保留另一条可以继续探索的路径：让工具更容易安装、更容易理解，也更适合普通用户长期使用。
+            </p>
+          </div>
+        </div>
+        <div class="philosophy-note">
+          <div data-lang="en" class="active">
+            <strong>No sponsorship or donation</strong>
+            <p>
+              This project does not accept sponsorships or donations. It is maintained as an open, community-oriented open-source project, with the code and direction kept public for anyone who wants to study, use, discuss, or fork it.
+            </p>
+          </div>
+          <div data-lang="zh">
+            <strong>不接受赞助和捐助</strong>
+            <p>
+              本项目不接受任何赞助，也不接受捐助。它会以开放式开源项目的方式维护，代码和方向保持公开，欢迎使用、学习、讨论和继续分支发展。
+            </p>
+          </div>
         </div>
       </section>
 

@@ -93,6 +93,14 @@ Screenshot assets live in `docs/assets/` and are referenced directly by the publ
 
 Telegram: `https://t.me/wanai8`
 
+## Project philosophy
+
+CodexTools is rebuilt so more people can actually use the manager. The original project created a useful foundation, but as the code, product direction, and community expectations evolved, there were differences in direction and practical reasons to explore a separate branch.
+
+This project is that branch. It is built from my own thinking about the manager experience while keeping the open-source spirit that made the work possible. The goal is not to reject the original project, but to keep another path open for users who need a simpler, more accessible, and more actively shaped tool.
+
+CodexTools does not accept sponsorships or donations. It is maintained as an open, community-oriented open-source project, with the code and direction kept public for anyone who wants to study, use, discuss, or fork it.
+
 ## Project origin and thanks
 
 CodexTools is a standalone Go refactor and manager UI project based on the earlier Codex++ work.
