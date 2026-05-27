@@ -7,6 +7,10 @@ BUILD="$ROOT/dist/build/windows"
 VERSION="${VERSION:-1.1.14}"
 ZIP_PATH="$DIST/CodexTools-${VERSION}-windows-x64.zip"
 SETUP_PATH="$DIST/CodexTools-${VERSION}-windows-x64-setup.exe"
+ZIP_TMP_PATH="$BUILD/CodexTools-${VERSION}-windows-x64.zip.tmp"
+SETUP_TMP_PATH="$BUILD/CodexTools-${VERSION}-windows-x64-setup.exe.tmp"
+CHECKSUM_PATH="$DIST/CodexTools-${VERSION}-windows-x64.sha256"
+CHECKSUM_TMP_PATH="$BUILD/CodexTools-${VERSION}-windows-x64.sha256.tmp"
 PACKAGE_DIR="$BUILD/CodexTools-${VERSION}-windows-x64"
 ICON_PNG="$ROOT/assets/icons/codextools-1024.png"
 ICON_ICO="$BUILD/codextools.ico"
@@ -148,13 +152,13 @@ CodexTools Windows desktop package
 4. "codextools-launcher.exe" launches Codex through the Codex++ launcher.
 TXT
 
-rm -f "$ZIP_PATH"
-(cd "$BUILD" && zip -qr -X "$ZIP_PATH" "$(basename "$PACKAGE_DIR")")
+rm -f "$ZIP_TMP_PATH"
+(cd "$BUILD" && zip -qr -X "$ZIP_TMP_PATH" "$(basename "$PACKAGE_DIR")")
 
 cat > "$NSIS_SCRIPT" <<NSI
 Unicode true
 Name "CodexTools"
-OutFile "$SETUP_PATH"
+OutFile "$SETUP_TMP_PATH"
 InstallDir "\$LOCALAPPDATA\\CodexTools"
 RequestExecutionLevel user
 Icon "$ICON_ICO"
@@ -214,5 +218,21 @@ SectionEnd
 NSI
 
 makensis -V2 "$NSIS_SCRIPT"
+if [[ ! -s "$SETUP_TMP_PATH" ]]; then
+  echo "Windows installer was not created or is empty: $SETUP_TMP_PATH" >&2
+  exit 1
+fi
+if [[ ! -s "$ZIP_TMP_PATH" ]]; then
+  echo "Windows zip was not created or is empty: $ZIP_TMP_PATH" >&2
+  exit 1
+fi
+mv -f "$SETUP_TMP_PATH" "$SETUP_PATH"
+mv -f "$ZIP_TMP_PATH" "$ZIP_PATH"
+(
+  cd "$DIST"
+  shasum -a 256 "$(basename "$SETUP_PATH")" "$(basename "$ZIP_PATH")" > "$CHECKSUM_TMP_PATH"
+)
+mv -f "$CHECKSUM_TMP_PATH" "$CHECKSUM_PATH"
 echo "$SETUP_PATH"
 echo "$ZIP_PATH"
+echo "$CHECKSUM_PATH"

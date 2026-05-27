@@ -125,12 +125,8 @@ func runLauncher(args []string) error {
 	_ = atomicWriteJSON(latestStatusPath(), status)
 	appendDiagnosticLog("launcher.starting", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "enhancements": settings.Enhancements})
 
-	command := buildCodexLaunchCommand(appPath, debugPort, settings.CodexExtraArgs)
-	if len(command) == 0 {
-		return errors.New("无法构建 Codex 启动命令")
-	}
-	if runtime.GOOS == "windows" && !fileExists(command[0]) {
-		err := fmt.Errorf("未找到 Codex.exe：%s", command[0])
+	launch, err := startCodexApp(appPath, debugPort, settings.CodexExtraArgs)
+	if err != nil {
 		failure := launchStatus{
 			Status:      "failed",
 			Message:     "启动 Codex 失败：" + err.Error(),
@@ -140,25 +136,7 @@ func runLauncher(args []string) error {
 			CodexApp:    &appPath,
 		}
 		_ = atomicWriteJSON(latestStatusPath(), failure)
-		appendDiagnosticLog("launcher.codex_executable_missing", map[string]any{"command": safeCommandForLog(command), "codex_app": appPath})
-		return err
-	}
-	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Env = append(os.Environ(), codexLaunchEnvironment()...)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	hideSubprocessWindow(cmd)
-	if err := cmd.Start(); err != nil {
-		failure := launchStatus{
-			Status:      "failed",
-			Message:     "启动 Codex 失败：" + err.Error(),
-			StartedAtMS: uint64(time.Now().UnixMilli()),
-			DebugPort:   &debugPort,
-			HelperPort:  &helperPort,
-			CodexApp:    &appPath,
-		}
-		_ = atomicWriteJSON(latestStatusPath(), failure)
-		appendDiagnosticLog("launcher.codex_start_failed", map[string]any{"error": err.Error(), "command": safeCommandForLog(command)})
+		appendDiagnosticLog("launcher.codex_start_failed", map[string]any{"error": err.Error(), "codex_app": appPath})
 		return err
 	}
 	ready := launchStatus{
@@ -178,8 +156,8 @@ func runLauncher(args []string) error {
 		go runtimeState.bridgeWatchdog(helperPort)
 	}
 	_ = atomicWriteJSON(latestStatusPath(), ready)
-	appendDiagnosticLog("launcher.ready", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
-	return reapLauncherChild(cmd, appPath, debugPort, helperPort)
+	appendDiagnosticLog("launcher.ready", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "launch": launch.logPayload()})
+	return reapLauncherChild(launch, appPath, debugPort, helperPort)
 }
 
 func parseLaunchRequest(args []string) launchRequest {
@@ -213,11 +191,7 @@ func parseLaunchRequest(args []string) launchRequest {
 }
 
 func buildCodexLaunchCommand(appPath string, debugPort uint16, extraArgs []string) []string {
-	args := []string{
-		fmt.Sprintf("--remote-debugging-port=%d", debugPort),
-		fmt.Sprintf("--remote-allow-origins=http://127.0.0.1:%d", debugPort),
-	}
-	args = append(args, normalizeExtraArgs(extraArgs)...)
+	args := buildCodexArguments(debugPort, extraArgs)
 	if runtime.GOOS == "darwin" && strings.EqualFold(filepath.Ext(appPath), ".app") {
 		command := []string{"open", "-W", "-a", appPath, "--args"}
 		return append(command, args...)
@@ -226,20 +200,21 @@ func buildCodexLaunchCommand(appPath string, debugPort uint16, extraArgs []strin
 	return append([]string{executable}, args...)
 }
 
+func buildCodexArguments(debugPort uint16, extraArgs []string) []string {
+	args := []string{
+		fmt.Sprintf("--remote-debugging-port=%d", debugPort),
+		fmt.Sprintf("--remote-allow-origins=http://127.0.0.1:%d", debugPort),
+	}
+	return append(args, normalizeExtraArgs(extraArgs)...)
+}
+
 func buildCodexExecutable(appPath string) string {
 	if runtime.GOOS == "windows" {
-		if isWindowsProtectedAppPackagePath(appPath) {
-			if alias := windowsCodexExecutionAlias(); alias != "" {
-				return alias
-			}
-		}
-		if isWindowsAppsExecutionAlias(appPath) && fileExists(appPath) {
+		if isWindowsAppsExecutionAlias(appPath) {
 			return appPath
 		}
 		if strings.EqualFold(filepath.Base(appPath), "Codex.exe") || strings.EqualFold(filepath.Base(appPath), "codex.exe") {
-			if fileExists(appPath) {
-				return appPath
-			}
+			return appPath
 		}
 		candidates := []string{
 			filepath.Join(appPath, "Codex.exe"),
@@ -256,6 +231,10 @@ func buildCodexExecutable(appPath string) string {
 				return candidate
 			}
 		}
+		if packagedWindowsAppUserModelID(appPath) != "" {
+			return ""
+		}
+		return ""
 	}
 	if strings.EqualFold(filepath.Ext(appPath), ".app") {
 		name := strings.TrimSuffix(filepath.Base(appPath), ".app")
@@ -270,6 +249,94 @@ func buildCodexExecutable(appPath string) string {
 		}
 	}
 	return appPath
+}
+
+func startCodexApp(appPath string, debugPort uint16, extraArgs []string) (codexLaunchHandle, error) {
+	command := buildCodexLaunchCommand(appPath, debugPort, extraArgs)
+	if runtime.GOOS == "windows" {
+		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) {
+			handle, err := startCodexProcess(command)
+			if err == nil {
+				return handle, nil
+			}
+			if activation := buildWindowsPackagedActivation(appPath, debugPort, extraArgs); activation != nil {
+				processID, activationErr := activateWindowsPackagedAppWithEnvironment(activation.appUserModelID, activation.arguments, codexLaunchEnvironment())
+				if activationErr != nil {
+					return nil, fmt.Errorf("无法启动 Codex 可执行文件 %s：%w；MSIX 激活 %s 也失败：%v", command[0], err, activation.appUserModelID, activationErr)
+				}
+				activation.processID = processID
+				return activation, nil
+			}
+			return nil, err
+		}
+		if activation := buildWindowsPackagedActivation(appPath, debugPort, extraArgs); activation != nil {
+			processID, activationErr := activateWindowsPackagedAppWithEnvironment(activation.appUserModelID, activation.arguments, codexLaunchEnvironment())
+			if activationErr != nil {
+				return nil, fmt.Errorf("无法激活 Windows Codex 应用 %s：%w", activation.appUserModelID, activationErr)
+			}
+			activation.processID = processID
+			return activation, nil
+		}
+	}
+	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
+		return nil, fmt.Errorf("未找到 Codex.exe：%s", appPath)
+	}
+	if runtime.GOOS == "windows" && !isWindowsAppsExecutionAlias(command[0]) && !fileExists(command[0]) {
+		return nil, fmt.Errorf("未找到 Codex.exe：%s", appPath)
+	}
+	handle, err := startCodexProcess(command)
+	if err != nil {
+		return nil, err
+	}
+	return handle, nil
+}
+
+func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs []string) *windowsPackagedActivation {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	appUserModelID := packagedWindowsAppUserModelID(appPath)
+	if appUserModelID == "" {
+		return nil
+	}
+	return &windowsPackagedActivation{
+		appUserModelID: appUserModelID,
+		arguments:      commandLineArguments(buildCodexArguments(debugPort, extraArgs)),
+	}
+}
+
+func commandLineArguments(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, quoteWindowsArgument(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func quoteWindowsArgument(arg string) string {
+	if arg != "" && !strings.ContainsAny(arg, " \t\"") {
+		return arg
+	}
+	var output strings.Builder
+	output.WriteByte('"')
+	backslashes := 0
+	for _, ch := range arg {
+		switch ch {
+		case '\\':
+			backslashes++
+		case '"':
+			output.WriteString(strings.Repeat("\\", backslashes*2+1))
+			output.WriteRune(ch)
+			backslashes = 0
+		default:
+			output.WriteString(strings.Repeat("\\", backslashes))
+			output.WriteRune(ch)
+			backslashes = 0
+		}
+	}
+	output.WriteString(strings.Repeat("\\", backslashes*2))
+	output.WriteByte('"')
+	return output.String()
 }
 
 func codexLaunchEnvironment() []string {
@@ -372,12 +439,9 @@ func forceKillMacOSApp(appPath string) error {
 	return nil
 }
 
-func terminateLaunchedCodex(cmd *exec.Cmd, command []string, appPath string) {
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-	if runtime.GOOS == "darwin" && len(command) > 0 && command[0] == "open" {
-		_ = quitMacOSApp(appPath)
+func terminateLaunchedCodex(launch codexLaunchHandle, appPath string) {
+	if launch != nil {
+		_ = launch.terminate()
 	}
 }
 
@@ -391,8 +455,8 @@ func safeCommandForLog(command []string) []string {
 	return out
 }
 
-func reapLauncherChild(cmd *exec.Cmd, appPath string, debugPort, helperPort uint16) error {
-	err := cmd.Wait()
+func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, helperPort uint16) error {
+	err := launch.wait()
 	message := "Codex exited."
 	statusText := "exited"
 	if err != nil {
@@ -414,4 +478,68 @@ func reapLauncherChild(cmd *exec.Cmd, appPath string, debugPort, helperPort uint
 
 func helperNeeded(settings backendSettings) bool {
 	return settings.Enhancements || activeRelayProfile(settings).Protocol == "chatCompletions" || activeRelayProfile(settings).needsLocalRelayProxy()
+}
+
+type codexLaunchHandle interface {
+	wait() error
+	terminate() error
+	logPayload() map[string]any
+}
+
+type codexProcessLaunch struct {
+	cmd     *exec.Cmd
+	command []string
+}
+
+func startCodexProcess(command []string) (codexLaunchHandle, error) {
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Env = append(os.Environ(), codexLaunchEnvironment()...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	hideSubprocessWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("无法启动 Codex 可执行文件 %s：%w", command[0], err)
+	}
+	return &codexProcessLaunch{cmd: cmd, command: append([]string(nil), command...)}, nil
+}
+
+func (launch *codexProcessLaunch) wait() error {
+	return launch.cmd.Wait()
+}
+
+func (launch *codexProcessLaunch) terminate() error {
+	if launch.cmd != nil && launch.cmd.Process != nil {
+		return launch.cmd.Process.Kill()
+	}
+	return nil
+}
+
+func (launch *codexProcessLaunch) logPayload() map[string]any {
+	return map[string]any{
+		"type":    "process",
+		"command": safeCommandForLog(launch.command),
+	}
+}
+
+type windowsPackagedActivation struct {
+	appUserModelID string
+	arguments      string
+	processID      uint32
+}
+
+func (activation *windowsPackagedActivation) wait() error {
+	return waitForWindowsProcessID(activation.processID)
+}
+
+func (activation *windowsPackagedActivation) terminate() error {
+	return terminateWindowsProcessID(activation.processID)
+}
+
+func (activation *windowsPackagedActivation) logPayload() map[string]any {
+	return map[string]any{
+		"type":           "windows_packaged_activation",
+		"appUserModelId": activation.appUserModelID,
+		"arguments":      activation.arguments,
+		"processId":      activation.processID,
+	}
 }

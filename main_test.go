@@ -129,6 +129,55 @@ func TestRelayStatusDetectsBoundOfficialAuthWithoutCurrentAuthFile(t *testing.T)
 	}
 }
 
+func TestInstallGuideConnectionDetectsBoundOfficialAuth(t *testing.T) {
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "official",
+		Name:                 "Official",
+		RelayMode:            "official",
+		Protocol:             "responses",
+		OfficialAuthContents: fakeChatGPTAuthJSON(t, "bound@example.com"),
+		OfficialAccountLabel: "bound@example.com",
+	}}
+	settings.ActiveRelayID = "official"
+	relayStatus := relayStatusFromHome(filepath.Join(t.TempDir(), ".codex"), settings)
+
+	payload := installGuideConnectionPayload(settings, relayStatus)
+
+	if !boolFromAny(payload["ready"]) {
+		t.Fatalf("bound official auth should make guide connection ready: %#v", payload)
+	}
+	if !boolFromAny(payload["officialReady"]) {
+		t.Fatalf("official account should be ready: %#v", payload)
+	}
+	if got := stringFromAny(payload["profileId"]); got != "official" {
+		t.Fatalf("profile id mismatch: %q", got)
+	}
+}
+
+func TestInstallGuideConnectionRequiresMixedApiFields(t *testing.T) {
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "mixed",
+		Name:                 "Mixed",
+		RelayMode:            "mixedApi",
+		Protocol:             "responses",
+		OfficialAuthContents: fakeChatGPTAuthJSON(t, "mixed@example.com"),
+		OfficialAccountLabel: "mixed@example.com",
+	}}
+	settings.ActiveRelayID = "mixed"
+	relayStatus := relayStatusFromHome(filepath.Join(t.TempDir(), ".codex"), settings)
+
+	payload := installGuideConnectionPayload(settings, relayStatus)
+
+	if boolFromAny(payload["ready"]) {
+		t.Fatalf("mixed API without base URL/key should not be ready: %#v", payload)
+	}
+	if !boolFromAny(payload["officialReady"]) || boolFromAny(payload["apiReady"]) {
+		t.Fatalf("mixed API readiness flags mismatch: %#v", payload)
+	}
+}
+
 func TestDefaultCCSDBPathPrefersExistingHomeDatabase(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -426,17 +475,164 @@ func TestNormalizeCodexAppPathAcceptsWindowsExecutableAndAppDir(t *testing.T) {
 	}
 }
 
-func TestWindowsProtectedCodexPackagePathIsRecognized(t *testing.T) {
+func TestPackagedWindowsAppUserModelIDMatchesOriginalLauncherShape(t *testing.T) {
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+
+	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+		t.Fatalf("app user model id mismatch: %q", got)
+	}
+}
+
+func TestPackagedWindowsAppUserModelIDIsCaseInsensitive(t *testing.T) {
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	mistypedCase := strings.Replace(path, "OpenAI.Codex_", "OpenAl.Codex_", 1)
+
+	if got := packagedWindowsAppUserModelID(strings.ToLower(path)); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+		t.Fatalf("lowercase package path should still resolve app id: %q", got)
+	}
+	if got := packagedWindowsAppUserModelID(mistypedCase); got != "" {
+		t.Fatalf("non Codex package identity should not resolve app id: %q", got)
+	}
+}
+
+func TestWindowsPackagePathNormalizesToAppDirOnWindows(t *testing.T) {
 	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app\Codex.exe`
 
-	if runtime.GOOS == "windows" {
-		if !isWindowsProtectedAppPackagePath(path) {
-			t.Fatal("WindowsApps Codex package path should be treated as protected")
+	if runtime.GOOS != "windows" {
+		if got := normalizeCodexAppPath(path); got != "" {
+			t.Fatalf("Windows package paths should not normalize outside Windows: %q", got)
 		}
 		return
 	}
-	if isWindowsProtectedAppPackagePath(path) {
-		t.Fatal("protected package path detection should be disabled outside Windows")
+	want := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	if got := normalizeCodexAppPath(path); got != want {
+		t.Fatalf("Windows package path should normalize to app dir: %q", got)
+	}
+}
+
+func TestWindowsPackageShapeNormalizesWithoutReadableExecutable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows package normalization only applies on Windows")
+	}
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0`
+	want := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+
+	if got := normalizeCodexAppPath(path); got != want {
+		t.Fatalf("package shape should normalize without file access: %q", got)
+	}
+}
+
+func TestMissingWindowsExecutionAliasDoesNotNormalize(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("execution alias guard only applies on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "Microsoft", "WindowsApps", "Codex.exe")
+
+	if got := normalizeCodexAppPath(path); got != "" {
+		t.Fatalf("missing Windows execution alias should not normalize: %q", got)
+	}
+}
+
+func TestWindowsPlainDirectoryWithoutCodexExecutableDoesNotNormalize(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows directory normalization only applies on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "Codex")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create plain directory: %v", err)
+	}
+
+	if got := normalizeCodexAppPath(dir); got != "" {
+		t.Fatalf("plain directory without Codex.exe should not normalize: %q", got)
+	}
+}
+
+func TestBuildCodexExecutableRejectsWindowsPlainDirectory(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable lookup only applies on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "Codex")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create plain directory: %v", err)
+	}
+
+	if got := buildCodexExecutable(dir); got != "" {
+		t.Fatalf("plain directory should not be treated as executable: %q", got)
+	}
+}
+
+func TestBuildWindowsPackagedActivationArguments(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("packaged activation is only built on Windows")
+	}
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+
+	activation := buildWindowsPackagedActivation(path, 9229, []string{"--force_high_performance_gpu"})
+
+	if activation == nil {
+		t.Fatal("activation should be built")
+	}
+	if activation.appUserModelID != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+		t.Fatalf("app user model id mismatch: %q", activation.appUserModelID)
+	}
+	if activation.arguments != "--remote-debugging-port=9229 --remote-allow-origins=http://127.0.0.1:9229 --force_high_performance_gpu" {
+		t.Fatalf("activation arguments mismatch: %q", activation.arguments)
+	}
+}
+
+func TestCodexLaunchPayloadPrefersExecutableWhenReadable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable preference only applies on Windows")
+	}
+	appDir := filepath.Join(t.TempDir(), "OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
+	exe := filepath.Join(appDir, "Codex.exe")
+	writeTestFile(t, exe, "binary")
+
+	payload := codexLaunchPayload(appDir)
+
+	if got := stringFromAny(payload["method"]); got != "executable" {
+		t.Fatalf("readable app dir should prefer 1.1.12 executable launch: %#v", payload)
+	}
+	if got := stringFromAny(payload["executable"]); got != exe {
+		t.Fatalf("executable mismatch: %q", got)
+	}
+}
+
+func TestCodexLaunchPayloadUsesPackagedActivationShape(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("packaged activation is only used on Windows")
+	}
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+
+	payload := codexLaunchPayload(path)
+
+	if !boolFromAny(payload["ready"]) {
+		t.Fatalf("packaged app should be launch-ready: %#v", payload)
+	}
+	if got := stringFromAny(payload["method"]); got != "packaged_activation" {
+		t.Fatalf("launch method mismatch: %q", got)
+	}
+	if got := stringFromAny(payload["appUserModelId"]); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+		t.Fatalf("app user model id mismatch: %q", got)
+	}
+}
+
+func TestFindLatestWindowsCodexAppDirPrefersHighestVersion(t *testing.T) {
+	root := t.TempDir()
+	oldApp := filepath.Join(root, "OpenAI.Codex_1.2.3.0_x64__abc", "app")
+	newApp := filepath.Join(root, "OpenAI.Codex_26.519.11010.0_x64__abc", "app")
+	if err := os.MkdirAll(oldApp, 0o755); err != nil {
+		t.Fatalf("failed to create old app dir: %v", err)
+	}
+	if err := os.MkdirAll(newApp, 0o755); err != nil {
+		t.Fatalf("failed to create new app dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "OpenAI.Codex_not-a-version_x64__abc"), 0o755); err != nil {
+		t.Fatalf("failed to create invalid app dir: %v", err)
+	}
+
+	if got := findLatestWindowsCodexAppDir(root); got != newApp {
+		t.Fatalf("latest app dir mismatch: %q", got)
 	}
 }
 

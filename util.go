@@ -86,7 +86,24 @@ func promptPath(title string, directory bool) string {
 			return strings.TrimSpace(string(out))
 		}
 	}
+	if runtime.GOOS == "windows" {
+		script := windowsOpenDialogScript(title, directory)
+		cmd := exec.Command("powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script)
+		hideSubprocessWindow(cmd)
+		out, err := cmd.Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	}
 	return ""
+}
+
+func windowsOpenDialogScript(title string, directory bool) string {
+	escapedTitle := strings.ReplaceAll(title, "'", "''")
+	if directory {
+		return fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = '%s'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }`, escapedTitle)
+	}
+	return fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = '%s'; $dialog.Filter = 'Codex executable (Codex.exe)|Codex.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.FileName) }`, escapedTitle)
 }
 
 func readJSON(path string, out any) error {

@@ -73,6 +73,33 @@ type PathState = {
   status: string;
   path: string | null;
   executable?: string;
+  appUserModelId?: string;
+};
+
+type CodexLaunchStatus = {
+  ready: boolean;
+  method: string;
+  methodLabel: string;
+  path: string | null;
+  executable?: string;
+  appUserModelId?: string;
+  message: string;
+};
+
+type InstallGuideConnectionStatus = {
+  ready: boolean;
+  mode: RelayMode;
+  profileId: string;
+  profileName: string;
+  message: string;
+  officialReady: boolean;
+  currentOfficialReady: boolean;
+  boundOfficialReady: boolean;
+  apiReady: boolean;
+  configured: boolean;
+  accountLabel?: string;
+  boundProfileId?: string;
+  boundProfileName?: string;
 };
 
 type LaunchStatus = {
@@ -145,8 +172,10 @@ type InstallGuideStatusResult = CommandResult<{
     savedPath?: string | null;
     resolvedPath?: string | null;
     executable?: string;
+    appUserModelId?: string;
     candidates?: string[];
   };
+  codexLaunch?: CodexLaunchStatus;
   codexInstallUrl: string;
   codexInstallSource: string;
   codexMirrorProjectUrl: string;
@@ -161,6 +190,8 @@ type InstallGuideStatusResult = CommandResult<{
   };
   settingsPath: string;
   activeMode: RelayMode;
+  relay?: RelayResult;
+  connection?: InstallGuideConnectionStatus;
 }>;
 
 type BackendSettings = {
@@ -471,6 +502,7 @@ export function App() {
       setOverview(result);
       if (!silent) showResultNotice("概览已检查", result, { silentSuccess: true });
     }
+    return result;
   };
 
   const checkUpdate = async (silent = false) => {
@@ -530,6 +562,7 @@ export function App() {
       }));
       if (!silent) showResultNotice("设置已加载", result, { silentSuccess: true });
     }
+    return result;
   };
 
   const refreshScriptMarket = async (silent = false) => {
@@ -577,6 +610,7 @@ export function App() {
       setRelay(result);
       if (!silent) showResultNotice("登录状态", result, { silentSuccess: true });
     }
+    return result;
   };
 
   const refreshRelayFiles = async (silent = false) => {
@@ -595,6 +629,27 @@ export function App() {
       if (!silent || !isSuccessStatus(result.status)) showResultNotice("CCS 供应商", result, { silentSuccess: true });
     }
     return result;
+  };
+
+  const refreshToolHealth = async (silent = false) => {
+    const [overviewResult, guideResult, relayResult, ccsResult] = await Promise.all([
+      refreshOverview(true),
+      refreshInstallGuideStatus(true),
+      refreshRelay(true),
+      refreshCcsProviders(true),
+    ]);
+    await refreshSettings(true);
+    await refreshWatcher(true);
+    if (!silent) {
+      const readyParts = [
+        overviewResult?.codex_app.status === "found" || guideResult?.codexLaunch?.ready ? "Codex 可启动" : "Codex 待修复",
+        ccsResult?.providers?.length ? `CCSwitch ${ccsResult.providers.length} 个供应商` : guideResult?.ccs.installed ? "CCSwitch 已发现" : "CCSwitch 未发现",
+        relayOfficialAuthenticated(relayResult ?? null) ? "官方账号已识别" : guideResult?.connection?.officialReady ? "官方绑定已识别" : "官方账号待绑定",
+        relayResult?.configured || guideResult?.connection?.apiReady ? "服务器配置已识别" : "服务器配置待补充",
+      ];
+      showNotice("检查完成", readyParts.join("；") + "。", "ok");
+    }
+    return { overviewResult, guideResult, relayResult, ccsResult };
   };
 
   const refreshLogs = async (silent = false) => {
@@ -619,6 +674,7 @@ export function App() {
       setWatcher(result);
       if (!silent) showResultNotice("Watcher 状态", result, { silentSuccess: true });
     }
+    return result;
   };
 
   const navigate = async (next: Route) => {
@@ -690,6 +746,19 @@ export function App() {
       setSettings(result);
       setSettingsForm(normalizeSettings(result.settings));
       showNotice("后端修复", result.message, result.status);
+    }
+  };
+
+  const repairCodexApp = async () => {
+    const result = await run(() => call<SettingsResult>("repair_codex_app"));
+    if (result) {
+      const normalized = normalizeSettings(result.settings);
+      setSettings(result);
+      setSettingsForm(normalized);
+      setLaunchForm((current) => ({ ...current, appPath: normalized.codexAppPath }));
+      showNotice("Codex 程序修复", result.message, result.status);
+      await refreshOverview(true);
+      await refreshInstallGuideStatus(true);
     }
   };
 
@@ -1068,6 +1137,7 @@ export function App() {
       launch,
       restart,
       repairBackend,
+      repairCodexApp,
       installEntrypoints,
       uninstallEntrypoints,
       repairShortcuts,
@@ -1089,7 +1159,10 @@ export function App() {
           const result = await saveCodexAppPath(selected.trim());
           if (result) {
             showNotice("Codex 应用路径", "应用路径已保存，之后启动会自动复用。", result.status);
+            await refreshInstallGuideStatus(true);
           }
+        } else {
+          showNotice("Codex 应用路径", "未选择路径。", "not_checked");
         }
       },
       clearCodexAppPath: async () => {
@@ -1151,10 +1224,7 @@ export function App() {
       goEnhance: () => navigate("enhance"),
       goLogs: () => navigate("logs"),
       checkHealth: async () => {
-        await refreshOverview(true);
-        await refreshRelay(true);
-        await refreshWatcher(true);
-        showNotice("检查完成", "已刷新 Codex 应用、入口、ChatGPT 登录和 Watcher 状态。", "ok");
+        await refreshToolHealth(false);
       },
       checkUpdate,
       installUpdate,
@@ -1164,7 +1234,7 @@ export function App() {
       disableWatcher: () => watcherAction("disable_watcher"),
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
     }),
-    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo],
+    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay],
   );
 
   return (
@@ -1301,6 +1371,7 @@ type Actions = {
   installEntrypoints: () => Promise<void>;
   uninstallEntrypoints: () => Promise<void>;
   repairShortcuts: () => Promise<void>;
+  repairCodexApp: () => Promise<void>;
   saveSettings: () => Promise<void>;
   saveSettingsValue: (settings: BackendSettings, silent?: boolean) => Promise<SettingsResult | null>;
   resetSettings: () => Promise<void>;
@@ -1311,7 +1382,7 @@ type Actions = {
   repairCodexPlugins: () => Promise<void>;
   repairCodexGoals: () => Promise<void>;
   setLaunchMode: (launchMode: LaunchMode) => Promise<void>;
-  refreshRelay: () => Promise<void>;
+  refreshRelay: () => Promise<RelayResult | null>;
   refreshInstallGuideStatus: () => Promise<InstallGuideStatusResult | null>;
   refreshRelayFiles: () => Promise<RelayFilesResult | null>;
   refreshCcsProviders: () => Promise<CcsProvidersResult | null>;
@@ -1631,7 +1702,7 @@ function InstallGuideScreen({
     officialMixApiKey: selectedMode === "mixedApi",
   });
   const selectedProfileProblem = relayProfileSwitchValidation(modeProfile);
-  const selectedProfileReady = !selectedProfileProblem;
+  const selectedProfileReady = relayProfileGuideReady(modeProfile, status?.connection, relay);
 
   const openInstall = async () => {
     const url = status?.codexInstallUrl || (status?.platform === "darwin" ? "https://openai.com/codex/" : "https://github.com/Wangnov/codex-app-mirror/releases/latest");
@@ -1709,6 +1780,7 @@ function InstallGuideScreen({
                 installed={codexInstalled}
                 onInstall={openInstall}
                 onChoosePath={() => void actions.chooseCodexAppPath("file")}
+                onRepair={() => void actions.repairCodexApp()}
                 onRefresh={() => void actions.refreshInstallGuideStatus()}
                 onNext={() => setStep("ccs")}
               />
@@ -1727,11 +1799,14 @@ function InstallGuideScreen({
               <GuideModeStep
                 form={normalized}
                 relay={relay}
+                status={status}
                 selectedMode={selectedMode}
                 selectedProfileId={selectedProfileId}
+                selectedProfileProblem={selectedProfileProblem}
                 selectedProfileReady={selectedProfileReady}
                 onModeChange={setSelectedMode}
                 onProfileChange={setSelectedProfileId}
+                onTestProfile={() => void actions.testRelayProfile(modeProfile)}
                 onApply={applyGuideMode}
               />
             ) : null}
@@ -1793,6 +1868,7 @@ function GuideCodexStep({
   installed,
   onInstall,
   onChoosePath,
+  onRepair,
   onRefresh,
   onNext,
 }: {
@@ -1800,21 +1876,26 @@ function GuideCodexStep({
   installed: boolean;
   onInstall: () => void;
   onChoosePath: () => void;
+  onRepair: () => void;
   onRefresh: () => void;
   onNext: () => void;
 }) {
   const download = status?.codexLatestDownload;
   const installLabel = status?.platform === "darwin" ? "打开官方安装页" : "获取最新版安装包";
   const isWindows = status?.platform === "windows";
+  const launchStatus = status?.codexLaunch;
   const detectionMessage = status?.codexDetection?.message || (installed ? "已检测到 Codex 应用。" : "自动检测暂未找到 Codex。");
   const detectionHints = status?.codexDetection?.candidates ?? [];
+  const executableLabel = launchStatus?.method === "packaged_activation"
+    ? launchStatus.appUserModelId || status?.codexApp.appUserModelId || status?.codexDetection?.appUserModelId || "MSIX 应用激活"
+    : launchStatus?.executable || status?.codexApp.executable || status?.codexDetection?.executable || "未找到";
   return (
     <div className="guide-pane">
       <div className="guide-pane-head">
         {installed ? <CheckCircle2 className="h-5 w-5" /> : <Download className="h-5 w-5" />}
         <div>
           <h3>{installed ? "Codex 已安装" : "安装 Codex"}</h3>
-          <p>{installed ? status?.codexApp.path ?? detectionMessage : detectionMessage}</p>
+          <p>{installed ? launchStatus?.message || status?.codexApp.path || detectionMessage : detectionMessage}</p>
         </div>
       </div>
       {!installed && isWindows ? (
@@ -1835,7 +1916,8 @@ function GuideCodexStep({
       </div>
       <div className="guide-facts">
         <Metric label="检测路径" value={status?.codexApp.path ?? "未找到"} />
-        {isWindows ? <Metric label="启动文件" value={status?.codexApp.executable || status?.codexDetection?.executable || "未找到"} /> : null}
+        {isWindows ? <Metric label="启动方式" value={launchStatus?.methodLabel || "未检测"} /> : null}
+        {isWindows ? <Metric label={launchStatus?.method === "packaged_activation" ? "AppUserModelID" : "启动文件"} value={executableLabel} /> : null}
         <Metric label="安装来源" value={status?.codexInstallSource === "official" ? "官方页面" : "镜像项目"} />
         <Metric label="最新版本" value={download?.releaseName || download?.tagName || "未获取"} />
       </div>
@@ -1852,6 +1934,12 @@ function GuideCodexStep({
           <Button onClick={onChoosePath} variant="secondary">
             <FileCode2 className="h-4 w-4" />
             手动选择 Codex.exe
+          </Button>
+        ) : null}
+        {isWindows ? (
+          <Button onClick={onRepair} variant="secondary">
+            <Wrench className="h-4 w-4" />
+            修复 Codex 程序
           </Button>
         ) : null}
         <Button onClick={onRefresh} variant="secondary">
@@ -1927,20 +2015,26 @@ function GuideCcsStep({
 function GuideModeStep({
   form,
   relay,
+  status,
   selectedMode,
   selectedProfileId,
+  selectedProfileProblem,
   selectedProfileReady,
   onModeChange,
   onProfileChange,
+  onTestProfile,
   onApply,
 }: {
   form: BackendSettings;
   relay: RelayResult | null;
+  status: InstallGuideStatusResult | null;
   selectedMode: RelayMode;
   selectedProfileId: string;
+  selectedProfileProblem: string | null;
   selectedProfileReady: boolean;
   onModeChange: (mode: RelayMode) => void;
   onProfileChange: (id: string) => void;
+  onTestProfile: () => void;
   onApply: () => void;
 }) {
   const selectedProfile = form.relayProfiles.find((profile) => profile.id === selectedProfileId) || activeRelayProfile(form);
@@ -1949,7 +2043,9 @@ function GuideModeStep({
     relayMode: selectedMode,
     officialMixApiKey: selectedMode === "mixedApi",
   });
-  const selectedProfileProblem = relayProfileSwitchValidation(selectedModeProfile);
+  const connection = status?.connection;
+  const readinessText = guideConnectionReadinessText(selectedModeProfile, connection, relay, selectedProfileProblem);
+  const connectionFacts = guideConnectionFacts(selectedModeProfile, connection, relay);
   return (
     <div className="guide-pane">
       <div className="guide-pane-head">
@@ -1970,6 +2066,11 @@ function GuideModeStep({
             <strong>{guideModeTitle(mode)}</strong>
             <span>{guideModeDescription(mode)}</span>
           </button>
+        ))}
+      </div>
+      <div className="guide-facts">
+        {connectionFacts.map((item) => (
+          <Metric key={item.label} label={item.label} value={item.value} />
         ))}
       </div>
       {selectedMode === "mixedApi" ? (
@@ -1995,16 +2096,22 @@ function GuideModeStep({
           </Field>
           <div className={`platform-note ${selectedProfileReady ? "" : "limited"}`}>
             <Info className="h-4 w-4" />
-            <span>{selectedProfileReady ? relayProfileReadinessText(selectedModeProfile, relay) : selectedProfileProblem || "所选通道未就绪，请先在连接服务里编辑供应商。"}</span>
+            <span>{readinessText}</span>
           </div>
         </>
       ) : (
-        <div className="platform-note">
+        <div className={`platform-note ${selectedProfileReady ? "" : "limited"}`}>
           <ShieldCheck className="h-4 w-4" />
-          <span>{selectedProfileReady ? relayProfileReadinessText(selectedModeProfile, relay) : selectedProfileProblem || "此供应商还没有绑定官方账号。"}</span>
+          <span>{readinessText}</span>
         </div>
       )}
       <Toolbar>
+        {selectedMode !== "official" ? (
+          <Button disabled={!selectedProfileReady} onClick={() => void onTestProfile()} variant="secondary">
+            <TestTube className="h-4 w-4" />
+            测试服务器
+          </Button>
+        ) : null}
         <Button disabled={!selectedProfileReady} onClick={() => void onApply()}>
           <CheckCircle2 className="h-4 w-4" />
           完成配置
@@ -2527,6 +2634,10 @@ function MaintenanceScreen({
           </div>
           <Toolbar>
             <Button onClick={() => void actions.checkHealth()}>检查</Button>
+            <Button variant="secondary" onClick={() => void actions.repairCodexApp()}>
+              <Wrench className="h-4 w-4" />
+              修复 Codex 程序
+            </Button>
             <Button variant="secondary" onClick={() => void actions.repairShortcuts()}>修复快捷方式</Button>
             <Button variant="secondary" onClick={() => void actions.repairBackend()}>修复后端</Button>
           </Toolbar>
@@ -2587,6 +2698,10 @@ function MaintenanceScreen({
             />
           </Field>
           <Toolbar>
+            <Button onClick={() => void actions.repairCodexApp()}>
+              <Wrench className="h-4 w-4" />
+              修复 Codex 程序
+            </Button>
             <Button onClick={() => void actions.chooseCodexAppPath("folder")}>选择应用目录</Button>
             <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 Codex.exe</Button>
             <Button variant="secondary" onClick={() => void actions.clearCodexAppPath()}>清除保存路径</Button>
@@ -3966,6 +4081,46 @@ function relayProfileReadinessText(profile: RelayProfile, relay: RelayResult | n
   const hasFiles = profile.configContents.trim() && profile.authContents.trim();
   if (!hasFiles) return "当前中转还没有完整 config.toml / auth.json。";
   return "中转 API 就绪：会直接写入此供应商的完整 config.toml / auth.json。";
+}
+
+function relayProfileGuideReady(profile: RelayProfile, connection?: InstallGuideConnectionStatus, relay?: RelayResult | null): boolean {
+  if (connection && connection.mode === profile.relayMode && connection.profileId === profile.id) {
+    return connection.ready;
+  }
+  const officialReady = profile.officialAuthContents.trim().length > 0 || relayOfficialAuthenticated(relay ?? null);
+  const apiReady = profile.baseUrl.trim().length > 0 && profile.apiKey.trim().length > 0 &&
+    (!profile.imageGenerationEnabled || !profile.imageGenerationUseSeparateApi || (!!profile.imageGenerationBaseUrl.trim() && !!profile.imageGenerationApiKey.trim()));
+  if (profile.relayMode === "official") return officialReady;
+  if (profile.relayMode === "mixedApi") return officialReady && apiReady;
+  return apiReady;
+}
+
+function guideConnectionReadinessText(
+  profile: RelayProfile,
+  connection: InstallGuideConnectionStatus | undefined,
+  relay: RelayResult | null,
+  validationProblem: string | null,
+): string {
+  if (connection && connection.mode === profile.relayMode && connection.profileId === profile.id && connection.message) {
+    return connection.message;
+  }
+  if (relayProfileGuideReady(profile, connection, relay)) return relayProfileReadinessText(profile, relay);
+  return validationProblem || relayProfileReadinessText(profile, relay);
+}
+
+function guideConnectionFacts(profile: RelayProfile, connection: InstallGuideConnectionStatus | undefined, relay: RelayResult | null) {
+  const officialReady = connection?.profileId === profile.id
+    ? connection.officialReady
+    : profile.officialAuthContents.trim().length > 0 || relayOfficialAuthenticated(relay);
+  const apiReady = connection?.profileId === profile.id
+    ? connection.apiReady
+    : profile.baseUrl.trim().length > 0 && profile.apiKey.trim().length > 0;
+  return [
+    { label: "官方账号", value: officialReady ? officialBindingLabel(profile) || relayOfficialLoginLabel(relay) : "未绑定" },
+    { label: "服务器参数", value: profile.relayMode === "official" ? "不需要" : apiReady ? "已填写" : "缺少 URL / Key" },
+    { label: "当前写入", value: relay?.configured || connection?.configured ? "已配置" : profile.relayMode === "official" ? "官方登录" : "未写入" },
+    { label: "供应商", value: profile.name || profile.id },
+  ];
 }
 
 function prepareRelaySettingsForSwitch(settings: BackendSettings): BackendSettings {

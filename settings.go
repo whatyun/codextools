@@ -228,6 +228,8 @@ func saveSettings(settings backendSettings) error {
 	if settings.CodexAppPath != "" {
 		if normalized := normalizeCodexAppPath(settings.CodexAppPath); normalized != "" {
 			settings.CodexAppPath = normalized
+		} else if runtime.GOOS == "windows" {
+			settings.CodexAppPath = ""
 		}
 	}
 	return atomicWriteJSON(settingsPath(), settings)

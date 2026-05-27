@@ -194,6 +194,8 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.installEntrypoints()
 	case "uninstall_entrypoints":
 		return s.uninstallEntrypoints(args)
+	case "repair_codex_app":
+		return s.repairCodexApp()
 	case "repair_backend":
 		return settingsPayload("后端已修复；Go 管理器当前复用设置文件，命令包装器仍由 Rust core 处理。")
 	case "load_watcher_state":
@@ -269,7 +271,7 @@ func (s *server) loadOverview() commandResult {
 	var latest *launchStatus
 	_ = readJSON(latestStatusPath(), &latest)
 	payload := map[string]any{
-		"codex_app":           pathState(codexApp),
+		"codex_app":           codexPathState(codexApp),
 		"codex_version":       codexAppVersion(codexApp),
 		"silent_shortcut":     shortcutState(entrypointPath(false)),
 		"management_shortcut": shortcutState(entrypointPath(true)),
@@ -282,6 +284,60 @@ func (s *server) loadOverview() commandResult {
 	return ok("概览已加载。", payload)
 }
 
+func (s *server) repairCodexApp() commandResult {
+	settings := loadSettings()
+	candidates := codexAppRepairCandidates(settings.CodexAppPath)
+	if len(candidates) == 0 {
+		return failed("未找到可启动的 Codex 程序。请确认 Microsoft Store 中的 Codex 已安装，或手动选择 Codex.exe / Codex 安装目录。", settingsPayloadValue(settings))
+	}
+	selected := candidates[0]
+	settings.CodexAppPath = selected
+	if err := saveSettings(settings); err != nil {
+		return failed("修复 Codex 程序失败："+err.Error(), settingsPayloadValue(loadSettings()))
+	}
+	payload := settingsPayloadValue(loadSettings())
+	payload["codexApp"] = codexPathState(resolveCodexApp(selected))
+	payload["repairCandidates"] = candidates
+	return ok("已修复 Codex 程序路径："+selected, payload)
+}
+
+func codexAppRepairCandidates(saved string) []string {
+	candidates := []string{}
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if strings.EqualFold(existing, path) {
+				return
+			}
+		}
+		candidates = append(candidates, path)
+	}
+	if normalized := normalizeCodexAppPath(saved); normalized != "" {
+		add(normalized)
+	}
+	if runtime.GOOS == "windows" {
+		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
+			add(local)
+		}
+		if installed := resolveWindowsCodexFromInstalledApps(); installed != "" {
+			add(installed)
+		}
+		if latest := findLatestWindowsCodexAppDirFromRoots(windowsAppPackageRoots()); latest != "" {
+			add(latest)
+		}
+		if alias := windowsCodexExecutionAlias(); alias != "" && fileExists(alias) {
+			add(alias)
+		}
+	}
+	if installed := resolveCodexApp(""); installed != "" {
+		add(installed)
+	}
+	return candidates
+}
+
 func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 	settings := loadSettings()
 	codexApp := resolveCodexApp(settings.CodexAppPath)
@@ -289,6 +345,7 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 	ccsDBPathCandidates := ccsDBPathCandidates()
 	ccsProviders, ccsErr := listCCSProviders(ccsDBPath)
 	download := latestCodexDownload(ctx, runtime.GOOS, runtime.GOARCH)
+	relayStatus := relayStatusFromHome(codexHomeDir(), settings)
 	message := "新手引导状态已读取。"
 	var warnings []string
 	if ccsErr != nil {
@@ -310,6 +367,7 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 		"codexApp":                    codexPathState(codexApp),
 		"codexVersion":                codexAppVersion(codexApp),
 		"codexDetection":              codexDetectionPayload(settings.CodexAppPath, codexApp),
+		"codexLaunch":                 codexLaunchPayload(codexApp),
 		"codexInstallUrl":             codexInstallURL(download),
 		"codexInstallSource":          codexInstallSource(download),
 		"codexMirrorProjectUrl":       codexAppMirrorProjectURL,
@@ -324,6 +382,8 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 		},
 		"settingsPath": settingsPath(),
 		"activeMode":   activeRelayProfile(settings).RelayMode,
+		"relay":        relayStatus,
+		"connection":   installGuideConnectionPayload(settings, relayStatus),
 	}
 	return ok(message, payload)
 }
@@ -522,6 +582,9 @@ func codexPathState(path string) map[string]any {
 	state := pathState(path)
 	if path != "" && runtime.GOOS == "windows" {
 		state["executable"] = buildCodexExecutable(path)
+		if appUserModelID := packagedWindowsAppUserModelID(path); appUserModelID != "" {
+			state["appUserModelId"] = appUserModelID
+		}
 	}
 	return state
 }
@@ -552,36 +615,14 @@ func resolveCodexApp(saved string) string {
 		}
 	}
 	if runtime.GOOS == "windows" {
-		if alias := windowsCodexExecutionAlias(); alias != "" {
-			return alias
+		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
+			return local
 		}
 		if installed := resolveWindowsCodexFromInstalledApps(); installed != "" {
 			return installed
 		}
-		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
-			return local
-		}
-		roots := []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432"), os.Getenv("LOCALAPPDATA"), `C:\Program Files\WindowsApps`}
-		var matches []string
-		for _, root := range roots {
-			if root == "" {
-				continue
-			}
-			entries, _ := os.ReadDir(root)
-			for _, entry := range entries {
-				if entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "openai.codex_") {
-					app := filepath.Join(root, entry.Name(), "app")
-					if isDir(app) {
-						matches = append(matches, app)
-					} else {
-						matches = append(matches, filepath.Join(root, entry.Name()))
-					}
-				}
-			}
-		}
-		sort.Strings(matches)
-		if len(matches) > 0 {
-			return matches[len(matches)-1]
+		if latest := findLatestWindowsCodexAppDirFromRoots(windowsAppPackageRoots()); latest != "" {
+			return latest
 		}
 	}
 	return ""
@@ -590,9 +631,6 @@ func resolveCodexApp(saved string) string {
 func resolveWindowsCodexFromInstalledApps() string {
 	if runtime.GOOS != "windows" {
 		return ""
-	}
-	if alias := windowsCodexExecutionAlias(); alias != "" {
-		return alias
 	}
 	commands := [][]string{
 		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
@@ -638,8 +676,11 @@ func resolveWindowsCodexFromCommonPaths() string {
 		addCandidate(filepath.Join(root, "Codex"))
 		addCandidate(filepath.Join(root, "OpenAI", "Codex"))
 		addCandidate(filepath.Join(root, "OpenAI Codex"))
-		addCandidate(filepath.Join(root, "Microsoft", "WindowsApps", "Codex.exe"))
-		addCandidate(filepath.Join(root, "Microsoft", "WindowsApps", "codex.exe"))
+		for _, alias := range []string{filepath.Join(root, "Microsoft", "WindowsApps", "Codex.exe"), filepath.Join(root, "Microsoft", "WindowsApps", "codex.exe")} {
+			if fileExists(alias) {
+				addCandidate(alias)
+			}
+		}
 	}
 	for _, candidate := range candidates {
 		if normalized := normalizeCodexAppPath(candidate); normalized != "" {
@@ -654,13 +695,16 @@ func normalizeCodexAppPath(path string) string {
 	if path == "" {
 		return ""
 	}
-	if runtime.GOOS == "windows" && isWindowsProtectedAppPackagePath(path) {
-		if alias := windowsCodexExecutionAlias(); alias != "" {
-			return alias
+	if runtime.GOOS == "windows" {
+		if normalized := normalizeWindowsPackageAppPath(path); normalized != "" {
+			return normalized
 		}
 	}
-	if runtime.GOOS == "windows" && isWindowsAppsExecutionAlias(path) && fileExists(path) {
-		return path
+	if runtime.GOOS == "windows" && isWindowsAppsExecutionAlias(path) {
+		if fileExists(path) {
+			return path
+		}
+		return ""
 	}
 	if strings.EqualFold(filepath.Base(path), "Codex.exe") || strings.EqualFold(filepath.Base(path), "codex.exe") {
 		return filepath.Dir(path)
@@ -683,6 +727,9 @@ func normalizeCodexAppPath(path string) string {
 	nested := filepath.Join(path, "app")
 	if isDir(nested) && (fileExists(filepath.Join(nested, "Codex.exe")) || fileExists(filepath.Join(nested, "codex.exe"))) {
 		return nested
+	}
+	if runtime.GOOS == "windows" {
+		return ""
 	}
 	if isDir(path) {
 		return path
@@ -711,22 +758,175 @@ func isWindowsProtectedAppPackagePath(path string) bool {
 		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codex_")
 }
 
+func normalizeWindowsPackageAppPath(path string) string {
+	packageName := windowsPackageNameFromPath(path)
+	if !isWindowsCodexPackageName(packageName) {
+		return ""
+	}
+	parts := splitPathParts(path)
+	for i, part := range parts {
+		if strings.EqualFold(part, packageName) {
+			prefix := strings.Join(parts[:i+1], string(os.PathSeparator))
+			if strings.Contains(path, `\`) {
+				prefix = strings.Join(parts[:i+1], `\`)
+			}
+			if strings.HasSuffix(strings.ToLower(filepath.ToSlash(path)), "/app") || strings.EqualFold(filepath.Base(path), "Codex.exe") || strings.EqualFold(filepath.Base(path), "codex.exe") {
+				return filepath.Join(prefix, "app")
+			}
+			return filepath.Join(prefix, "app")
+		}
+	}
+	if strings.EqualFold(filepath.Base(path), "app") {
+		return path
+	}
+	return filepath.Join(path, "app")
+}
+
 func windowsCodexExecutionAlias() string {
 	if runtime.GOOS != "windows" {
 		return ""
+	}
+	if alias := strings.TrimSpace(os.Getenv("CODEX_APP_EXECUTION_ALIAS")); alias != "" {
+		return alias
 	}
 	for _, root := range []string{os.Getenv("LOCALAPPDATA"), filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")} {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		for _, name := range []string{"Codex.exe", "codex.exe"} {
-			candidate := filepath.Join(root, "Microsoft", "WindowsApps", name)
-			if fileExists(candidate) {
-				return candidate
+		return filepath.Join(root, "Microsoft", "WindowsApps", "Codex.exe")
+	}
+	return ""
+}
+
+func windowsAppPackageRoots() []string {
+	var roots []string
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		for _, existing := range roots {
+			if strings.EqualFold(existing, path) {
+				return
+			}
+		}
+		roots = append(roots, path)
+	}
+	for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432")} {
+		if root != "" {
+			add(filepath.Join(root, "WindowsApps"))
+		}
+	}
+	add(`C:\Program Files\WindowsApps`)
+	return roots
+}
+
+func findLatestWindowsCodexAppDirFromRoots(roots []string) string {
+	var best string
+	for _, root := range roots {
+		if candidate := findLatestWindowsCodexAppDir(root); candidate != "" {
+			if best == "" || compareVersions(windowsPackageVersionFromPath(candidate), windowsPackageVersionFromPath(best)) > 0 {
+				best = candidate
 			}
 		}
 	}
-	return ""
+	return best
+}
+
+func findLatestWindowsCodexAppDir(root string) string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	var best string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isWindowsCodexPackageName(name) || windowsPackageVersionFromName(name) == "" {
+			continue
+		}
+		path := filepath.Join(root, name)
+		if app := filepath.Join(path, "app"); isDir(app) {
+			path = app
+		}
+		if best == "" || compareVersions(windowsPackageVersionFromPath(path), windowsPackageVersionFromPath(best)) > 0 {
+			best = path
+		}
+	}
+	return best
+}
+
+func packagedWindowsAppUserModelID(path string) string {
+	packageName := windowsPackageNameFromPath(path)
+	if !isWindowsCodexPackageName(packageName) {
+		return ""
+	}
+	_, publisherID, ok := strings.Cut(packageName, "__")
+	if !ok || publisherID == "" {
+		return ""
+	}
+	return "OpenAI.Codex_" + publisherID + "!App"
+}
+
+func isWindowsCodexPackageName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasPrefix(lower, "openai.codex_") && strings.Contains(name, "__")
+}
+
+func windowsPackageNameFromPath(path string) string {
+	parts := splitPathParts(path)
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	if strings.EqualFold(last, "Codex.exe") || strings.EqualFold(last, "codex.exe") {
+		if len(parts) >= 3 && strings.EqualFold(parts[len(parts)-2], "app") {
+			return parts[len(parts)-3]
+		}
+		if len(parts) < 2 {
+			return ""
+		}
+		return parts[len(parts)-2]
+	}
+	if strings.EqualFold(last, "app") {
+		if len(parts) < 2 {
+			return ""
+		}
+		return parts[len(parts)-2]
+	}
+	return last
+}
+
+func windowsPackageVersionFromPath(path string) string {
+	return windowsPackageVersionFromName(windowsPackageNameFromPath(path))
+}
+
+func windowsPackageVersionFromName(name string) string {
+	if !isWindowsCodexPackageName(name) {
+		return ""
+	}
+	rest := strings.TrimSpace(name)[len("OpenAI.Codex_"):]
+	version, _, ok := strings.Cut(rest, "_")
+	if !ok || version == "" {
+		return ""
+	}
+	for _, part := range strings.Split(version, ".") {
+		if part == "" {
+			return ""
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			return ""
+		}
+	}
+	return version
+}
+
+func splitPathParts(path string) []string {
+	return strings.FieldsFunc(filepath.ToSlash(strings.TrimSpace(path)), func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
 }
 
 func codexDetectionPayload(saved, resolved string) map[string]any {
@@ -741,6 +941,9 @@ func codexDetectionPayload(saved, resolved string) map[string]any {
 		payload["status"] = "found"
 		payload["message"] = "已检测到 Codex 应用。"
 		payload["executable"] = buildCodexExecutable(resolved)
+		if appUserModelID := packagedWindowsAppUserModelID(resolved); appUserModelID != "" {
+			payload["appUserModelId"] = appUserModelID
+		}
 		return payload
 	}
 	if runtime.GOOS == "windows" {
@@ -748,6 +951,138 @@ func codexDetectionPayload(saved, resolved string) map[string]any {
 		payload["candidates"] = windowsCodexDetectionHints()
 	}
 	return payload
+}
+
+func codexLaunchPayload(appPath string) map[string]any {
+	payload := map[string]any{
+		"ready":          false,
+		"method":         "missing",
+		"methodLabel":    "未检测到启动方式",
+		"path":           nullableString(appPath),
+		"executable":     "",
+		"appUserModelId": "",
+		"message":        "未检测到 Codex 应用，无法启动。",
+	}
+	if appPath == "" {
+		return payload
+	}
+	if runtime.GOOS == "windows" {
+		if executable := buildCodexExecutable(appPath); strings.TrimSpace(executable) != "" && fileExists(executable) {
+			payload["ready"] = true
+			payload["method"] = "executable"
+			payload["methodLabel"] = "可执行文件启动"
+			payload["executable"] = executable
+			payload["message"] = "将按 1.1.12 的方式直接启动 Codex.exe。"
+			if appUserModelID := packagedWindowsAppUserModelID(appPath); appUserModelID != "" {
+				payload["appUserModelId"] = appUserModelID
+			}
+			return payload
+		}
+		if appUserModelID := packagedWindowsAppUserModelID(appPath); appUserModelID != "" {
+			payload["ready"] = true
+			payload["method"] = "packaged_activation"
+			payload["methodLabel"] = "MSIX 应用激活"
+			payload["appUserModelId"] = appUserModelID
+			payload["message"] = "未直接读取到 Codex.exe，将通过 AppUserModelID 激活 Windows Store/MSIX 版。"
+			return payload
+		}
+	}
+	executable := buildCodexExecutable(appPath)
+	if strings.TrimSpace(executable) == "" {
+		payload["message"] = "已识别到 Codex 目录，但没有找到可执行文件。"
+		return payload
+	}
+	if runtime.GOOS == "windows" && !isWindowsAppsExecutionAlias(executable) && !fileExists(executable) {
+		payload["method"] = "executable_missing"
+		payload["executable"] = executable
+		payload["message"] = "已推断 Codex.exe 位置，但文件不存在。"
+		return payload
+	}
+	payload["ready"] = true
+	payload["method"] = "executable"
+	payload["methodLabel"] = "可执行文件启动"
+	payload["executable"] = executable
+	payload["message"] = "将通过可执行文件启动 Codex。"
+	return payload
+}
+
+func installGuideConnectionPayload(settings backendSettings, relayStatus map[string]any) map[string]any {
+	active := activeRelayProfile(settings)
+	mode := active.RelayMode
+	if mode != "mixedApi" && mode != "pureApi" && mode != "official" {
+		mode = "official"
+	}
+	payload := map[string]any{
+		"ready":                false,
+		"mode":                 mode,
+		"profileId":            active.ID,
+		"profileName":          active.Name,
+		"message":              "",
+		"officialReady":        boolFromAny(relayStatus["officialAuthenticated"]),
+		"currentOfficialReady": boolFromAny(relayStatus["currentAuthenticated"]) || boolFromAny(relayStatus["authenticated"]),
+		"boundOfficialReady":   boolFromAny(relayStatus["boundOfficialAuthenticated"]),
+		"apiReady":             relayProfileAPIReady(active),
+		"configured":           boolFromAny(relayStatus["configured"]),
+		"accountLabel":         stringFromAny(relayStatus["officialAccountLabel"]),
+		"boundProfileId":       stringFromAny(relayStatus["boundOfficialProfileId"]),
+		"boundProfileName":     stringFromAny(relayStatus["boundOfficialProfileName"]),
+	}
+	switch mode {
+	case "official":
+		ready := relayProfileOfficialReady(active) || boolFromAny(relayStatus["officialAuthenticated"])
+		payload["ready"] = ready
+		payload["officialReady"] = ready
+		if ready {
+			payload["message"] = "官方账号已就绪，可切回官方登录。"
+		} else {
+			payload["message"] = "当前供应商还没有绑定官方账号，请先在连接服务里绑定。"
+		}
+	case "mixedApi":
+		officialReady := relayProfileOfficialReady(active)
+		apiReady := relayProfileAPIReady(active)
+		payload["officialReady"] = officialReady || boolFromAny(relayStatus["officialAuthenticated"])
+		payload["apiReady"] = apiReady
+		payload["ready"] = officialReady && apiReady
+		if officialReady && apiReady {
+			payload["message"] = "官方账号和混合 API 均已就绪。"
+		} else if !officialReady && !apiReady {
+			payload["message"] = "当前供应商缺少官方账号绑定和 Base URL / Key。"
+		} else if !officialReady {
+			payload["message"] = "当前供应商还没有绑定官方账号。"
+		} else {
+			payload["message"] = "当前供应商缺少 Base URL / Key。"
+		}
+	case "pureApi":
+		apiReady := relayProfileAPIReady(active)
+		payload["apiReady"] = apiReady
+		payload["ready"] = apiReady
+		if apiReady {
+			payload["message"] = "中转 API 参数已就绪。"
+		} else {
+			payload["message"] = "当前中转供应商缺少 Base URL / Key。"
+		}
+	default:
+		payload["message"] = "未知连接模式。"
+	}
+	if payload["profileName"] == "" {
+		payload["profileName"] = active.ID
+	}
+	return payload
+}
+
+func relayProfileOfficialReady(profile relayProfile) bool {
+	status, ok := relayProfileOfficialAuthStatus(profile)
+	return ok && status.Authenticated
+}
+
+func relayProfileAPIReady(profile relayProfile) bool {
+	if strings.TrimSpace(profile.BaseURL) == "" || strings.TrimSpace(profile.APIKey) == "" {
+		return false
+	}
+	if profile.ImageGenerationEnabled && profile.ImageGenerationUseSeparateAPI {
+		return strings.TrimSpace(profile.ImageGenerationBaseURL) != "" && strings.TrimSpace(profile.ImageGenerationAPIKey) != ""
+	}
+	return true
 }
 
 func windowsCodexDetectionHints() []string {
@@ -817,7 +1152,7 @@ func plistStringAfterKey(text, key string) string {
 
 func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	request := mapArg(args, "request")
-	appPath := stringArg(request, "appPath")
+	appPath := normalizeCodexAppPath(stringArg(request, "appPath"))
 	debugPort := uint16Arg(request, "debugPort", 9229)
 	helperPort := uint16Arg(request, "helperPort", 57321)
 	launcher := companionBinaryPath(silentBinary)
