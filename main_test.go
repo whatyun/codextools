@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -664,6 +665,20 @@ func TestSelectCodexToolsAssetPrefersPlatformAndArchitecture(t *testing.T) {
 	}
 }
 
+func TestSelectCodexToolsAssetPrefersMacOSInstaller(t *testing.T) {
+	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
+		{Name: "CodexTools-1.1.16-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
+		{Name: "CodexTools-1.1.16-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
+	}, "darwin", "arm64")
+
+	if !ok {
+		t.Fatal("expected a matching CodexTools asset")
+	}
+	if asset.Name != "CodexTools-1.1.16-macos-arm64.pkg" {
+		t.Fatalf("selected wrong asset: %q", asset.Name)
+	}
+}
+
 func TestSelectCodexToolsAssetPrefersWindowsSetup(t *testing.T) {
 	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
 		{Name: "CodexTools-1.1.13-windows-x64.zip", BrowserDownloadURL: "https://example.com/windows.zip"},
@@ -740,6 +755,27 @@ func TestRelayProxyBaseURLKeepsExistingResponsesPath(t *testing.T) {
 
 	if baseURL != "https://api.example.com/openai" {
 		t.Fatalf("responses relay should preserve existing paths, got %q", baseURL)
+	}
+}
+
+func TestSetRelayProxyUserAgentForwardsCodexClientAgent(t *testing.T) {
+	source := http.Header{"User-Agent": []string{"codex-cli/1.2.3"}}
+	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
+
+	setRelayProxyUserAgent(source, target)
+
+	if got := target.Get("User-Agent"); got != "codex-cli/1.2.3" {
+		t.Fatalf("relay proxy should forward Codex user agent, got %q", got)
+	}
+}
+
+func TestSetRelayProxyUserAgentFallsBackToCodex(t *testing.T) {
+	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
+
+	setRelayProxyUserAgent(http.Header{}, target)
+
+	if got := target.Get("User-Agent"); got != "Codex" {
+		t.Fatalf("relay proxy should not expose GoRelay user agent, got %q", got)
 	}
 }
 

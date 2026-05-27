@@ -95,6 +95,34 @@
         background: #dbeafe;
         color: var(--primary);
       }
+      .download-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 18px;
+      }
+      .download-list a {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: #f8fbff;
+        color: var(--text);
+        padding: 12px 14px;
+        text-decoration: none;
+        font-weight: 800;
+      }
+      .download-list span {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      code {
+        border-radius: 8px;
+        background: #e8eef7;
+        padding: 2px 6px;
+      }
       .note {
         margin-top: 20px;
         border: 1px solid var(--line);
@@ -133,18 +161,22 @@
         <section class="card">
           <div data-lang="en" class="active">
             <h2>macOS</h2>
-            <p>Native app bundle packaged from the standalone Go manager and launcher binaries.</p>
-            <div class="actions">
-              <a class="primary" href="./releases/CodexTools-1.1.15-macos-arm64.zip">Download macOS</a>
-              <a class="secondary" href="https://github.com/hereww/codextools">Repository</a>
+            <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
+            <div class="download-list">
+              <a href="./releases/CodexTools-1.1.16-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.16-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.16-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.16-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
-            <p>使用独立 Go 管理器和启动器打包的原生应用版本。</p>
-            <div class="actions">
-              <a class="primary" href="./releases/CodexTools-1.1.15-macos-arm64.zip">下载 macOS 版</a>
-              <a class="secondary" href="https://github.com/hereww/codextools">仓库主页</a>
+            <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
+            <div class="download-list">
+              <a href="./releases/CodexTools-1.1.16-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.16-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.16-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.16-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -152,18 +184,22 @@
         <section class="card">
           <div data-lang="en" class="active">
             <h2>Windows</h2>
-            <p>Desktop installer with a native WebView2 manager window, launcher executable, Start Menu shortcuts, and uninstall support.</p>
-            <div class="actions">
-              <a class="primary" href="./releases/CodexTools-1.1.15-windows-x64-setup.exe">Download Windows</a>
-              <a class="secondary" href="https://t.me/wanai8">Telegram</a>
+            <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
+            <div class="download-list">
+              <a href="./releases/CodexTools-1.1.16-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.16-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.16-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.16-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
-            <p>桌面安装包，包含 WebView2 原生管理器窗口、启动器、开始菜单快捷方式和卸载入口。</p>
-            <div class="actions">
-              <a class="primary" href="./releases/CodexTools-1.1.15-windows-x64-setup.exe">下载 Windows 版</a>
-              <a class="secondary" href="https://t.me/wanai8">Telegram 群</a>
+            <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
+            <div class="download-list">
+              <a href="./releases/CodexTools-1.1.16-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.16-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.16-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.16-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -173,16 +209,18 @@
         <div data-lang="en" class="active">
           <strong>Notes</strong>
           <ul>
-            <li>macOS package is built on Apple Silicon and targets `arm64`.</li>
-            <li>Windows is delivered as an installer; a portable zip is also produced as a secondary release artifact.</li>
+            <li>macOS installer packages install `Codex++ 管理工具.app` and `Codex++.app` into `/Applications`.</li>
+            <li>If macOS blocks the unsigned apps, run <code>xattr -cr "/Applications/Codex++ 管理工具.app"</code> and <code>xattr -cr "/Applications/Codex++.app"</code>.</li>
+            <li>Windows x64 is for traditional Intel/AMD PCs. Windows arm64 is for Windows on ARM devices.</li>
             <li>The manager still expects a local Codex installation and keeps the current Go refactor feature scope.</li>
           </ul>
         </div>
         <div data-lang="zh">
           <strong>说明</strong>
           <ul>
-            <li>macOS 包基于 Apple Silicon 构建，目标架构为 `arm64`。</li>
-            <li>Windows 版本以安装包形式提供，同时保留便携 zip 作为辅助发布产物。</li>
+            <li>macOS 安装包会把 `Codex++ 管理工具.app` 和 `Codex++.app` 安装到 `/Applications`。</li>
+            <li>如果 macOS 因未签名阻止启动，请执行 <code>xattr -cr "/Applications/Codex++ 管理工具.app"</code> 和 <code>xattr -cr "/Applications/Codex++.app"</code>。</li>
+            <li>Windows x64 适合传统 Intel/AMD 电脑；Windows arm64 适合 Windows ARM 设备。</li>
             <li>管理器仍然需要本地已有 Codex 安装，并保持当前 Go 重构版的功能范围。</li>
           </ul>
         </div>

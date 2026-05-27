@@ -818,6 +818,17 @@ export function App() {
     return result;
   };
 
+  const changeLanguage = async (language: LanguageCode) => {
+    const next = { ...settingsForm, language: normalizeLanguage(language) };
+    setSettingsForm(next);
+    const result = await run(() => call<SettingsResult>("save_settings", { settings: next }));
+    if (result) {
+      setSettings(result);
+      setSettingsForm(normalizeSettings(result.settings));
+      if (!isSuccessStatus(result.status)) showNotice("语言", result.message, result.status);
+    }
+  };
+
   const importCcsProviders = async () => {
     const result = await run(() => call<SettingsResult>("import_ccs_providers"));
     if (result) {
@@ -1144,6 +1155,7 @@ export function App() {
       saveSettings,
       saveSettingsValue,
       resetSettings,
+      changeLanguage,
       chooseCodexAppPath: async (mode: "folder" | "file") => {
         const selected = await openFileDialog(
           mode === "folder"
@@ -1271,6 +1283,20 @@ export function App() {
             <p>{routeSubtitle(route)}</p>
           </div>
           <div className="topbar-actions">
+            <label className="topbar-language" title="语言">
+              <span>语言</span>
+              <select
+                aria-label="语言"
+                value={currentLanguage}
+                onChange={(event) => void actions.changeLanguage(normalizeLanguage(event.currentTarget.value))}
+              >
+                {languageOptions.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.nativeName}
+                  </option>
+                ))}
+              </select>
+            </label>
             <Button onClick={() => void actions.launch()} title="启动 Codex++">
               <Rocket className="h-4 w-4" />
               启动
@@ -1375,6 +1401,7 @@ type Actions = {
   saveSettings: () => Promise<void>;
   saveSettingsValue: (settings: BackendSettings, silent?: boolean) => Promise<SettingsResult | null>;
   resetSettings: () => Promise<void>;
+  changeLanguage: (language: LanguageCode) => Promise<void>;
   chooseCodexAppPath: (mode: "folder" | "file") => Promise<void>;
   clearCodexAppPath: () => Promise<void>;
   saveManualCodexAppPath: () => Promise<void>;
@@ -2831,22 +2858,9 @@ function SettingsScreen({
       <Panel>
         <CardHead title="基础设置" detail={settings?.settings_path ?? ""} />
         <CardContent>
-          <Field label="语言">
-            <select
-              className="field-select"
-              value={normalizeLanguage(form.language)}
-              onChange={(event) => onFormChange({ ...form, language: normalizeLanguage(event.currentTarget.value) })}
-            >
-              {languageOptions.map((language) => (
-                <option key={language.code} value={language.code}>
-                  {language.nativeName} · {language.englishName}
-                </option>
-              ))}
-            </select>
-          </Field>
           <div className="language-note">
             <strong>多语言模块</strong>
-            <span>其他维护者可以在 web/src/i18n/translations.ts 中继续补充翻译。</span>
+            <span>语言切换已放到右上角工具区；其他维护者可以在 web/src/i18n/translations.ts 中继续补充翻译。</span>
           </div>
           <div className="theme-row">
             <div>

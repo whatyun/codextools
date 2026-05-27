@@ -111,6 +111,14 @@ Thanks to the original Codex++ project for the foundation, workflow ideas, and u
 ## Downloads
 
 - GitHub Pages download page: [docs/downloads.html](./docs/downloads.html)
+- Windows is published as setup installers for traditional Intel/AMD PCs (`windows-x64`) and Windows on ARM devices (`windows-arm64`). Portable zip builds are also attached for both architectures.
+- macOS is published as installer packages for Apple Silicon (`macos-arm64`) and Intel Macs (`macos-x64`). Portable zip builds remain available as secondary artifacts.
+- If macOS blocks the unsigned apps after installation, run:
+
+```bash
+xattr -cr "/Applications/Codex++ 管理工具.app"
+xattr -cr "/Applications/Codex++.app"
+```
 
 ## Project introduction page
 

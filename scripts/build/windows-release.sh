@@ -4,25 +4,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="$ROOT/dist/releases"
 BUILD="$ROOT/dist/build/windows"
-VERSION="${VERSION:-1.1.15}"
-ZIP_PATH="$DIST/CodexTools-${VERSION}-windows-x64.zip"
-SETUP_PATH="$DIST/CodexTools-${VERSION}-windows-x64-setup.exe"
-ZIP_TMP_PATH="$BUILD/CodexTools-${VERSION}-windows-x64.zip.tmp"
-SETUP_TMP_PATH="$BUILD/CodexTools-${VERSION}-windows-x64-setup.exe.tmp"
-CHECKSUM_PATH="$DIST/CodexTools-${VERSION}-windows-x64.sha256"
-CHECKSUM_TMP_PATH="$BUILD/CodexTools-${VERSION}-windows-x64.sha256.tmp"
-PACKAGE_DIR="$BUILD/CodexTools-${VERSION}-windows-x64"
+VERSION="${VERSION:-1.1.16}"
+TARGET_ARCHES="${TARGET_ARCHES:-amd64 arm64}"
 ICON_PNG="$ROOT/assets/icons/codextools-1024.png"
 ICON_ICO="$BUILD/codextools.ico"
 RESOURCE_PREFIX="$ROOT/codextools"
-RESOURCE_SYSO="$ROOT/codextools_windows_amd64.syso"
 NSIS_SCRIPT="$BUILD/codextools-installer.nsi"
 
 rm -rf "$BUILD"
-mkdir -p "$BUILD" "$DIST" "$PACKAGE_DIR"
+mkdir -p "$BUILD" "$DIST"
 
 cleanup() {
-  rm -f "$RESOURCE_SYSO"
+  rm -f "$ROOT"/codextools_windows_*.syso
 }
 trap cleanup EXIT
 
@@ -32,6 +25,14 @@ version_quad() {
   local major="0" minor="0" patch="0" build="0"
   IFS=. read -r major minor patch build <<<"$clean"
   printf '%s.%s.%s.%s' "${major:-0}" "${minor:-0}" "${patch:-0}" "${build:-0}"
+}
+
+arch_label() {
+  case "$1" in
+    amd64) printf 'x64' ;;
+    arm64) printf 'arm64' ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
 tool_path() {
@@ -108,12 +109,19 @@ else
   exit 1
 fi
 
+pushd "$ROOT/web" >/dev/null
+npm install
+npm run check
+npm run vite:build
+popd >/dev/null
+
 build_resource() {
-  local description="$1"
-  local filename="$2"
-  rm -f "$RESOURCE_SYSO"
+  local arch="$1"
+  local description="$2"
+  local filename="$3"
+  rm -f "$ROOT"/codextools_windows_*.syso
   "$GO_WINRES" simply \
-    --arch amd64 \
+    --arch "$arch" \
     --out "$RESOURCE_PREFIX" \
     --manifest gui \
     --icon "$ICON_ICO" \
@@ -124,41 +132,52 @@ build_resource() {
     --original-filename "$filename"
 }
 
-pushd "$ROOT/web" >/dev/null
-npm install
-npm run check
-npm run vite:build
-popd >/dev/null
+build_arch() {
+  local goarch="$1"
+  local label
+  label="$(arch_label "$goarch")"
+  local arch_build="$BUILD/$label"
+  local package_name="CodexTools-${VERSION}-windows-${label}"
+  local package_dir="$arch_build/$package_name"
+  local zip_tmp_path="$arch_build/${package_name}.zip.tmp"
+  local setup_tmp_path="$arch_build/${package_name}-setup.exe.tmp"
+  local zip_path="$DIST/${package_name}.zip"
+  local setup_path="$DIST/${package_name}-setup.exe"
+  local checksum_path="$DIST/${package_name}.sha256"
+  local checksum_tmp_path="$arch_build/${package_name}.sha256.tmp"
 
-pushd "$ROOT" >/dev/null
-build_resource "CodexTools manager" "codextools.exe"
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=manager" -o "$PACKAGE_DIR/codextools.exe" .
-build_resource "CodexTools launcher" "codextools-launcher.exe"
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=launcher" -o "$PACKAGE_DIR/codextools-launcher.exe" .
-rm -f "$RESOURCE_SYSO"
-popd >/dev/null
+  mkdir -p "$package_dir"
 
-cp "$ROOT/assets/icons/codextools-1024.png" "$PACKAGE_DIR/codextools-icon.png"
-cp "$ICON_ICO" "$PACKAGE_DIR/codextools-icon.ico"
-cp "$ROOT/README.md" "$PACKAGE_DIR/README.md"
-cp "$ROOT/README.zh-CN.md" "$PACKAGE_DIR/README.zh-CN.md"
+  pushd "$ROOT" >/dev/null
+  build_resource "$goarch" "CodexTools manager" "codextools.exe"
+  GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=manager" -o "$package_dir/codextools.exe" .
+  build_resource "$goarch" "CodexTools launcher" "codextools-launcher.exe"
+  GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=launcher" -o "$package_dir/codextools-launcher.exe" .
+  rm -f "$ROOT"/codextools_windows_*.syso
+  popd >/dev/null
 
-cat > "$PACKAGE_DIR/START-HERE.txt" <<TXT
-CodexTools Windows desktop package
+  cp "$ROOT/assets/icons/codextools-1024.png" "$package_dir/codextools-icon.png"
+  cp "$ICON_ICO" "$package_dir/codextools-icon.ico"
+  cp "$ROOT/README.md" "$package_dir/README.md"
+  cp "$ROOT/README.zh-CN.md" "$package_dir/README.zh-CN.md"
 
-1. The recommended release artifact is "CodexTools-${VERSION}-windows-x64-setup.exe"; it creates Start Menu shortcuts and an uninstall entry.
+  cat > "$package_dir/START-HERE.txt" <<TXT
+CodexTools Windows desktop package (${label})
+
+1. The recommended release artifact is "CodexTools-${VERSION}-windows-${label}-setup.exe"; it creates Start Menu shortcuts and an uninstall entry.
 2. This folder can also be used as a portable desktop build.
 3. "codextools.exe" opens a native Windows desktop window using WebView2, not a browser tab.
 4. "codextools-launcher.exe" launches Codex through the Codex++ launcher.
+5. Use x64 for traditional Intel/AMD PCs. Use arm64 for Windows on ARM devices.
 TXT
 
-rm -f "$ZIP_TMP_PATH"
-(cd "$BUILD" && zip -qr -X "$ZIP_TMP_PATH" "$(basename "$PACKAGE_DIR")")
+  rm -f "$zip_tmp_path"
+  (cd "$arch_build" && zip -qr -X "$zip_tmp_path" "$package_name")
 
-cat > "$NSIS_SCRIPT" <<NSI
+  cat > "$NSIS_SCRIPT" <<NSI
 Unicode true
 Name "CodexTools"
-OutFile "$SETUP_TMP_PATH"
+OutFile "$setup_tmp_path"
 InstallDir "\$LOCALAPPDATA\\CodexTools"
 RequestExecutionLevel user
 Icon "$ICON_ICO"
@@ -167,7 +186,7 @@ VIProductVersion "$(version_quad)"
 VIAddVersionKey "ProductName" "CodexTools"
 VIAddVersionKey "CompanyName" "hereww"
 VIAddVersionKey "LegalCopyright" "Copyright hereww"
-VIAddVersionKey "FileDescription" "CodexTools Windows Installer"
+VIAddVersionKey "FileDescription" "CodexTools Windows Installer (${label})"
 VIAddVersionKey "FileVersion" "$VERSION"
 VIAddVersionKey "ProductVersion" "$VERSION"
 
@@ -185,7 +204,7 @@ Section "Install"
   Delete /REBOOTOK "\$INSTDIR\\Codex++ 管理工具.exe"
   Delete /REBOOTOK "\$INSTDIR\\Codex++.exe"
   SetOutPath "\$INSTDIR"
-  File /r "$PACKAGE_DIR/*"
+  File /r "$package_dir/*"
   WriteUninstaller "\$INSTDIR\\Uninstall.exe"
 
   CreateDirectory "\$SMPROGRAMS\\CodexTools"
@@ -217,22 +236,27 @@ Section "Uninstall"
 SectionEnd
 NSI
 
-makensis -V2 "$NSIS_SCRIPT"
-if [[ ! -s "$SETUP_TMP_PATH" ]]; then
-  echo "Windows installer was not created or is empty: $SETUP_TMP_PATH" >&2
-  exit 1
-fi
-if [[ ! -s "$ZIP_TMP_PATH" ]]; then
-  echo "Windows zip was not created or is empty: $ZIP_TMP_PATH" >&2
-  exit 1
-fi
-mv -f "$SETUP_TMP_PATH" "$SETUP_PATH"
-mv -f "$ZIP_TMP_PATH" "$ZIP_PATH"
-(
-  cd "$DIST"
-  shasum -a 256 "$(basename "$SETUP_PATH")" "$(basename "$ZIP_PATH")" > "$CHECKSUM_TMP_PATH"
-)
-mv -f "$CHECKSUM_TMP_PATH" "$CHECKSUM_PATH"
-echo "$SETUP_PATH"
-echo "$ZIP_PATH"
-echo "$CHECKSUM_PATH"
+  makensis -V2 "$NSIS_SCRIPT"
+  if [[ ! -s "$setup_tmp_path" ]]; then
+    echo "Windows installer was not created or is empty: $setup_tmp_path" >&2
+    exit 1
+  fi
+  if [[ ! -s "$zip_tmp_path" ]]; then
+    echo "Windows zip was not created or is empty: $zip_tmp_path" >&2
+    exit 1
+  fi
+  mv -f "$setup_tmp_path" "$setup_path"
+  mv -f "$zip_tmp_path" "$zip_path"
+  (
+    cd "$DIST"
+    shasum -a 256 "$(basename "$setup_path")" "$(basename "$zip_path")" > "$checksum_tmp_path"
+  )
+  mv -f "$checksum_tmp_path" "$checksum_path"
+  echo "$setup_path"
+  echo "$zip_path"
+  echo "$checksum_path"
+}
+
+for arch in $TARGET_ARCHES; do
+  build_arch "$arch"
+done

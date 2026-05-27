@@ -152,6 +152,9 @@ func codexToolsAssetScore(name, goos, goarch string) int {
 		if strings.Contains(lower, "macos") || strings.Contains(lower, "darwin") {
 			score += 40
 		}
+		if strings.HasSuffix(lower, ".pkg") {
+			score += 24
+		}
 	case "windows":
 		if strings.Contains(lower, "windows") || strings.Contains(lower, "win") {
 			score += 40
@@ -176,6 +179,9 @@ func codexToolsAssetScore(name, goos, goarch string) int {
 	}
 	if strings.HasSuffix(lower, ".zip") {
 		score += 12
+	}
+	if strings.HasSuffix(lower, ".pkg") {
+		score += 18
 	}
 	if strings.HasSuffix(lower, ".exe") {
 		score += 18

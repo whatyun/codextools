@@ -148,8 +148,8 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		return
 	}
 	upstreamReq.Header.Set("authorization", "Bearer "+apiKey)
-	upstreamReq.Header.Set("user-agent", "CodexPlusPlus-GoRelay/"+version)
 	copyProxyHeaders(req.Header, upstreamReq.Header)
+	setRelayProxyUserAgent(req.Header, upstreamReq.Header)
 	resp, err := http.DefaultClient.Do(upstreamReq)
 	if err != nil {
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
@@ -201,7 +201,7 @@ func relayTargetURL(baseURL, path string) string {
 func copyProxyHeaders(source http.Header, target http.Header) {
 	for name, values := range source {
 		lower := strings.ToLower(name)
-		if lower == "authorization" || lower == "host" || lower == "connection" || lower == "content-length" {
+		if lower == "authorization" || lower == "host" || lower == "connection" || lower == "content-length" || lower == "user-agent" {
 			continue
 		}
 		target.Del(name)
@@ -209,6 +209,14 @@ func copyProxyHeaders(source http.Header, target http.Header) {
 			target.Add(name, value)
 		}
 	}
+}
+
+func setRelayProxyUserAgent(source http.Header, target http.Header) {
+	userAgent := strings.TrimSpace(source.Get("user-agent"))
+	if userAgent == "" {
+		userAgent = "Codex"
+	}
+	target.Set("user-agent", userAgent)
 }
 
 func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
