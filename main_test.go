@@ -667,14 +667,14 @@ func TestSelectCodexToolsAssetPrefersPlatformAndArchitecture(t *testing.T) {
 
 func TestSelectCodexToolsAssetPrefersMacOSInstaller(t *testing.T) {
 	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
-		{Name: "CodexTools-1.1.16-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
-		{Name: "CodexTools-1.1.16-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
+		{Name: "CodexTools-1.1.17-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
+		{Name: "CodexTools-1.1.17-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
 	}, "darwin", "arm64")
 
 	if !ok {
 		t.Fatal("expected a matching CodexTools asset")
 	}
-	if asset.Name != "CodexTools-1.1.16-macos-arm64.pkg" {
+	if asset.Name != "CodexTools-1.1.17-macos-arm64.pkg" {
 		t.Fatalf("selected wrong asset: %q", asset.Name)
 	}
 }
@@ -776,6 +776,23 @@ func TestSetRelayProxyUserAgentFallsBackToCodex(t *testing.T) {
 
 	if got := target.Get("User-Agent"); got != "Codex" {
 		t.Fatalf("relay proxy should not expose GoRelay user agent, got %q", got)
+	}
+}
+
+func TestCopyProxyHeadersSkipsAcceptEncoding(t *testing.T) {
+	source := http.Header{
+		"Accept-Encoding": []string{"gzip, br"},
+		"Content-Type":    []string{"application/json"},
+	}
+	target := http.Header{}
+
+	copyProxyHeaders(source, target)
+
+	if got := target.Get("Accept-Encoding"); got != "" {
+		t.Fatalf("relay proxy should control upstream encoding, got %q", got)
+	}
+	if got := target.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type should still be copied, got %q", got)
 	}
 }
 

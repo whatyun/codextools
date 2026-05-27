@@ -136,13 +136,12 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		return
 	}
 	target := relayTargetURL(baseURL, req.URL.Path)
-	ctx, cancel := context.WithTimeout(req.Context(), 120*time.Second)
-	defer cancel()
+	startedAt := time.Now()
 	method := req.Method
 	if method == "" {
 		method = http.MethodPost
 	}
-	upstreamReq, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
+	upstreamReq, err := http.NewRequestWithContext(req.Context(), method, target, bytes.NewReader(body))
 	if err != nil {
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": err.Error()}})
 		return
@@ -150,6 +149,7 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 	upstreamReq.Header.Set("authorization", "Bearer "+apiKey)
 	copyProxyHeaders(req.Header, upstreamReq.Header)
 	setRelayProxyUserAgent(req.Header, upstreamReq.Header)
+	upstreamReq.Header.Set("accept-encoding", "identity")
 	resp, err := http.DefaultClient.Do(upstreamReq)
 	if err != nil {
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
@@ -166,8 +166,9 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		w.Header().Set("content-type", "application/json")
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-	appendDiagnosticLog("relay_proxy.response", map[string]any{
+	flushRelayResponseHeaders(w)
+	responseBytes, copyErr := copyRelayResponseBody(w, resp.Body)
+	logDetail := map[string]any{
 		"path":                req.URL.Path,
 		"status":              resp.StatusCode,
 		"target":              target,
@@ -175,7 +176,13 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		"reason":              decision.reason,
 		"key_source":          decision.keySource,
 		"stripped_image_tool": decision.strippedImageTool,
-	})
+		"body_bytes":          responseBytes,
+		"duration_ms":         time.Since(startedAt).Milliseconds(),
+	}
+	if copyErr != nil {
+		logDetail["copy_error"] = copyErr.Error()
+	}
+	appendDiagnosticLog("relay_proxy.response", logDetail)
 }
 
 func relayProxyBaseURL(baseURL, protocol string) string {
@@ -201,7 +208,7 @@ func relayTargetURL(baseURL, path string) string {
 func copyProxyHeaders(source http.Header, target http.Header) {
 	for name, values := range source {
 		lower := strings.ToLower(name)
-		if lower == "authorization" || lower == "host" || lower == "connection" || lower == "content-length" || lower == "user-agent" {
+		if lower == "authorization" || lower == "host" || lower == "connection" || lower == "content-length" || lower == "user-agent" || lower == "accept-encoding" {
 			continue
 		}
 		target.Del(name)
@@ -217,6 +224,45 @@ func setRelayProxyUserAgent(source http.Header, target http.Header) {
 		userAgent = "Codex"
 	}
 	target.Set("user-agent", userAgent)
+}
+
+func flushRelayResponseHeaders(w http.ResponseWriter) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+	flusher.Flush()
+}
+
+func copyRelayResponseBody(w http.ResponseWriter, body io.Reader) (int64, error) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return io.Copy(w, body)
+	}
+	buffer := make([]byte, 32*1024)
+	var written int64
+	for {
+		read, readErr := body.Read(buffer)
+		if read > 0 {
+			copied, writeErr := w.Write(buffer[:read])
+			if copied > 0 {
+				written += int64(copied)
+				flusher.Flush()
+			}
+			if writeErr != nil {
+				return written, writeErr
+			}
+			if copied != read {
+				return written, io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return written, nil
+			}
+			return written, readErr
+		}
+	}
 }
 
 func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
