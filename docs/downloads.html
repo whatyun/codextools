@@ -130,6 +130,13 @@
         background: var(--card);
         padding: 20px 22px;
       }
+      .release-note {
+        margin-top: 20px;
+        border: 1px solid rgba(15,118,110,.25);
+        border-radius: 22px;
+        background: rgba(240,253,250,.86);
+        padding: 20px 22px;
+      }
       ul { margin: 12px 0 0; color: var(--muted); line-height: 1.7; }
       [data-lang] { display: none; }
       [data-lang].active { display: block; }
@@ -163,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.19-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.19-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.19-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.19-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.19-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.19-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.19-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.19-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.20-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -186,24 +193,41 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.19-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.19-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.19-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.19-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.19-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.19-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.19-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.19-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.20-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
       </div>
+
+      <section class="release-note">
+        <div data-lang="en" class="active">
+          <strong>Version 1.1.20</strong>
+          <ul>
+            <li>Each supplier now keeps its own relay/config/auth snapshot, making provider switching more reliable.</li>
+            <li>The manager UI has been cleaned up around relay state, supplier details, and saved snapshot feedback.</li>
+          </ul>
+        </div>
+        <div data-lang="zh">
+          <strong>版本 1.1.20</strong>
+          <ul>
+            <li>每个供应商现在会独立保存 relay/config/auth 快照，切换供应商时更稳定。</li>
+            <li>清理了管理器里 relay 状态、供应商详情和快照保存反馈相关的界面。</li>
+          </ul>
+        </div>
+      </section>
 
       <section class="note">
         <div data-lang="en" class="active">
