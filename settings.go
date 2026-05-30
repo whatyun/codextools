@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func repoRoot() (string, error) {
@@ -165,7 +166,9 @@ func normalizeSettings(settings backendSettings) backendSettings {
 				settings.RelayProfiles[index].OfficialMixAPIKey = false
 			}
 		}
-		if strings.TrimSpace(settings.RelayProfiles[index].OfficialAuthContents) == "" {
+		if strings.TrimSpace(settings.RelayProfiles[index].AuthContents) != "" {
+			settings.RelayProfiles[index] = syncOfficialAuthMetadataFromAuth(settings.RelayProfiles[index])
+		} else if strings.TrimSpace(settings.RelayProfiles[index].OfficialAuthContents) == "" {
 			settings.RelayProfiles[index].OfficialAccountLabel = ""
 			settings.RelayProfiles[index].OfficialAuthUpdatedAt = ""
 		} else if settings.RelayProfiles[index].OfficialAccountLabel == "" {
@@ -186,25 +189,39 @@ func normalizeSettings(settings backendSettings) backendSettings {
 }
 
 func migrateOfficialAuthBinding(settings backendSettings) (backendSettings, bool) {
-	for _, profile := range settings.RelayProfiles {
-		if strings.TrimSpace(profile.OfficialAuthContents) != "" {
-			return settings, false
-		}
-	}
-	snapshot, ok := currentOfficialAuthSnapshot(codexHomeDir())
-	if !ok {
-		return settings, false
-	}
 	activeID := activeRelayProfile(settings).ID
+	currentConfig := readFile(filepath.Join(codexHomeDir(), "config.toml"))
+	currentAuth := readFile(filepath.Join(codexHomeDir(), "auth.json"))
+	changed := false
 	for index := range settings.RelayProfiles {
-		if settings.RelayProfiles[index].ID == activeID {
-			settings.RelayProfiles[index].OfficialAuthContents = snapshot.Contents
-			settings.RelayProfiles[index].OfficialAccountLabel = snapshot.AccountLabel
-			settings.RelayProfiles[index].OfficialAuthUpdatedAt = snapshot.UpdatedAt
-			return settings, true
+		profile := settings.RelayProfiles[index]
+		if profile.ID == activeID {
+			if strings.TrimSpace(profile.ConfigContents) == "" && strings.TrimSpace(currentConfig) != "" {
+				settings.RelayProfiles[index].ConfigContents = currentConfig
+				changed = true
+			}
+			if strings.TrimSpace(profile.AuthContents) == "" && strings.TrimSpace(profile.OfficialAuthContents) == "" && strings.TrimSpace(currentAuth) != "" {
+				settings.RelayProfiles[index].AuthContents = currentAuth
+				settings.RelayProfiles[index].OfficialAuthUpdatedAt = timeNowRFC3339()
+				changed = true
+			}
+		}
+		if strings.TrimSpace(settings.RelayProfiles[index].AuthContents) != "" {
+			normalized := syncOfficialAuthMetadataFromAuth(settings.RelayProfiles[index])
+			if normalized.AuthContents != settings.RelayProfiles[index].AuthContents ||
+				normalized.OfficialAuthContents != settings.RelayProfiles[index].OfficialAuthContents ||
+				normalized.OfficialAccountLabel != settings.RelayProfiles[index].OfficialAccountLabel ||
+				normalized.OfficialAuthUpdatedAt != settings.RelayProfiles[index].OfficialAuthUpdatedAt {
+				settings.RelayProfiles[index] = normalized
+				changed = true
+			}
 		}
 	}
-	return settings, false
+	return settings, changed
+}
+
+func timeNowRFC3339() string {
+	return time.Now().Format(time.RFC3339)
 }
 
 func normalizeLanguage(language string) string {

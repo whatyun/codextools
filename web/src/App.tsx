@@ -33,7 +33,6 @@ import {
   LayoutDashboard,
   Link2,
   MessageCircle,
-  FileCode2,
   Moon,
   Power,
   PowerOff,
@@ -406,7 +405,7 @@ function syncMarketInstalledState(current: ScriptMarketResult | null, userScript
   };
 }
 
-type Route = "overview" | "installGuide" | "relay" | "enhance" | "userScripts" | "providerSync" | "maintenance" | "about" | "settings" | "logs" | "diagnostics";
+type Route = "overview" | "installGuide" | "relay" | "enhance" | "providerSync" | "maintenance" | "settings" | "logs" | "diagnostics";
 type Theme = "dark" | "light";
 
 const routes: Array<{ id: Route; label: string; helper: string; group: "main" | "support"; icon: LucideIcon }> = [
@@ -414,13 +413,11 @@ const routes: Array<{ id: Route; label: string; helper: string; group: "main" | 
   { id: "installGuide", label: "新手引导", helper: "安装和配置", group: "main", icon: Sparkles },
   { id: "relay", label: "连接服务", helper: "账号和 API", group: "main", icon: KeyRound },
   { id: "enhance", label: "界面功能", helper: "删除、导出、脚本", group: "main", icon: Hammer },
-  { id: "userScripts", label: "脚本中心", helper: "一键安装", group: "main", icon: FileCode2 },
   { id: "maintenance", label: "修复工具", helper: "入口和路径", group: "main", icon: Wrench },
   { id: "providerSync", label: "历史修复", helper: "旧对话可见", group: "support", icon: Link2 },
   { id: "settings", label: "高级设置", helper: "启动参数", group: "support", icon: Settings },
   { id: "logs", label: "运行日志", helper: "排查问题", group: "support", icon: ScrollText },
   { id: "diagnostics", label: "诊断报告", helper: "复制给开发者", group: "support", icon: Activity },
-  { id: "about", label: "关于", helper: "版本和反馈", group: "support", icon: Info },
 ];
 
 const defaultSettings: BackendSettings = {
@@ -694,15 +691,7 @@ export function App() {
       await refreshCcsProviders(true);
     }
     if (next === "settings") await refreshSettings(true);
-    if (next === "userScripts") {
-      await refreshSettings(true);
-      await refreshScriptMarket(true);
-    }
     if (next === "providerSync") await refreshSettings(true);
-    if (next === "about") {
-      await refreshOverview(true);
-      if (!updateInfo) await checkUpdate(true);
-    }
     if (next === "logs") await refreshLogs(true);
     if (next === "diagnostics") await refreshDiagnostics(true);
     if (next === "maintenance") {
@@ -952,6 +941,18 @@ export function App() {
     return result;
   };
 
+  const importCurrentRelayFiles = async (profileId: string) => {
+    const result = await run(() => call<SettingsResult>("import_current_relay_files", { request: { profileId } }));
+    if (result) {
+      setSettings(result);
+      setSettingsForm(normalizeSettings(result.settings));
+      showNotice("供应商快照", result.message, result.status);
+      await refreshRelay(true);
+      await refreshRelayFiles(true);
+    }
+    return result;
+  };
+
   const bindOfficialAuth = async (profileId: string) => {
     const result = await run(() => call<SettingsResult>("bind_official_auth", { request: { profileId } }));
     if (result) {
@@ -959,6 +960,17 @@ export function App() {
       setSettingsForm(normalizeSettings(result.settings));
       showNotice("官方账号绑定", result.message, result.status);
       await refreshRelay(true);
+    }
+    return result;
+  };
+
+  const activateOfficialAuth = async (profileId: string) => {
+    const result = await run(() => call<RelayResult>("activate_official_auth", { request: { profileId } }));
+    if (result) {
+      setRelay(result);
+      showNotice("绑定账号", result.message, result.status);
+      await refreshRelayFiles(true);
+      await refreshSettings(true);
     }
     return result;
   };
@@ -980,6 +992,7 @@ export function App() {
       setRelay(result);
       showNotice("清除当前官方登录", result.message, result.status);
       await refreshRelayFiles(true);
+      await refreshSettings(true);
     }
     return result;
   };
@@ -1005,13 +1018,13 @@ export function App() {
 
   const switchRelayProfile = async (next: BackendSettings) => {
     const nextWithSnapshot = await snapshotActiveRelayFilesBeforeSwitch(prepareRelaySettingsForSwitch(next));
-    if (!nextWithSnapshot) return;
+    if (!nextWithSnapshot) return false;
 
     const selectedBeforeSave = activeRelayProfile(nextWithSnapshot);
     const validationError = relayProfileSwitchValidation(selectedBeforeSave);
     if (validationError) {
       showNotice("供应商配置可能不正确", validationError, "failed");
-      return;
+      return false;
     }
 
     let selectedSettings = nextWithSnapshot;
@@ -1022,22 +1035,22 @@ export function App() {
       setSettingsForm(selectedSettings);
       if (!isSuccessStatus(settingsResult.status)) {
         showNotice("供应商切换", settingsResult.message, settingsResult.status);
-        return;
+        return false;
       }
     } else {
-      return;
+      return false;
     }
 
     const selectedAfterSave = activeRelayProfile(selectedSettings);
     const command = relayProfileSwitchCommand(selectedAfterSave);
     const result = await run(() => call<RelayResult>(command));
-    if (!result) return;
+    if (!result) return false;
 
     setRelay(result);
     await refreshRelayFiles(true);
     if (!isSuccessStatus(result.status)) {
       showNotice("供应商切换", relayProfileReadinessText(selectedAfterSave, result), result.status);
-      return;
+      return false;
     }
 
     const currentSelected = activeRelayProfile(selectedSettings);
@@ -1046,6 +1059,7 @@ export function App() {
     await refreshInstallGuideStatus(true);
     await refreshRelay(true);
     if (modeResult) showNotice("供应商切换", relayProfileModeSwitchedText(currentSelected), modeResult.status);
+    return true;
   };
 
   const snapshotActiveRelayFilesBeforeSwitch = async (next: BackendSettings): Promise<BackendSettings | null> => {
@@ -1059,12 +1073,7 @@ export function App() {
       return null;
     }
 
-    const currentSnapshot =
-      current.relayMode === "pureApi"
-        ? { configContents: files.configContents, authContents: "" }
-        : current.relayMode === "mixedApi"
-          ? { configContents: files.configContents, authContents: "" }
-          : { configContents: "", authContents: "" };
+    const currentSnapshot = { configContents: files.configContents, authContents: files.authContents };
 
     return syncLegacyRelayFields({
       ...next,
@@ -1206,6 +1215,7 @@ export function App() {
         await saveLaunchMode(launchMode);
       },
       refreshRelay,
+      refreshSettings,
       refreshInstallGuideStatus,
       refreshRelayFiles,
       refreshCcsProviders,
@@ -1219,7 +1229,9 @@ export function App() {
       applyPureApiInjection,
       clearRelayInjection,
       saveRelayFile,
+      importCurrentRelayFiles,
       bindOfficialAuth,
+      activateOfficialAuth,
       unbindOfficialAuth,
       clearCurrentOfficialAuth,
       showNotice,
@@ -1297,10 +1309,6 @@ export function App() {
                 ))}
               </select>
             </label>
-            <Button onClick={() => void actions.launch()} title="启动 Codex++">
-              <Rocket className="h-4 w-4" />
-              启动
-            </Button>
             <Button
               onClick={actions.toggleTheme}
               size="icon"
@@ -1352,7 +1360,6 @@ export function App() {
           {route === "enhance" ? (
             <EnhanceScreen form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
           ) : null}
-          {route === "userScripts" ? <UserScriptsScreen settings={settings} market={scriptMarket} actions={actions} /> : null}
           {route === "providerSync" ? (
             <ProviderSyncScreen settings={settings} form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
           ) : null}
@@ -1368,7 +1375,6 @@ export function App() {
               actions={actions}
             />
           ) : null}
-          {route === "about" ? <AboutScreen overview={overview} updateInfo={updateInfo} actions={actions} /> : null}
           {route === "settings" ? (
             <SettingsScreen settings={settings} theme={theme} form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
           ) : null}
@@ -1410,6 +1416,7 @@ type Actions = {
   repairCodexGoals: () => Promise<void>;
   setLaunchMode: (launchMode: LaunchMode) => Promise<void>;
   refreshRelay: () => Promise<RelayResult | null>;
+  refreshSettings: () => Promise<SettingsResult | null>;
   refreshInstallGuideStatus: () => Promise<InstallGuideStatusResult | null>;
   refreshRelayFiles: () => Promise<RelayFilesResult | null>;
   refreshCcsProviders: () => Promise<CcsProvidersResult | null>;
@@ -1425,12 +1432,14 @@ type Actions = {
   applyPureApiInjection: () => Promise<boolean>;
   clearRelayInjection: () => Promise<boolean>;
   saveRelayFile: (kind: "config" | "auth", contents: string, silent?: boolean) => Promise<RelayFilesResult | null>;
+  importCurrentRelayFiles: (profileId: string) => Promise<SettingsResult | null>;
   bindOfficialAuth: (profileId: string) => Promise<SettingsResult | null>;
+  activateOfficialAuth: (profileId: string) => Promise<RelayResult | null>;
   unbindOfficialAuth: (profileId: string) => Promise<SettingsResult | null>;
   clearCurrentOfficialAuth: () => Promise<RelayResult | null>;
   showNotice: (title: string, message: string, status?: Status) => void;
   testRelayProfile: (profile: RelayProfile) => Promise<void>;
-  switchRelayProfile: (settings: BackendSettings) => Promise<void>;
+  switchRelayProfile: (settings: BackendSettings) => Promise<boolean>;
   switchOfficialMode: () => Promise<void>;
   switchPureApiMode: () => Promise<void>;
   refreshLogs: () => Promise<void>;
@@ -1959,7 +1968,7 @@ function GuideCodexStep({
       <Toolbar>
         {isWindows ? (
           <Button onClick={onChoosePath} variant="secondary">
-            <FileCode2 className="h-4 w-4" />
+            <ExternalLink className="h-4 w-4" />
             手动选择 Codex.exe
           </Button>
         ) : null}
@@ -2314,11 +2323,10 @@ function RelayScreen({
   if (detailProfile) {
     return (
       <Panel fill>
-        <CardHead title="供应商详情" detail="上面修改参数，下面实时预览这个供应商自己的 config.toml；auth.json 保留当前登录" />
+        <CardHead title="供应商详情" detail="编辑这个供应商自己的 config.toml 和 auth.json 快照；切换或保存当前项时再写回当前环境" />
         <CardContent>
           <RelayProfileDetail
             profile={detailProfile}
-            relayFiles={!isNewProfile && detailProfile.id === normalized.activeRelayId ? relayFiles : null}
             form={normalized}
             isNew={isNewProfile}
             onBack={() => {
@@ -2347,7 +2355,8 @@ function RelayScreen({
             <Metric label="官方账号绑定" value={officialBindingStatusLabel(active)} />
             <Metric label="绑定账号" value={officialBindingLabel(active)} />
             <Metric label="当前官方登录" value={relayCurrentOfficialLabel(relay)} />
-            <Metric label="已绑定官方号" value={relayBoundOfficialLabel(relay)} />
+            <Metric label="当前供应商已保存账号" value={relayBoundOfficialLabel(relay)} />
+            <Metric label="当前供应商 auth 快照" value={active.authContents.trim() ? "已保存" : "未保存"} />
             <Metric label="当前供应商" value={active.name || "-"} />
             <Metric label="接入模式" value={relayModeLabel(active.relayMode)} />
             <Metric label="上游协议" value={relayProtocolLabel(active.protocol)} />
@@ -2382,7 +2391,7 @@ function RelayScreen({
               type="button"
             >
               <strong>中转模式</strong>
-              <span>写入 config.toml 使用中转，auth.json 保留当前登录。</span>
+              <span>写入这个供应商自己的 config.toml/auth.json 快照；缺少 auth 快照时兼容保留当前登录。</span>
             </button>
           </div>
           {relay?.backupPath ? <div className="path-line compact-path">备份：{relay.backupPath}</div> : null}
@@ -2436,7 +2445,7 @@ function RelayScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="配置文件" detail="进入某个供应商详情后可查看和保存 config.toml；auth.json 只保留当前登录状态" />
+        <CardHead title="配置文件" detail="当前环境仍只有一套 ~/.codex 文件；供应商详情里编辑的是各自独立快照" />
         <CardContent>
           <div className="path-line loose">Codex++ 设置：{settings?.settings_path ?? "未加载设置文件。"}</div>
           <div className="path-line loose">Codex config.toml：{relayFiles?.configPath ?? "-"}</div>
@@ -3194,7 +3203,6 @@ function MarketScriptCard({ script, actions }: { script: ScriptMarketItem; actio
 
 function RelayProfileDetail({
   profile,
-  relayFiles,
   form,
   isNew = false,
   onBack,
@@ -3203,7 +3211,6 @@ function RelayProfileDetail({
   actions,
 }: {
   profile: RelayProfile;
-  relayFiles: RelayFilesResult | null;
   form: BackendSettings;
   isNew?: boolean;
   onBack: () => void;
@@ -3214,17 +3221,7 @@ function RelayProfileDetail({
   const [draft, setDraft] = useState<RelayProfile>(profile);
   const isActive = !isNew && profile.id === form.activeRelayId;
   useEffect(() => {
-    if (!isActive || !relayFiles) {
-      setDraft(profile);
-      return;
-    }
-    const fileBackfill =
-      profile.relayMode === "pureApi"
-        ? { configContents: relayFiles.configContents, authContents: "" }
-        : profile.relayMode === "mixedApi"
-          ? { configContents: relayFiles.configContents, authContents: "" }
-          : { configContents: "", authContents: "" };
-    setDraft({ ...profile, ...fileBackfill });
+    setDraft(profile);
   }, [
     profile.id,
     profile.name,
@@ -3234,10 +3231,8 @@ function RelayProfileDetail({
     profile.officialAuthContents,
     profile.officialAccountLabel,
     profile.officialAuthUpdatedAt,
-    isActive,
-    isNew,
-    relayFiles?.configContents,
-    relayFiles?.authContents,
+    profile.configContents,
+    profile.authContents,
   ]);
   const saveDraftSettings = async () => {
     const next = isNew ? addRelayProfile(form, draft) : updateRelayProfile(form, profile.id, draft);
@@ -3267,28 +3262,17 @@ function RelayProfileDetail({
   };
   const saveDraft = async () => {
     const next = isNew ? addRelayProfile(form, draft) : updateRelayProfile(form, profile.id, draft);
-    onFormChange(next);
-    let savedActiveFile = false;
-    let saveFailed = false;
+    const settingsResult = await actions.saveSettingsValue(next, true);
+    if (!settingsResult) return;
+    const savedSettings = normalizeSettings(settingsResult.settings);
+    onFormChange(savedSettings);
+    syncDraftFromSettings(savedSettings);
     if (isActive) {
-      const files = withGeneratedRelayFiles(draft);
-      if (files.configContents.trim()) {
-        const result = await actions.saveRelayFile("config", files.configContents, true);
-        savedActiveFile = savedActiveFile || !!result;
-        saveFailed = saveFailed || (!!result && !isSuccessStatus(result.status));
-      }
-      if (files.authContents.trim()) {
-        const result = await actions.saveRelayFile("auth", files.authContents, true);
-        savedActiveFile = savedActiveFile || !!result;
-        saveFailed = saveFailed || (!!result && !isSuccessStatus(result.status));
-      }
-    }
-    if (savedActiveFile && !saveFailed) {
-      actions.showNotice("供应商保存", "保存成功，当前供应商配置已写入真实 config.toml。", "ok");
-    } else if (saveFailed) {
-      actions.showNotice("供应商保存", "保存失败，请查看 config.toml 的具体错误。", "failed");
-    } else if (!isActive) {
-      actions.showNotice("供应商保存", "保存成功，切换到此供应商时会写入 config.toml。", "ok");
+      const applied = await actions.switchRelayProfile(savedSettings);
+      if (!applied) return;
+      actions.showNotice("供应商保存", "保存成功，当前供应商快照已写回 ~/.codex/config.toml 和 auth.json。", "ok");
+    } else {
+      actions.showNotice("供应商保存", "保存成功，已更新这个供应商自己的 config/auth 快照。", "ok");
     }
     onSaved?.();
   };
@@ -3318,10 +3302,23 @@ function RelayProfileDetail({
         profile={draft}
         isNew={isNew}
         onBind={bindCurrentOfficialAuth}
+        onActivate={() => void actions.activateOfficialAuth(profile.id)}
         onClearCurrent={() => void actions.clearCurrentOfficialAuth()}
         onUnbind={unbindCurrentOfficialAuth}
+        onRefresh={() => {
+          void actions.refreshRelay();
+          void actions.refreshSettings();
+          void actions.refreshRelayFiles();
+        }}
       />
-      <RelayFileEditors profile={draft} isActive={isActive} onProfileChange={setDraft} />
+      <RelayFileEditors
+        profile={draft}
+        isActive={isActive}
+        onImportCurrent={() => void actions.importCurrentRelayFiles(profile.id).then((result) => {
+          if (result) syncDraftFromSettings(normalizeSettings(result.settings));
+        })}
+        onProfileChange={setDraft}
+      />
     </div>
   );
 }
@@ -3519,14 +3516,18 @@ function OfficialAuthBindingPanel({
   profile,
   isNew,
   onBind,
+  onActivate,
   onClearCurrent,
   onUnbind,
+  onRefresh,
 }: {
   profile: RelayProfile;
   isNew: boolean;
   onBind: () => void;
+  onActivate: () => void;
   onClearCurrent: () => void;
   onUnbind: () => void;
+  onRefresh: () => void;
 }) {
   const bound = profile.officialAuthContents.trim().length > 0;
   return (
@@ -3544,12 +3545,20 @@ function OfficialAuthBindingPanel({
       </div>
       <div className="hint-line relay-protocol-hint">
         <ShieldCheck className="h-4 w-4" />
-        <span>更换账号时：先清除当前官方登录，在 Codex/ChatGPT 登录新号，再回到这里绑定当前登录。</span>
+        <span>可先把某个号保存到供应商，再通过“绑定账号”直接写回当前登录；刷新会重新读取当前登录状态。</span>
       </div>
       <Toolbar>
         <Button disabled={isNew} onClick={onBind} variant="secondary">
           <KeyRound className="h-4 w-4" />
           绑定当前登录
+        </Button>
+        <Button disabled={isNew || !bound} onClick={onActivate} variant="secondary">
+          <KeyRound className="h-4 w-4" />
+          绑定账号
+        </Button>
+        <Button onClick={onRefresh} variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新
         </Button>
         <Button onClick={onClearCurrent} variant="outline">
           <PowerOff className="h-4 w-4" />
@@ -3557,7 +3566,7 @@ function OfficialAuthBindingPanel({
         </Button>
         <Button disabled={isNew || !bound} onClick={onUnbind} variant="ghost">
           <Trash2 className="h-4 w-4" />
-          解除绑定
+          清除已保存绑定
         </Button>
       </Toolbar>
     </div>
@@ -3567,10 +3576,12 @@ function OfficialAuthBindingPanel({
 function RelayFileEditors({
   profile,
   isActive,
+  onImportCurrent,
   onProfileChange,
 }: {
   profile: RelayProfile;
   isActive: boolean;
+  onImportCurrent: () => void;
   onProfileChange: (value: RelayProfile) => void;
 }) {
   return (
@@ -3579,8 +3590,14 @@ function RelayFileEditors({
         <div className="relay-file-head">
           <div>
             <strong>config.toml</strong>
-            <span>{isActive ? "当前使用中：打开时从 ~/.codex/config.toml 回填，保存时写回真实文件" : "切换到此供应商时完整写入 ~/.codex/config.toml"}</span>
+            <span>{isActive ? "当前使用中：保存后会立刻写回 ~/.codex/config.toml" : "切换到此供应商时会用这份快照覆盖 ~/.codex/config.toml"}</span>
           </div>
+          <Toolbar>
+            <Button onClick={onImportCurrent} size="sm" variant="outline">
+              <Download className="h-4 w-4" />
+              从当前环境导入
+            </Button>
+          </Toolbar>
         </div>
         <Textarea
           className="relay-file-textarea"
@@ -3595,16 +3612,15 @@ function RelayFileEditors({
             <strong>auth.json</strong>
             <span>
               {profile.relayMode === "pureApi"
-                ? isActive
-                  ? "当前中转模式会使用 config.toml 内的密钥；auth.json 保持现有登录状态"
-                  : "中转模式切换时不会覆盖 ~/.codex/auth.json"
-                : "官方账号快照已隐藏，auth.json 不在这里直接编辑。"}
+                ? profile.authContents.trim()
+                  ? "这份供应商 auth 快照会在切换时一并恢复；为空时兼容保留当前登录。"
+                  : "当前供应商还没有保存 auth 快照；切换时会兼容保留当前登录。"
+                : "这份供应商 auth 快照会在切换时写回 ~/.codex/auth.json。"}
             </span>
           </div>
         </div>
         <Textarea
           className="relay-file-textarea"
-          disabled
           value={profile.authContents}
           onChange={(event) => onProfileChange({ ...profile, authContents: event.currentTarget.value })}
           spellCheck={false}
@@ -3792,10 +3808,8 @@ function routeSubtitle(route: Route) {
     installGuide: "按新手流程完成安装、导入和模式配置",
     relay: "选择官方登录或 API 服务，不必手动找配置文件",
     enhance: "打开会话删除、导出、项目移动和脚本能力",
-    userScripts: "安装别人整理好的实用脚本，也能管理本地脚本",
     providerSync: "切换模式后，让旧对话重新出现在列表里",
     maintenance: "找不到入口、路径不对或启动异常时使用",
-    about: "版本信息与项目链接",
     settings: "主题、命令包装器和启动参数，普通使用可忽略",
     logs: "查看最近运行记录",
     diagnostics: "生成可复制的问题报告",
@@ -4032,11 +4046,11 @@ function relayImageModeLabel(profile: RelayProfile): string {
 }
 
 function officialBindingStatusLabel(profile: RelayProfile): string {
-  return profile.officialAuthContents.trim() ? "官方号已绑定" : "官方号未绑定";
+  return (profile.authContents.trim() || profile.officialAuthContents.trim()) ? "官方号已绑定" : "官方号未绑定";
 }
 
 function officialBindingLabel(profile: RelayProfile): string {
-  return profile.officialAccountLabel || (profile.officialAuthContents.trim() ? "已绑定" : "-");
+  return profile.officialAccountLabel || ((profile.authContents.trim() || profile.officialAuthContents.trim()) ? "已绑定" : "-");
 }
 
 function relayOfficialAuthenticated(relay: RelayResult | null): boolean {
@@ -4084,14 +4098,15 @@ function relayProfileModeHelp(profile: RelayProfile): string {
 }
 
 function relayProfileReadinessText(profile: RelayProfile, relay: RelayResult | null): string {
+  const hasAuthSnapshot = profile.authContents.trim() || profile.officialAuthContents.trim();
   if (profile.relayMode === "official") {
-    return profile.officialAuthContents.trim()
+    return hasAuthSnapshot
       ? `此供应商已绑定官方账号：${officialBindingLabel(profile)}。`
       : "此供应商还没有绑定官方账号；请先登录目标 ChatGPT 账号并绑定当前登录。";
   }
   if (profile.relayMode === "mixedApi") {
     const hasApiFields = profile.baseUrl.trim() && profile.apiKey.trim();
-    const hasOfficialBinding = profile.officialAuthContents.trim();
+    const hasOfficialBinding = hasAuthSnapshot;
     if (!hasOfficialBinding && !hasApiFields) return "此供应商未绑定官方账号，也未配置混入 API 的 Base URL / Key。";
     if (!hasOfficialBinding) return "此供应商还没有绑定官方账号；官方混合 API 需要先绑定。";
     if (!hasApiFields) return "当前还没有填写混入 API 的 Base URL / Key。";
@@ -4099,14 +4114,15 @@ function relayProfileReadinessText(profile: RelayProfile, relay: RelayResult | n
   }
   const hasConfig = profile.configContents.trim();
   if (!hasConfig) return "当前中转还没有完整 config.toml。";
-  return "中转 API 就绪：会写入此供应商的 config.toml，并保留现有 auth.json。";
+  if (!hasAuthSnapshot) return "中转 API 就绪：会写入此供应商的 config.toml；因为未保存 auth 快照，切换时会兼容保留当前登录。";
+  return "中转 API 就绪：会按此供应商自己的 config.toml 和 auth.json 快照恢复当前环境。";
 }
 
 function relayProfileGuideReady(profile: RelayProfile, connection?: InstallGuideConnectionStatus, relay?: RelayResult | null): boolean {
   if (connection && connection.mode === profile.relayMode && connection.profileId === profile.id) {
     return connection.ready;
   }
-  const officialReady = profile.officialAuthContents.trim().length > 0 || relayOfficialAuthenticated(relay ?? null);
+  const officialReady = profile.authContents.trim().length > 0 || profile.officialAuthContents.trim().length > 0 || relayOfficialAuthenticated(relay ?? null);
   const apiReady = profile.baseUrl.trim().length > 0 && profile.apiKey.trim().length > 0 &&
     (!profile.imageGenerationEnabled || !profile.imageGenerationUseSeparateApi || (!!profile.imageGenerationBaseUrl.trim() && !!profile.imageGenerationApiKey.trim()));
   if (profile.relayMode === "official") return officialReady;
@@ -4147,7 +4163,7 @@ function prepareRelaySettingsForSwitch(settings: BackendSettings): BackendSettin
   return syncLegacyRelayFields({
     ...settings,
     relayProfiles: settings.relayProfiles.map((profile) => (
-      profile.id === activeId && !profile.configContents.trim() ? withGeneratedRelayFiles(profile) : profile
+      profile.id === activeId ? withGeneratedRelayFiles(profile) : profile
     )),
   });
 }
@@ -4169,8 +4185,8 @@ function withGeneratedRelayFiles(profile: RelayProfile): RelayProfile {
     return {
       ...profile,
       officialMixApiKey: false,
-      configContents: "",
-      authContents: "",
+      configContents: profile.configContents,
+      authContents: profile.authContents,
     };
   }
   if (profile.relayMode === "mixedApi") {
@@ -4178,14 +4194,14 @@ function withGeneratedRelayFiles(profile: RelayProfile): RelayProfile {
       ...profile,
       officialMixApiKey: true,
       configContents: buildRelayConfigToml(profile),
-      authContents: "",
+      authContents: profile.authContents,
     };
   }
   return {
     ...profile,
     officialMixApiKey: false,
     configContents: buildRelayConfigToml(profile),
-    authContents: "",
+    authContents: profile.authContents,
   };
 }
 
@@ -4233,13 +4249,14 @@ function buildRelayConfigToml(
 }
 
 function relayProfileSwitchValidation(profile: RelayProfile): string | null {
+  const hasAuthSnapshot = profile.authContents.trim() || profile.officialAuthContents.trim();
   if (profile.relayMode === "official") {
-    if (!profile.officialAuthContents.trim()) {
+    if (!hasAuthSnapshot) {
       return `供应商「${profile.name || profile.id}」还没有绑定官方账号，已停止切换。`;
     }
     return null;
   }
-  if (profile.relayMode === "mixedApi" && !profile.officialAuthContents.trim()) {
+  if (profile.relayMode === "mixedApi" && !hasAuthSnapshot) {
     return `供应商「${profile.name || profile.id}」还没有绑定官方账号，已停止切换。`;
   }
   if (!profile.baseUrl.trim()) {
@@ -4294,7 +4311,8 @@ function updateRelayProfile(settings: BackendSettings, id: string, patch: Partia
     relayProfiles: settings.relayProfiles.map((profile) => {
       if (profile.id !== id) return profile;
       const updated = { ...profile, ...patch };
-      return shouldRegenerateFiles ? withGeneratedRelayFiles(updated) : updated;
+      const nextProfile = shouldRegenerateFiles ? withGeneratedRelayFiles(updated) : updated;
+      return deriveOfficialAuthFields(nextProfile);
     }),
   });
 }
@@ -4320,11 +4338,11 @@ function createRelayProfile(settings: BackendSettings): RelayProfile {
     configContents: "",
     authContents: "",
   };
-  return withGeneratedRelayFiles(next);
+  return deriveOfficialAuthFields(withGeneratedRelayFiles(next));
 }
 
 function addRelayProfile(settings: BackendSettings, profile: RelayProfile): BackendSettings {
-  const nextWithFiles = profile.configContents.trim() || profile.authContents.trim() ? profile : withGeneratedRelayFiles(profile);
+  const nextWithFiles = profile.configContents.trim() || profile.authContents.trim() ? deriveOfficialAuthFields(profile) : deriveOfficialAuthFields(withGeneratedRelayFiles(profile));
   const activeId = settings.relayProfiles.some((item) => item.id === settings.activeRelayId)
     ? settings.activeRelayId
     : activeRelayProfile(settings).id;
@@ -4348,7 +4366,7 @@ function duplicateRelayProfile(settings: BackendSettings, id: string): BackendSe
   relayProfiles.splice(sourceIndex >= 0 ? sourceIndex + 1 : relayProfiles.length, 0, next);
   return syncLegacyRelayFields({
     ...settings,
-    relayProfiles,
+    relayProfiles: relayProfiles.map((profile) => deriveOfficialAuthFields(profile)),
   });
 }
 
@@ -4373,6 +4391,58 @@ function removeRelayProfile(settings: BackendSettings, id: string): BackendSetti
     relayProfiles: profiles.length ? profiles : defaultSettings.relayProfiles,
     activeRelayId: settings.activeRelayId === id ? profiles[0]?.id || "default" : settings.activeRelayId,
   });
+}
+
+function deriveOfficialAuthFields(profile: RelayProfile): RelayProfile {
+  const contents = profile.authContents.trim() || profile.officialAuthContents.trim();
+  if (!contents) {
+    return {
+      ...profile,
+      authContents: "",
+      officialAuthContents: "",
+      officialAccountLabel: "",
+      officialAuthUpdatedAt: "",
+    };
+  }
+  const label = decodeOfficialAccountLabel(contents);
+  return {
+    ...profile,
+    authContents: contents,
+    officialAuthContents: label ? contents : "",
+    officialAccountLabel: label || "",
+    officialAuthUpdatedAt: label ? profile.officialAuthUpdatedAt || new Date().toISOString() : "",
+  };
+}
+
+function decodeOfficialAccountLabel(contents: string): string {
+  try {
+    const parsed = JSON.parse(contents) as Record<string, unknown>;
+    if (String(parsed.auth_mode || "").toLowerCase() !== "chatgpt") return "";
+    const tokens = parsed.tokens as Record<string, unknown> | undefined;
+    if (!tokens) return "";
+    for (const key of ["id_token", "access_token"] as const) {
+      const raw = String(tokens[key] || "");
+      const label = decodeJwtEmail(raw);
+      if (label) return label;
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function decodeJwtEmail(token: string): string {
+  const parts = token.split(".");
+  if (parts.length < 2) return "";
+  try {
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
+    const direct = String(payload.email || "").trim();
+    if (direct) return direct;
+    const profile = payload["https://api.openai.com/profile"] as Record<string, unknown> | undefined;
+    return String(profile?.email || payload.name || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 function numberOrDefault(value: string, fallback: number) {
@@ -4401,8 +4471,5 @@ function loadInitialTheme(): Theme {
 
 function loadInitialRoute(): Route {
   if (typeof window === "undefined") return "overview";
-  if (window.location.hash === "#about") {
-    return "about";
-  }
   return "overview";
 }

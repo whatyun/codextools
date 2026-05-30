@@ -96,10 +96,11 @@ func boundOfficialAuthStatus(settings backendSettings) boundOfficialAuthSummary 
 }
 
 func relayProfileOfficialAuthStatus(profile relayProfile) (boundOfficialAuthSummary, bool) {
-	if strings.TrimSpace(profile.OfficialAuthContents) == "" {
+	contents := runtimeAuthContents(profile)
+	if contents == "" {
 		return boundOfficialAuthSummary{}, false
 	}
-	status := chatGPTAuthStatusFromContents(profile.OfficialAuthContents, "settings:"+profile.ID)
+	status := chatGPTAuthStatusFromContents(contents, "settings:"+profile.ID)
 	if !status.Authenticated {
 		return boundOfficialAuthSummary{}, false
 	}
@@ -229,6 +230,100 @@ func relayFilesPayload(home string) map[string]any {
 	return map[string]any{"configPath": configPath, "authPath": authPath, "configContents": string(config), "authContents": string(auth)}
 }
 
+func currentRelayFileSnapshot(home string) relayProfile {
+	payload := relayFilesPayload(home)
+	return relayProfile{
+		ConfigContents: stringFromAny(payload["configContents"]),
+		AuthContents:   stringFromAny(payload["authContents"]),
+	}
+}
+
+func canonicalAuthContents(profile relayProfile) string {
+	return strings.TrimSpace(profile.AuthContents)
+}
+
+func runtimeAuthContents(profile relayProfile) string {
+	if contents := strings.TrimSpace(profile.AuthContents); contents != "" {
+		return contents
+	}
+	return strings.TrimSpace(profile.OfficialAuthContents)
+}
+
+func promoteLegacyOfficialAuth(profile relayProfile) relayProfile {
+	if strings.TrimSpace(profile.AuthContents) == "" && strings.TrimSpace(profile.OfficialAuthContents) != "" {
+		status := chatGPTAuthStatusFromContents(profile.OfficialAuthContents, "settings:"+profile.ID)
+		if status.Authenticated {
+			profile.AuthContents = profile.OfficialAuthContents
+		}
+	}
+	if strings.TrimSpace(profile.AuthContents) != "" {
+		return syncOfficialAuthMetadataFromAuth(profile)
+	}
+	return profile
+}
+
+func syncOfficialAuthMetadataFromAuth(profile relayProfile) relayProfile {
+	contents := strings.TrimSpace(profile.AuthContents)
+	if contents == "" {
+		profile.OfficialAuthContents = ""
+		profile.OfficialAccountLabel = ""
+		profile.OfficialAuthUpdatedAt = ""
+		return profile
+	}
+	status := chatGPTAuthStatusFromContents(contents, "settings:"+profile.ID)
+	if !status.Authenticated {
+		profile.OfficialAuthContents = ""
+		profile.OfficialAccountLabel = ""
+		profile.OfficialAuthUpdatedAt = ""
+		return profile
+	}
+	profile.OfficialAuthContents = profile.AuthContents
+	profile.OfficialAccountLabel = status.AccountLabel
+	if strings.TrimSpace(profile.OfficialAuthUpdatedAt) == "" {
+		profile.OfficialAuthUpdatedAt = time.Now().Format(time.RFC3339)
+	}
+	return profile
+}
+
+func ensureRelaySnapshot(profile relayProfile, currentConfig string, allowLegacyAuthFallback bool) relayProfile {
+	if profile.RelayMode == "official" {
+		configContents := profile.ConfigContents
+		if strings.TrimSpace(configContents) == "" {
+			configContents = currentConfig
+		}
+		profile.ConfigContents = officialRelayConfigSnapshot(configContents)
+	} else if strings.TrimSpace(profile.ConfigContents) == "" {
+		profile.ConfigContents = upsertModelProviderConfig(currentConfig, effectiveBaseURL(profile), strings.TrimSpace(profile.APIKey), profile)
+	}
+	if allowLegacyAuthFallback {
+		profile = promoteLegacyOfficialAuth(profile)
+	} else if strings.TrimSpace(profile.AuthContents) != "" {
+		profile = syncOfficialAuthMetadataFromAuth(profile)
+	}
+	return profile
+}
+
+func writeRelaySnapshot(home string, relay relayProfile, pure bool) error {
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return err
+	}
+	configContents := relay.ConfigContents
+	if pure {
+		configContents = ensureConfigBearerToken(configContents, strings.TrimSpace(relay.APIKey))
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configContents), 0o644); err != nil {
+		return err
+	}
+	authContents := canonicalAuthContents(relay)
+	if pure && strings.TrimSpace(authContents) == "" {
+		return nil
+	}
+	if strings.TrimSpace(authContents) != "" {
+		return os.WriteFile(filepath.Join(home, "auth.json"), []byte(authContents), 0o600)
+	}
+	return nil
+}
+
 func (s *server) saveRelayFile(args map[string]any) commandResult {
 	request := mapArg(args, "request")
 	kind := stringArg(request, "kind")
@@ -249,6 +344,23 @@ func (s *server) saveRelayFile(args map[string]any) commandResult {
 		return failed("保存配置文件失败："+err.Error(), relayFilesPayload(codexHomeDir()))
 	}
 	return ok("配置文件已保存。", relayFilesPayload(codexHomeDir()))
+}
+
+func (s *server) importCurrentRelayFiles(args map[string]any) commandResult {
+	profileID := relayProfileIDArg(args)
+	settings := loadSettings()
+	if profileID == "" {
+		profileID = activeRelayProfile(settings).ID
+	}
+	snapshot := currentRelayFileSnapshot(codexHomeDir())
+	updated, found := updateRelayProfileSnapshot(settings, profileID, snapshot.ConfigContents, snapshot.AuthContents)
+	if !found {
+		return failed("导入当前环境失败：未找到供应商。", settingsPayloadValue(settings))
+	}
+	if err := saveSettings(updated); err != nil {
+		return failed("导入当前环境失败："+err.Error(), settingsPayloadValue(settings))
+	}
+	return ok("已把当前 ~/.codex/config.toml 和 auth.json 导入到此供应商。", settingsPayloadValue(loadSettings()))
 }
 
 func (s *server) bindOfficialAuth(args map[string]any) commandResult {
@@ -273,6 +385,33 @@ func (s *server) bindOfficialAuth(args map[string]any) commandResult {
 		label = "已检测"
 	}
 	return ok("已将当前官方账号绑定到供应商："+label, settingsPayloadValue(loadSettings()))
+}
+
+func (s *server) activateOfficialAuth(args map[string]any) commandResult {
+	profileID := relayProfileIDArg(args)
+	settings := loadSettings()
+	relay := activeRelayProfile(settings)
+	if profileID != "" {
+		found := false
+		for _, profile := range settings.RelayProfiles {
+			if profile.ID == profileID {
+				relay = profile
+				found = true
+				break
+			}
+		}
+		if !found {
+			return failed("绑定官方账号失败：未找到供应商。", relayStatusFromHome(codexHomeDir(), settings))
+		}
+	}
+	relay = promoteLegacyOfficialAuth(relay)
+	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
+		return failed("绑定官方账号失败："+err.Error(), relayStatusFromHome(codexHomeDir(), settings))
+	}
+	if err := writeOfficialAuthForRelay(codexHomeDir(), relay); err != nil {
+		return failed("绑定官方账号失败："+err.Error(), relayStatusFromHome(codexHomeDir(), settings))
+	}
+	return ok("已将此供应商绑定的官方账号写入当前登录："+relayDisplayOfficialAuthLabel(relay), relayStatusFromHome(codexHomeDir(), settings))
 }
 
 func (s *server) unbindOfficialAuth(args map[string]any) commandResult {
@@ -329,12 +468,29 @@ func relayProfileIDArg(args map[string]any) string {
 	return stringArg(args, "profileId")
 }
 
+func updateRelayProfileSnapshot(settings backendSettings, profileID, configContents, authContents string) (backendSettings, bool) {
+	found := false
+	for index := range settings.RelayProfiles {
+		if settings.RelayProfiles[index].ID != profileID {
+			continue
+		}
+		settings.RelayProfiles[index].ConfigContents = configContents
+		settings.RelayProfiles[index].AuthContents = authContents
+		settings.RelayProfiles[index].OfficialAuthUpdatedAt = time.Now().Format(time.RFC3339)
+		settings.RelayProfiles[index] = syncOfficialAuthMetadataFromAuth(settings.RelayProfiles[index])
+		found = true
+		break
+	}
+	return normalizeSettings(settings), found
+}
+
 func updateRelayProfileOfficialAuth(settings backendSettings, profileID string, snapshot officialAuthSnapshot) (backendSettings, bool) {
 	found := false
 	for index := range settings.RelayProfiles {
 		if settings.RelayProfiles[index].ID != profileID {
 			continue
 		}
+		settings.RelayProfiles[index].AuthContents = snapshot.Contents
 		settings.RelayProfiles[index].OfficialAuthContents = snapshot.Contents
 		settings.RelayProfiles[index].OfficialAccountLabel = snapshot.AccountLabel
 		settings.RelayProfiles[index].OfficialAuthUpdatedAt = snapshot.UpdatedAt
@@ -350,6 +506,7 @@ func clearRelayProfileOfficialAuth(settings backendSettings, profileID string) (
 		if settings.RelayProfiles[index].ID != profileID {
 			continue
 		}
+		settings.RelayProfiles[index].AuthContents = ""
 		settings.RelayProfiles[index].OfficialAuthContents = ""
 		settings.RelayProfiles[index].OfficialAccountLabel = ""
 		settings.RelayProfiles[index].OfficialAuthUpdatedAt = ""
@@ -359,45 +516,31 @@ func clearRelayProfileOfficialAuth(settings backendSettings, profileID string) (
 	return normalizeSettings(settings), found
 }
 
+func persistRelayProfileSnapshot(settings backendSettings, relay relayProfile) error {
+	for index := range settings.RelayProfiles {
+		if settings.RelayProfiles[index].ID != relay.ID {
+			continue
+		}
+		if settings.RelayProfiles[index] == relay {
+			return nil
+		}
+		settings.RelayProfiles[index] = relay
+		return saveSettings(settings)
+	}
+	return nil
+}
+
 func (s *server) applyRelayInjection(pure bool) commandResult {
 	home := codexHomeDir()
 	settings := loadSettings()
-	relay := activeRelayProfile(settings)
-	useSavedFiles := strings.TrimSpace(relay.ConfigContents) != "" &&
-		(pure || strings.TrimSpace(relay.AuthContents) != "" || relay.RelayMode == "mixedApi")
-	if !pure && relay.RelayMode == "mixedApi" {
-		if err := writeOfficialAuthForRelay(home, relay); err != nil {
-			return failed("切换官方混合 API 失败："+err.Error(), relayStatusFromHome(home))
-		}
+	relay := ensureRelaySnapshot(activeRelayProfile(settings), readFile(filepath.Join(home, "config.toml")), !pure)
+	if !pure && relay.RelayMode == "mixedApi" && !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
+		return failed("切换官方混合 API 失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
-	if useSavedFiles {
-		if err := os.MkdirAll(home, 0o755); err != nil {
-			return failed("切换完整中转配置失败："+err.Error(), relayStatusFromHome(home))
-		}
-		configContents := relay.ConfigContents
-		if pure {
-			configContents = ensureConfigBearerToken(configContents, strings.TrimSpace(relay.APIKey))
-		}
-		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configContents), 0o644); err != nil {
-			return failed("切换完整中转配置失败："+err.Error(), relayStatusFromHome(home))
-		}
-		if !pure && strings.TrimSpace(relay.AuthContents) != "" {
-			if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(relay.AuthContents), 0o644); err != nil {
-				return failed("切换完整中转配置失败："+err.Error(), relayStatusFromHome(home))
-			}
-		}
-		repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true})
-		payload := relayStatusFromHome(home)
-		payload["pluginRepair"] = map[string]any{"status": repairResult.Status, "pluginCount": repairResult.PluginCount, "marketplaceCount": repairResult.MarketplaceCount, "backupPath": repairResult.BackupPath}
-		if repairResult.Status == "failed" {
-			return failed("已切换完整中转配置，但插件恢复失败："+repairResult.Message, payload)
-		}
-		if pure {
-			return ok("中转 API 模式已写入：config.toml 使用当前供应商保存配置，auth.json 保持现有登录状态，并恢复插件配置。", payload)
-		}
-		return ok("已切换到当前中转的完整 config.toml / auth.json，并恢复插件配置。", payload)
+	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
+		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
-	if err := applyRelayConfig(home, relay, pure); err != nil {
+	if err := writeRelaySnapshot(home, relay, pure); err != nil {
 		if pure {
 			return failed("写入中转 API 模式失败："+err.Error(), relayStatusFromHome(home))
 		}
@@ -413,9 +556,12 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 		return failed("中转配置已写入，但插件恢复失败："+repairResult.Message, payload)
 	}
 	if pure {
-		return ok("中转 API 模式已写入：config.toml 已写入 CodexPlusPlus provider，auth.json 保持现有登录状态，并恢复插件配置。", payload)
+		if strings.TrimSpace(canonicalAuthContents(relay)) == "" {
+			return ok("中转 API 模式已写入：config.toml 使用当前供应商快照，auth.json 保留当前环境，因为该供应商尚未保存 auth 快照。", payload)
+		}
+		return ok("中转 API 模式已写入：config.toml 和 auth.json 已按当前供应商快照恢复，并恢复插件配置。", payload)
 	}
-	return ok("中转配置已写入，密钥未在界面明文显示，并恢复插件配置。", payload)
+	return ok("中转配置已按当前供应商快照写入，并恢复插件配置。", payload)
 }
 
 func activeRelayProfile(settings backendSettings) relayProfile {
@@ -518,33 +664,64 @@ func upsertModelProviderConfig(contents, baseURL, bearerToken string, relay rela
 func (s *server) clearRelayInjection() commandResult {
 	home := codexHomeDir()
 	settings := loadSettings()
-	relay := activeRelayProfile(settings)
-	if err := writeOfficialAuthForRelay(home, relay); err != nil {
-		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))
+	currentConfig := readFile(filepath.Join(home, "config.toml"))
+	relay := ensureRelaySnapshot(activeRelayProfile(settings), currentConfig, true)
+	if !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
+		return failed("切换官方登录模式失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
-	_ = os.MkdirAll(home, 0o755)
-	configPath := filepath.Join(home, "config.toml")
-	data, _ := os.ReadFile(configPath)
-	updated := removeRootKey(removeRootKey(removeTable(removeTable(string(data), "model_providers."+relayProvider), "model_providers."+legacyRelayProvider), "OPENAI_API_KEY"), "model_provider")
-	if err := os.WriteFile(configPath, []byte(updated), 0o644); err != nil {
-		return failed("清除中转配置失败："+err.Error(), relayStatusFromHome(home))
+	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
+		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
+	}
+	if err := writeRelaySnapshot(home, relay, false); err != nil {
+		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))
 	}
 	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式。", relayStatusFromHome(home))
 }
 
 func writeOfficialAuthForRelay(home string, relay relayProfile) error {
-	contents := strings.TrimSpace(relay.OfficialAuthContents)
+	contents := runtimeAuthContents(relay)
 	if contents == "" {
 		return errors.New("此供应商还没有绑定官方账号，请先登录目标 ChatGPT 账号并绑定当前登录")
 	}
-	status := chatGPTAuthStatusFromContents(relay.OfficialAuthContents, "settings:"+relay.ID)
+	status := chatGPTAuthStatusFromContents(contents, "settings:"+relay.ID)
 	if !status.Authenticated {
 		return errors.New("此供应商绑定的官方账号快照无效，请重新绑定")
 	}
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(home, "auth.json"), []byte(relay.OfficialAuthContents), 0o600)
+	return os.WriteFile(filepath.Join(home, "auth.json"), []byte(contents), 0o600)
+}
+
+func relayDisplayOfficialAuthLabel(relay relayProfile) string {
+	label := strings.TrimSpace(relay.OfficialAccountLabel)
+	if label == "" {
+		contents := runtimeAuthContents(relay)
+		status := chatGPTAuthStatusFromContents(contents, "settings:"+relay.ID)
+		label = strings.TrimSpace(status.AccountLabel)
+	}
+	if label == "" {
+		return "已检测账号"
+	}
+	return label
+}
+
+func officialRelayConfigSnapshot(currentConfig string) string {
+	return removeRootKey(
+		removeRootKey(
+			removeTable(
+				removeTable(currentConfig, "model_providers."+relayProvider),
+				"model_providers."+legacyRelayProvider,
+			),
+			"OPENAI_API_KEY",
+		),
+		"model_provider",
+	)
+}
+
+func readFile(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
 }
 
 func clearPureAPIAuth(path string) {

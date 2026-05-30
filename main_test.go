@@ -76,6 +76,7 @@ func TestLoadSettingsMigratesCurrentOfficialAuthToActiveProfile(t *testing.T) {
 	}
 	settings.ActiveRelayID = "second"
 	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), fakeChatGPTAuthJSON(t, "active@example.com"))
+	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), `model_provider = "openai"`+"\n")
 	if err := atomicWriteJSON(settingsPath(), settings); err != nil {
 		t.Fatalf("failed to write settings: %v", err)
 	}
@@ -94,6 +95,12 @@ func TestLoadSettingsMigratesCurrentOfficialAuthToActiveProfile(t *testing.T) {
 	}
 	if active.OfficialAuthContents == "" {
 		t.Fatal("official auth contents should be migrated")
+	}
+	if active.AuthContents == "" {
+		t.Fatal("auth contents should be migrated")
+	}
+	if active.ConfigContents == "" {
+		t.Fatal("config contents should be migrated for active profile")
 	}
 }
 
@@ -388,7 +395,6 @@ func TestOfficialModeWritesBoundOfficialAuth(t *testing.T) {
 		t.Fatalf("failed to save settings: %v", err)
 	}
 	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), `model_provider = "CodexPlusPlus"`+"\n\n[model_providers.CodexPlusPlus]\nbase_url = \"https://api.example.com\"\n")
-
 	result := (&server{}).clearRelayInjection()
 
 	if result["status"] != "ok" {
@@ -401,6 +407,103 @@ func TestOfficialModeWritesBoundOfficialAuth(t *testing.T) {
 	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
 	if strings.Contains(string(config), "CodexPlusPlus") {
 		t.Fatalf("official mode should clear relay provider config:\n%s", string(config))
+	}
+}
+
+func TestActivateOfficialAuthWritesBoundOfficialAuth(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	officialAuth := fakeChatGPTAuthJSON(t, "bound@example.com")
+	currentAuth := fakeChatGPTAuthJSON(t, "current@example.com")
+	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), currentAuth)
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "official",
+		Name:                 "Official",
+		RelayMode:            "official",
+		Protocol:             "responses",
+		OfficialAuthContents: officialAuth,
+		OfficialAccountLabel: "bound@example.com",
+	}}
+	settings.ActiveRelayID = "official"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).activateOfficialAuth(map[string]any{
+		"request": map[string]any{"profileId": "official"},
+	})
+
+	if result["status"] != "ok" {
+		t.Fatalf("activate official auth should succeed: %#v", result)
+	}
+	status := chatGPTAuthStatus(filepath.Join(home, ".codex"))
+	if !status.Authenticated || status.AccountLabel != "bound@example.com" {
+		t.Fatalf("bound official auth was not activated: %#v", status)
+	}
+}
+
+func TestImportCurrentRelayFilesUpdatesTargetProfileSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), "model_provider = \"openai\"\n")
+	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), fakeChatGPTAuthJSON(t, "import@example.com"))
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{ID: "one", Name: "One", RelayMode: "official", Protocol: "responses"}}
+	settings.ActiveRelayID = "one"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).importCurrentRelayFiles(map[string]any{
+		"request": map[string]any{"profileId": "one"},
+	})
+
+	if result["status"] != "ok" {
+		t.Fatalf("import current relay files should succeed: %#v", result)
+	}
+	loaded := loadSettings()
+	profile := activeRelayProfile(loaded)
+	if !strings.Contains(profile.ConfigContents, `model_provider = "openai"`) {
+		t.Fatalf("config snapshot mismatch:\n%s", profile.ConfigContents)
+	}
+	if profile.AuthContents == "" || profile.OfficialAuthContents == "" {
+		t.Fatalf("auth snapshot should be imported: %#v", profile)
+	}
+	if profile.OfficialAccountLabel != "import@example.com" {
+		t.Fatalf("official account label mismatch: %q", profile.OfficialAccountLabel)
+	}
+}
+
+func TestClearRelayInjectionFallsBackToLegacyOfficialAuthContents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	officialAuth := fakeChatGPTAuthJSON(t, "legacy@example.com")
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "legacy",
+		Name:                 "Legacy",
+		RelayMode:            "official",
+		Protocol:             "responses",
+		OfficialAuthContents: officialAuth,
+		OfficialAccountLabel: "legacy@example.com",
+		AuthContents:         "",
+		ConfigContents:       "",
+	}}
+	settings.ActiveRelayID = "legacy"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+
+	result := (&server{}).clearRelayInjection()
+
+	if result["status"] != "ok" {
+		t.Fatalf("official switch should succeed with legacy auth fallback: %#v", result)
+	}
+	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
+	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "legacy@example.com" {
+		t.Fatalf("legacy official auth should be written to live auth.json, got:\n%s", string(auth))
 	}
 }
 
@@ -437,9 +540,13 @@ func TestMixedModeWritesBoundOfficialAuthAndRelayConfig(t *testing.T) {
 	if !strings.Contains(string(config), `experimental_bearer_token = "relay-key"`) {
 		t.Fatalf("mixed relay config missing bearer token:\n%s", string(config))
 	}
+	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
+	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "mixed@example.com" {
+		t.Fatalf("mixed relay should use profile auth snapshot, got:\n%s", string(auth))
+	}
 }
 
-func TestPureAPIModeKeepsOfficialBindingInactive(t *testing.T) {
+func TestPureAPIModeKeepsCurrentAuthWhenProfileSnapshotMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	officialAuth := fakeChatGPTAuthJSON(t, "stored@example.com")
@@ -467,7 +574,7 @@ func TestPureAPIModeKeepsOfficialBindingInactive(t *testing.T) {
 		t.Fatalf("pure API switch should succeed: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if string(auth) != currentAuth {
+	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
 		t.Fatalf("pure API mode should preserve auth.json, got:\n%s", string(auth))
 	}
 	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
@@ -477,6 +584,39 @@ func TestPureAPIModeKeepsOfficialBindingInactive(t *testing.T) {
 	loaded := loadSettings()
 	if activeRelayProfile(loaded).OfficialAccountLabel != "stored@example.com" {
 		t.Fatal("pure API mode should not remove stored official binding")
+	}
+}
+
+func TestPureAPIModeWritesProfileAuthSnapshotWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	currentAuth := fakeChatGPTAuthJSON(t, "current@example.com")
+	profileAuth := fakeChatGPTAuthJSON(t, "profile@example.com")
+	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), currentAuth)
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:             "pure",
+		Name:           "Pure",
+		BaseURL:        "https://api.example.com",
+		APIKey:         "pure-key",
+		RelayMode:      "pureApi",
+		Protocol:       "responses",
+		ConfigContents: buildTestRelayConfig("https://api.example.com", "pure-key"),
+		AuthContents:   profileAuth,
+	}}
+	settings.ActiveRelayID = "pure"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).applyRelayInjection(true)
+
+	if result["status"] != "ok" {
+		t.Fatalf("pure API switch should succeed: %#v", result)
+	}
+	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
+	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "profile@example.com" {
+		t.Fatalf("pure API should restore saved auth snapshot, got:\n%s", string(auth))
 	}
 }
 
@@ -513,7 +653,7 @@ func TestPureAPIModeWritesImportedConfigWithoutAuthOverwrite(t *testing.T) {
 		t.Fatalf("pure API switch should succeed: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if string(auth) != currentAuth {
+	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
 		t.Fatalf("pure API mode should preserve auth.json, got:\n%s", string(auth))
 	}
 	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
@@ -584,6 +724,20 @@ func writeTestFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
+}
+
+func buildTestRelayConfig(baseURL, apiKey string) string {
+	return strings.Join([]string{
+		`model_provider = "CodexPlusPlus"`,
+		``,
+		`[model_providers.CodexPlusPlus]`,
+		`name = "CodexPlusPlus"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		`base_url = "` + baseURL + `"`,
+		`experimental_bearer_token = "` + apiKey + `"`,
+		``,
+	}, "\n")
 }
 
 func fakeChatGPTAuthJSON(t *testing.T, email string) string {

@@ -224,8 +224,12 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.readRelayFiles()
 	case "save_relay_file":
 		return s.saveRelayFile(args)
+	case "import_current_relay_files":
+		return s.importCurrentRelayFiles(args)
 	case "bind_official_auth":
 		return s.bindOfficialAuth(args)
+	case "activate_official_auth":
+		return s.activateOfficialAuth(args)
 	case "unbind_official_auth":
 		return s.unbindOfficialAuth(args)
 	case "clear_current_official_auth":
