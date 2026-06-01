@@ -27,6 +27,53 @@ func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
 	}
 }
 
+func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
+	command := buildManagerLauncherCommand(`C:\Tools\codextools-launcher.exe`, `C:\Codex\app`, 9229, 57321, true)
+
+	expected := []string{
+		`C:\Tools\codextools-launcher.exe`,
+		"--launcher",
+		"--debug-port",
+		"9229",
+		"--helper-port",
+		"57321",
+		"--app-path",
+		`C:\Codex\app`,
+		"--restart",
+	}
+	if strings.Join(command, "\x00") != strings.Join(expected, "\x00") {
+		t.Fatalf("manager launch command should target Codex++ launcher:\n got: %#v\nwant: %#v", command, expected)
+	}
+	payload := managerLauncherPayload(command[0], command, `C:\Codex\app`, 9229, 57321)
+	if got := stringFromAny(payload["launch_chain"]); got != "codex_plus_launcher" {
+		t.Fatalf("launch chain mismatch: %q", got)
+	}
+	if got := stringFromAny(payload["launcher_path"]); !strings.Contains(strings.ToLower(got), "codextools-launcher") {
+		t.Fatalf("launcher path should reference codextools-launcher, got %q", got)
+	}
+}
+
+func TestRendererInjectionDoesNotDisablePluginUnlockInRelayMode(t *testing.T) {
+	for _, forbidden := range []string{
+		`codexPlusBackendSettings.launchMode === "relay";`,
+		`data-relay-unneeded`,
+		`兼容增强模式下无需开启`,
+		`仅关闭插件入口相关增强`,
+	} {
+		if strings.Contains(rendererInjectScript, forbidden) {
+			t.Fatalf("renderer injection should not disable plugin unlock in relay mode; found %q", forbidden)
+		}
+	}
+	for _, expected := range []string{
+		"兼容增强和完整增强都会生效",
+		"通过 Codex++ 注入显示并启用插件入口",
+	} {
+		if !strings.Contains(rendererInjectScript, expected) {
+			t.Fatalf("renderer injection should describe relay plugin unlock support; missing %q", expected)
+		}
+	}
+}
+
 func TestBuildWatcherInstallPlanMatchesOriginalWindowsShape(t *testing.T) {
 	plan := buildWatcherInstallPlan(`C:\Tools\Codex++.exe`, 9229, `C:\Users\A\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CodexPlusPlusWatcher.lnk`)
 
@@ -1183,13 +1230,16 @@ func TestCodexLaunchPayloadPrefersDirectExecutableWhenReadable(t *testing.T) {
 }
 
 func TestWindowsPackagedExplorerCommandShape(t *testing.T) {
-	command := windowsPackagedExplorerCommand("OpenAI.Codex_abc!App")
+	command := windowsPackagedExplorerCommand("OpenAI.Codex_abc!App", []string{"--remote-debugging-port=9229", "--remote-allow-origins=http://127.0.0.1:9229"})
 
-	if len(command) != 2 {
+	if len(command) != 4 {
 		t.Fatalf("command length mismatch: %#v", command)
 	}
 	if command[0] != "explorer.exe" || command[1] != `shell:AppsFolder\OpenAI.Codex_abc!App` {
 		t.Fatalf("command shape mismatch: %#v", command)
+	}
+	if command[2] != "--remote-debugging-port=9229" || command[3] != "--remote-allow-origins=http://127.0.0.1:9229" {
+		t.Fatalf("explorer fallback must keep CDP arguments for Codex++ injection: %#v", command)
 	}
 }
 

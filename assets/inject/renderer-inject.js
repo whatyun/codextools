@@ -492,9 +492,6 @@
       }
       .codex-plus-toggle[data-enabled="true"] { background: #10a37f; }
       .codex-plus-toggle[data-enabled="true"] span { transform: translateX(18px); }
-      .codex-plus-toggle[data-relay-unneeded="true"] { width: 72px; cursor: default; background: rgba(16,163,127,.16); color: #6ee7b7; }
-      .codex-plus-toggle[data-relay-unneeded="true"] span { display: none; }
-      .codex-plus-toggle[data-relay-unneeded="true"]::after { content: "无需开启"; font-size: 12px; font-weight: 650; line-height: 1; }
       .codex-plus-width-control { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 176px; align-self: center; }
       .codex-plus-width-input {
         width: 78px;
@@ -643,7 +640,6 @@
   }
 
   function codexPlusSettings() {
-    const relayPatchDisabled = codexPlusBackendSettings.launchMode === "relay";
     if (codexPlusBackendSettings.enhancementsEnabled === false) {
       return {
         pluginEntryUnlock: false,
@@ -661,19 +657,9 @@
       };
     }
     try {
-      const settings = { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}") };
-      if (relayPatchDisabled) {
-        settings.pluginEntryUnlock = false;
-        settings.forcePluginInstall = false;
-      }
-      return settings;
+      return { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}") };
     } catch {
-      const settings = defaultCodexPlusSettings();
-      if (relayPatchDisabled) {
-        settings.pluginEntryUnlock = false;
-        settings.forcePluginInstall = false;
-      }
-      return settings;
+      return defaultCodexPlusSettings();
     }
   }
 
@@ -1483,12 +1469,12 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="enhancementsEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">插件选项解锁</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；ChatGPT 登录态会保留官方插件入口。" : "完整增强模式会显示并启用插件入口。"}</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginEntryUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="codex-plus-row-title">插件选项解锁</div><div class="codex-plus-row-description">通过 Codex++ 注入显示并启用插件入口，兼容增强和完整增强都会生效。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginEntryUnlock"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">特殊插件强制安装</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；不会改插件安装入口。" : "解除 App unavailable / 应用不可用导致的前端安装禁用。"}</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="forcePluginInstall" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="codex-plus-row-title">特殊插件强制安装</div><div class="codex-plus-row-description">解除 App unavailable / 应用不可用导致的前端安装禁用，兼容增强和完整增强都会生效。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="forcePluginInstall"><span></span></button>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">模型白名单解锁</div><div class="codex-plus-row-description">从环境变量和 Codex config.toml 中的中转站 /v1/models 拉取模型，并补进模型选择列表。</div></div>
@@ -1548,7 +1534,7 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="providerSyncEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">页面增强模式</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动、Timeline 和用户脚本，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
+              <div><div class="codex-plus-row-title">页面增强模式</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强：使用更保守的官方/混合登录路径，同时加载插件入口、强制安装、项目路径移动等页面能力。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
               <button type="button" class="codex-plus-action-button" data-codex-open-manager="true">打开管理工具</button>
             </div>
             <div class="codex-plus-row">
@@ -1838,8 +1824,8 @@
     return true;
   }
 
-  function pluginPatchDisabledInRelayMode() {
-    return !codexPlusBackendSettingsLoaded || codexPlusBackendSettings.launchMode === "relay";
+  function pluginPatchUnavailable() {
+    return !codexPlusBackendSettingsLoaded;
   }
 
   function pluginEntryButton() {
@@ -1867,7 +1853,7 @@
   }
 
   function enablePluginEntry() {
-    if (pluginPatchDisabledInRelayMode()) return;
+    if (pluginPatchUnavailable()) return;
     if (!codexPlusSettings().pluginEntryUnlock) return;
     const pluginButton = pluginEntryButton();
     if (!pluginButton) return;
@@ -1992,7 +1978,7 @@
   }
 
   function unblockPluginInstallButtons() {
-    if (pluginPatchDisabledInRelayMode()) return;
+    if (pluginPatchUnavailable()) return;
     if (!codexPlusSettings().forcePluginInstall) return;
     pluginInstallCandidates().forEach((button) => {
       const text = installButtonLabel(button);
@@ -2003,7 +1989,7 @@
   }
 
   function refreshForcePluginInstallUnlockLoop() {
-    const shouldRun = !pluginPatchDisabledInRelayMode() && codexPlusSettings().forcePluginInstall;
+    const shouldRun = !pluginPatchUnavailable() && codexPlusSettings().forcePluginInstall;
     if (!shouldRun) {
       clearInterval(window.__codexForcePluginInstallRefreshTimer);
       window.__codexForcePluginInstallRefreshTimer = null;
@@ -2011,7 +1997,7 @@
     }
     if (window.__codexForcePluginInstallRefreshTimer) return;
     window.__codexForcePluginInstallRefreshTimer = setInterval(() => {
-      if (!codexPlusSettings().forcePluginInstall || pluginPatchDisabledInRelayMode()) {
+      if (!codexPlusSettings().forcePluginInstall || pluginPatchUnavailable()) {
         clearInterval(window.__codexForcePluginInstallRefreshTimer);
         window.__codexForcePluginInstallRefreshTimer = null;
         return;
@@ -5907,7 +5893,7 @@
   }
 
   function scanDeferred() {
-    if (pluginPatchDisabledInRelayMode()) {
+    if (pluginPatchUnavailable()) {
       clearPluginPatchArtifacts();
       refreshForcePluginInstallUnlockLoop();
     } else {
@@ -5962,7 +5948,7 @@
       ".composer-footer",
       selectors.appHeader,
       selectors.archiveNav,
-      ...(pluginPatchDisabledInRelayMode() ? [] : [selectors.disabledInstallButton]),
+      ...(pluginPatchUnavailable() ? [] : [selectors.disabledInstallButton]),
     ].join(", ");
   }
 

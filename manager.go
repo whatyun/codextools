@@ -1176,31 +1176,30 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	if runtime.GOOS == "windows" {
 		launcher += ".exe"
 	}
+	command := buildManagerLauncherCommand(launcher, appPath, debugPort, helperPort, restart)
+	launcherPayload := managerLauncherPayload(launcher, command, appPath, debugPort, helperPort)
 	if !fileExists(launcher) {
-		return failed("启动静默入口失败：未找到 "+launcher, map[string]any{"debugPort": debugPort, "helperPort": helperPort})
+		return failed("启动 Codex++ 失败：未找到静默启动器 "+launcher, launcherPayload)
 	}
-	cmd := exec.Command(launcher, "--launcher", "--debug-port", strconv.Itoa(int(debugPort)), "--helper-port", strconv.Itoa(int(helperPort)))
-	if appPath != "" {
-		cmd.Args = append(cmd.Args, "--app-path", appPath)
-	}
-	if restart {
-		cmd.Args = append(cmd.Args, "--restart")
-	}
+	cmd := exec.Command(command[0], command[1:]...)
 	hideSubprocessWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return failed("启动静默入口失败："+err.Error(), map[string]any{"debugPort": debugPort, "helperPort": helperPort})
+		return failed("启动 Codex++ 静默启动器失败："+err.Error(), launcherPayload)
 	}
-	latest := waitForLaunchStatusAfter(time.Now().Add(-200*time.Millisecond), 2*time.Second)
+	latest := waitForLaunchStatusAfter(time.Now().Add(-200*time.Millisecond), managerLaunchWaitTimeout())
 	if latest != nil && latest.Status == "failed" {
-		return failed(latest.Message, map[string]any{"debugPort": debugPort, "helperPort": helperPort, "latest_launch": latest})
+		payload := cloneStringAnyMap(launcherPayload)
+		payload["latest_launch"] = latest
+		return failed(latest.Message, payload)
 	}
 	if latest == nil {
 		accepted := launchStatus{
 			Status:      "accepted",
-			Message:     "Go 管理器已启动静默入口。",
+			Message:     "Go 管理器已启动 Codex++ 静默启动器。",
 			StartedAtMS: uint64(time.Now().UnixMilli()),
 			DebugPort:   &debugPort,
 			HelperPort:  &helperPort,
+			Detail:      cloneStringAnyMap(launcherPayload),
 		}
 		if appPath != "" {
 			accepted.CodexApp = &appPath
@@ -1212,22 +1211,74 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	if restart {
 		message = "Codex 已请求重启，启动任务正在后台运行。"
 	}
-	return commandResult{"status": "accepted", "message": message, "debugPort": debugPort, "helperPort": helperPort, "latest_launch": latest}
+	result := commandResult{"status": "accepted", "message": message, "debugPort": debugPort, "helperPort": helperPort, "latest_launch": latest}
+	for key, value := range launcherPayload {
+		result[key] = value
+	}
+	return result
 }
 
 func waitForLaunchStatusAfter(after time.Time, timeout time.Duration) *launchStatus {
 	deadline := time.Now().Add(timeout)
+	var latest *launchStatus
 	for time.Now().Before(deadline) {
 		var status launchStatus
 		if readJSON(latestStatusPath(), &status) == nil && status.StartedAtMS > 0 {
 			started := time.UnixMilli(int64(status.StartedAtMS))
 			if !started.Before(after) {
-				return &status
+				current := status
+				latest = &current
+				if current.Status != "starting" {
+					return latest
+				}
 			}
 		}
 		time.Sleep(120 * time.Millisecond)
 	}
-	return nil
+	return latest
+}
+
+func managerLaunchWaitTimeout() time.Duration {
+	if runtime.GOOS == "windows" {
+		return 20 * time.Second
+	}
+	return 2 * time.Second
+}
+
+func buildManagerLauncherCommand(launcher, appPath string, debugPort, helperPort uint16, restart bool) []string {
+	command := []string{launcher, "--launcher", "--debug-port", strconv.Itoa(int(debugPort)), "--helper-port", strconv.Itoa(int(helperPort))}
+	if appPath != "" {
+		command = append(command, "--app-path", appPath)
+	}
+	if restart {
+		command = append(command, "--restart")
+	}
+	return command
+}
+
+func managerLauncherPayload(launcher string, command []string, appPath string, debugPort, helperPort uint16) map[string]any {
+	payload := map[string]any{
+		"launch_chain":  "codex_plus_launcher",
+		"launcher_path": launcher,
+		"launcher_args": []string{},
+		"debugPort":     debugPort,
+		"helperPort":    helperPort,
+	}
+	if len(command) > 1 {
+		payload["launcher_args"] = append([]string(nil), command[1:]...)
+	}
+	if appPath != "" {
+		payload["codex_app"] = appPath
+	}
+	return payload
+}
+
+func cloneStringAnyMap(source map[string]any) map[string]any {
+	clone := make(map[string]any, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func companionBinaryPath(name string) string {

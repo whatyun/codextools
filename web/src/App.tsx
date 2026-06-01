@@ -2647,7 +2647,7 @@ function EnhanceScreen({
           {form.launchMode === "relay" ? (
             <div className="hint-line">
               <ShieldCheck className="h-4 w-4" />
-              <span>当前为兼容增强模式，插件入口解锁和特殊插件强制安装不会启用；其他页面功能仍可用。</span>
+              <span>当前为兼容增强模式：通过 Codex++ 注入启用插件入口、强制安装和其他页面功能，同时保留官方/混合登录兼容路径。</span>
             </div>
           ) : null}
           <div className="feature-list">
@@ -2655,8 +2655,8 @@ function EnhanceScreen({
             <FeatureItem title="Markdown 导出" detail="按本地 rollout 导出带时间戳的 Markdown。" enabled={form.enhancementsEnabled} />
             <FeatureItem title="项目移动" detail="把会话移动到普通对话或其他本地项目。" enabled={form.enhancementsEnabled} />
             <FeatureItem title="Timeline" detail="在对话右侧显示用户提问时间线。" enabled={form.enhancementsEnabled} />
-            <FeatureItem title="插件入口解锁" detail="仅完整增强模式启用。" enabled={form.enhancementsEnabled && form.launchMode === "patch"} />
-            <FeatureItem title="特殊插件强制安装" detail="仅完整增强模式启用。" enabled={form.enhancementsEnabled && form.launchMode === "patch"} />
+            <FeatureItem title="插件入口解锁" detail="通过 Codex++ 注入启用插件入口。" enabled={form.enhancementsEnabled} />
+            <FeatureItem title="特殊插件强制安装" detail="解除前端安装禁用状态。" enabled={form.enhancementsEnabled} />
           </div>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>保存增强设置</Button>
@@ -3892,7 +3892,7 @@ function ModeSelector({ launchMode, actions }: { launchMode: LaunchMode; actions
         type="button"
       >
         <strong>兼容增强</strong>
-        <span>适合官方登录或官方混合 API；保留会话删除、导出、项目移动、Timeline 和用户脚本，关闭插件入口相关增强。</span>
+        <span>适合官方登录或官方混合 API；通过 Codex++ 注入启用插件入口、强制安装、会话删除、导出、项目移动、Timeline 和用户脚本。</span>
       </button>
       <button
         className={`mode-option ${launchMode === "patch" ? "active" : ""}`}

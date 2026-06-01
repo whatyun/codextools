@@ -56,47 +56,6 @@ func runLauncher(args []string) error {
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
 	}
-	singleInstanceLock, acquired, err := acquireLauncherSingleInstanceLock(debugPort)
-	if err != nil {
-		appendDiagnosticLog("launcher.single_instance_lock_failed", map[string]any{"debug_port": debugPort, "error": err.Error()})
-	} else if !acquired {
-		if !options.restart {
-			status := launchStatus{
-				Status:      "running",
-				Message:     "Codex++ launcher 已在运行，已跳过本次重复启动。",
-				StartedAtMS: uint64(time.Now().UnixMilli()),
-				DebugPort:   &debugPort,
-				HelperPort:  &helperPort,
-				CodexApp:    &appPath,
-			}
-			_ = atomicWriteJSON(latestStatusPath(), status)
-			appendDiagnosticLog("launcher.single_instance_skipped", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
-			return nil
-		}
-		appendDiagnosticLog("launcher.restart_existing_codex", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
-		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
-			writeLaunchFailureStatus("重启 Codex 失败："+err.Error(), debugPort, helperPort, &appPath)
-			appendDiagnosticLog("launcher.restart_existing_codex_failed", map[string]any{"debug_port": debugPort, "error": err.Error()})
-			return err
-		}
-		if helperNeeded(settings) {
-			waitForTCPPortFree(helperPort, 5*time.Second)
-		}
-		if activeRelayProfile(settings).needsLocalRelayProxy() {
-			waitForTCPPortFree(localRelayProxyPort, 5*time.Second)
-		}
-		singleInstanceLock, acquired, err = acquireLauncherSingleInstanceLock(debugPort)
-		if err != nil {
-			appendDiagnosticLog("launcher.single_instance_relock_failed", map[string]any{"debug_port": debugPort, "error": err.Error()})
-		} else if !acquired {
-			writeLaunchFailureStatus("重启 Codex 失败：旧启动器尚未退出，请关闭 Codex 后重试。", debugPort, helperPort, &appPath)
-			appendDiagnosticLog("launcher.single_instance_restart_skipped", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
-			return nil
-		}
-	}
-	if singleInstanceLock != nil {
-		defer singleInstanceLock.release()
-	}
 	if runtime.GOOS == "windows" && options.restart && cdpTargetsAvailable(debugPort, 800*time.Millisecond) {
 		appendDiagnosticLog("launcher.restart_running_codex", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
 		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
@@ -185,28 +144,21 @@ func runLauncher(args []string) error {
 	_ = atomicWriteJSON(latestStatusPath(), status)
 	appendDiagnosticLog("launcher.starting", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "enhancements": settings.Enhancements})
 
-	attachExisting := shouldAttachToRunningCodex(debugPort, options.restart)
-	launch := codexLaunchHandle(&existingCodexLaunch{debugPort: debugPort})
-	if !attachExisting {
-		var err error
-		launch, err = startCodexApp(appPath, debugPort, settings.CodexExtraArgs)
-		if err != nil {
-			detail := launchFailureDetail(appPath, debugPort, helperPort, err)
-			failure := launchStatus{
-				Status:      "failed",
-				Message:     "启动 Codex 失败：" + err.Error(),
-				StartedAtMS: uint64(time.Now().UnixMilli()),
-				DebugPort:   &debugPort,
-				HelperPort:  &helperPort,
-				CodexApp:    &appPath,
-				Detail:      detail,
-			}
-			_ = atomicWriteJSON(latestStatusPath(), failure)
-			appendDiagnosticLog("launcher.codex_start_failed", detail)
-			return err
+	launch, err := startCodexApp(appPath, debugPort, settings.CodexExtraArgs)
+	if err != nil {
+		detail := launchFailureDetail(appPath, debugPort, helperPort, err)
+		failure := launchStatus{
+			Status:      "failed",
+			Message:     "启动 Codex 失败：" + err.Error(),
+			StartedAtMS: uint64(time.Now().UnixMilli()),
+			DebugPort:   &debugPort,
+			HelperPort:  &helperPort,
+			CodexApp:    &appPath,
+			Detail:      detail,
 		}
-	} else {
-		appendDiagnosticLog("launcher.attach_existing_codex", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
+		_ = atomicWriteJSON(latestStatusPath(), failure)
+		appendDiagnosticLog("launcher.codex_start_failed", detail)
+		return err
 	}
 	ready := launchStatus{
 		Status:      "running",
@@ -215,9 +167,6 @@ func runLauncher(args []string) error {
 		DebugPort:   &debugPort,
 		HelperPort:  &helperPort,
 		CodexApp:    &appPath,
-	}
-	if attachExisting {
-		ready.Message = "Codex++ launcher 已附着到现有 Codex 进程。"
 	}
 	if settings.Enhancements {
 		if err := runtimeState.retryInjection(helperPort); err != nil {
@@ -367,10 +316,10 @@ func startCodexApp(appPath string, debugPort uint16, extraArgs []string) (codexL
 				})
 				return nil, err
 			}
-			explorerErr := startWindowsPackagedAppViaExplorer(activation.appUserModelID, debugPort)
+			explorerErr := startWindowsPackagedAppViaExplorer(activation.appUserModelID, debugPort, buildCodexArguments(debugPort, extraArgs))
 			if explorerErr == nil {
 				if waitForCDPPortAvailable(debugPort, 15*time.Second) {
-					return &windowsPackagedExplorerLaunch{appUserModelID: activation.appUserModelID, command: windowsPackagedExplorerCommand(activation.appUserModelID), debugPort: debugPort}, nil
+					return &windowsPackagedExplorerLaunch{appUserModelID: activation.appUserModelID, command: windowsPackagedExplorerCommand(activation.appUserModelID, buildCodexArguments(debugPort, extraArgs)), debugPort: debugPort}, nil
 				}
 				explorerErr = packagedCodexDebugPortError(activation.appUserModelID, debugPort, "explorer")
 				appendDiagnosticLog("launcher.windows_packaged_explorer_no_cdp", map[string]any{
@@ -417,12 +366,13 @@ func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs 
 	}
 }
 
-func windowsPackagedExplorerCommand(appUserModelID string) []string {
-	return []string{"explorer.exe", `shell:AppsFolder\` + appUserModelID}
+func windowsPackagedExplorerCommand(appUserModelID string, args []string) []string {
+	command := []string{"explorer.exe", `shell:AppsFolder\` + appUserModelID}
+	return append(command, args...)
 }
 
-func startWindowsPackagedAppViaExplorer(appUserModelID string, debugPort uint16) error {
-	command := windowsPackagedExplorerCommand(appUserModelID)
+func startWindowsPackagedAppViaExplorer(appUserModelID string, debugPort uint16, args []string) error {
+	command := windowsPackagedExplorerCommand(appUserModelID, args)
 	_, err := startCodexProcess(command)
 	if err != nil {
 		return err
@@ -514,10 +464,6 @@ func shouldQuitRunningCodexBeforeLaunch(appPath string, debugPort uint16, restar
 		return false
 	}
 	return true
-}
-
-func shouldAttachToRunningCodex(debugPort uint16, restart bool) bool {
-	return runtime.GOOS == "windows" && !restart && cdpTargetsAvailable(debugPort, 1200*time.Millisecond)
 }
 
 func cdpTargetsAvailable(debugPort uint16, timeout time.Duration) bool {
@@ -668,28 +614,6 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 
 func helperNeeded(settings backendSettings) bool {
 	return settings.Enhancements || activeRelayProfile(settings).Protocol == "chatCompletions" || activeRelayProfile(settings).needsLocalRelayProxy()
-}
-
-type existingCodexLaunch struct {
-	debugPort uint16
-}
-
-func (launch *existingCodexLaunch) wait() error {
-	for tcpPortAccepting(launch.debugPort) {
-		time.Sleep(time.Second)
-	}
-	return nil
-}
-
-func (launch *existingCodexLaunch) terminate() error {
-	return nil
-}
-
-func (launch *existingCodexLaunch) logPayload() map[string]any {
-	return map[string]any{
-		"type":       "existing_cdp",
-		"debug_port": launch.debugPort,
-	}
 }
 
 type codexLaunchHandle interface {
