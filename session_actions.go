@@ -60,9 +60,20 @@ type sessionSortKey struct {
 	CreatedAtMs int64
 }
 
+type sessionMarkdownExport struct {
+	Filename string
+	Markdown string
+}
+
+type sessionMarkdownMessage struct {
+	Role      string
+	Text      string
+	Timestamp string
+}
+
 func isSessionDataRoute(path string) bool {
 	switch path {
-	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/thread-sort-key", "/thread-sort-keys":
+	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
 		return true
 	default:
 		return false
@@ -82,6 +93,10 @@ func handleSessionDataRoute(path string, payload map[string]any) map[string]any 
 		return archivedThreadDataRoute(payload)
 	case "/move-thread-workspace":
 		return moveThreadWorkspaceDataRoute(payload)
+	case "/move-thread-projectless":
+		return moveThreadProjectlessDataRoute(payload)
+	case "/export-markdown":
+		return exportMarkdownDataRoute(payload)
 	case "/thread-sort-key":
 		return threadSortKeyDataRoute(payload)
 	case "/thread-sort-keys":
@@ -186,6 +201,9 @@ func moveThreadWorkspaceDataRoute(payload map[string]any) map[string]any {
 	if err := updateSQLiteThreadWorkspace(filepath.Join(home, "state_5.sqlite"), lookup.allIDs(), targetCWD); err != nil {
 		return map[string]any{"status": "failed", "session_id": sessionID, "message": "移动失败：更新会话索引失败：" + err.Error()}
 	}
+	if err := updateCodexGlobalStateForWorkspaceMove(home, lookup, targetCWD); err != nil {
+		return map[string]any{"status": "failed", "session_id": sessionID, "message": "移动失败：更新 Codex 全局状态失败：" + err.Error()}
+	}
 	key := sortKeyForSession(home, sessionID)
 	result := sortKeyPayload(key)
 	result["status"] = "moved"
@@ -193,6 +211,52 @@ func moveThreadWorkspaceDataRoute(payload map[string]any) map[string]any {
 	result["target_cwd"] = targetCWD
 	result["message"] = "已移动到项目。"
 	return result
+}
+
+func moveThreadProjectlessDataRoute(payload map[string]any) map[string]any {
+	sessionID := strings.TrimSpace(stringFromAny(payload["session_id"]))
+	if sessionID == "" {
+		return map[string]any{"status": "failed", "message": "移动失败：未找到会话 ID"}
+	}
+	home := codexHomeDir()
+	lookup, err := lookupSession(home, sessionID, "", false)
+	if err != nil {
+		return map[string]any{"status": "failed", "session_id": sessionID, "message": "移动失败：" + err.Error()}
+	}
+	if err := updateCodexGlobalStateForProjectlessMove(home, lookup); err != nil {
+		return map[string]any{"status": "failed", "session_id": sessionID, "message": "移动失败：更新 Codex 全局状态失败：" + err.Error()}
+	}
+	key := sortKeyForSession(home, sessionID)
+	result := sortKeyPayload(key)
+	result["status"] = "moved"
+	result["session_id"] = lookup.canonicalOr(sessionID)
+	result["target_cwd"] = ""
+	result["message"] = "已移动到普通对话。"
+	return result
+}
+
+func exportMarkdownDataRoute(payload map[string]any) map[string]any {
+	sessionID := strings.TrimSpace(stringFromAny(payload["session_id"]))
+	title := strings.TrimSpace(stringFromAny(payload["title"]))
+	if sessionID == "" && title == "" {
+		return map[string]any{"status": "failed", "message": "导出失败：未找到会话"}
+	}
+	home := codexHomeDir()
+	lookup, err := lookupSession(home, sessionID, title, false)
+	if err != nil {
+		return map[string]any{"status": "failed", "session_id": sessionID, "message": "导出失败：" + err.Error()}
+	}
+	export, err := buildSessionMarkdownExport(lookup)
+	if err != nil {
+		return map[string]any{"status": "failed", "session_id": lookup.canonicalOr(sessionID), "message": "导出失败：" + err.Error()}
+	}
+	return map[string]any{
+		"status":     "exported",
+		"session_id": lookup.canonicalOr(sessionID),
+		"filename":   export.Filename,
+		"markdown":   export.Markdown,
+		"message":    "已导出 Markdown。",
+	}
 }
 
 func threadSortKeyDataRoute(payload map[string]any) map[string]any {
@@ -449,6 +513,326 @@ func rewriteRolloutWorkspace(file sessionRolloutFile, targetCWD string) error {
 		return err
 	}
 	return atomicWrite(file.Path, append(nextFirstLine, []byte(file.Separator)...))
+}
+
+func buildSessionMarkdownExport(lookup sessionLookupResult) (sessionMarkdownExport, error) {
+	if len(lookup.Files) == 0 {
+		return sessionMarkdownExport{}, errors.New("未找到可导出的会话文件")
+	}
+	file := lookup.Files[len(lookup.Files)-1]
+	messages, err := rolloutMarkdownMessages(file.Path)
+	if err != nil {
+		return sessionMarkdownExport{}, err
+	}
+	if len(messages) == 0 {
+		return sessionMarkdownExport{}, errors.New("会话中没有可导出的用户或助手消息")
+	}
+	title := firstString(file.Title, lookup.CanonicalID, lookup.RequestedID, "Codex Conversation")
+	sessionID := firstString(file.SessionID, lookup.canonicalOr(""))
+	var builder strings.Builder
+	builder.WriteString("# ")
+	builder.WriteString(markdownLine(title))
+	builder.WriteString("\n\n")
+	if sessionID != "" {
+		builder.WriteString("- Session ID: `")
+		builder.WriteString(markdownInlineCode(sessionID))
+		builder.WriteString("`\n")
+	}
+	if file.CWD != "" {
+		builder.WriteString("- Workspace: `")
+		builder.WriteString(markdownInlineCode(file.CWD))
+		builder.WriteString("`\n")
+	}
+	builder.WriteString("- Exported: ")
+	builder.WriteString(time.Now().UTC().Format(time.RFC3339))
+	builder.WriteString("\n\n")
+	for _, message := range messages {
+		builder.WriteString("## ")
+		builder.WriteString(markdownRoleLabel(message.Role))
+		if message.Timestamp != "" {
+			builder.WriteString(" · ")
+			builder.WriteString(markdownLine(message.Timestamp))
+		}
+		builder.WriteString("\n\n")
+		builder.WriteString(strings.TrimSpace(message.Text))
+		builder.WriteString("\n\n")
+	}
+	return sessionMarkdownExport{
+		Filename: exportMarkdownFilename(title, time.Now()),
+		Markdown: strings.TrimRight(builder.String(), "\n") + "\n",
+	}, nil
+}
+
+func rolloutMarkdownMessages(path string) ([]sessionMarkdownMessage, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var messages []sessionMarkdownMessage
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		message := markdownMessageFromRolloutRecord(record)
+		if message.Role == "" || strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		messages = append(messages, message)
+	}
+	return messages, nil
+}
+
+func markdownMessageFromRolloutRecord(record map[string]any) sessionMarkdownMessage {
+	payload, _ := record["payload"].(map[string]any)
+	if payload == nil {
+		payload = record
+	}
+	timestamp := firstString(record["timestamp"], payload["timestamp"])
+	switch stringFromAny(record["type"]) {
+	case "event_msg":
+		switch stringFromAny(payload["type"]) {
+		case "user_message", "user_input":
+			return sessionMarkdownMessage{Role: "user", Text: stringFromAny(payload["message"]), Timestamp: timestamp}
+		case "agent_message":
+			if phase := strings.TrimSpace(stringFromAny(payload["phase"])); phase != "" && phase != "final_answer" && phase != "commentary" {
+				return sessionMarkdownMessage{}
+			}
+			return sessionMarkdownMessage{Role: "assistant", Text: stringFromAny(payload["message"]), Timestamp: timestamp}
+		default:
+			return sessionMarkdownMessage{}
+		}
+	case "response_item":
+		if stringFromAny(payload["type"]) != "message" {
+			return sessionMarkdownMessage{}
+		}
+		role := strings.TrimSpace(stringFromAny(payload["role"]))
+		if role != "user" && role != "assistant" {
+			return sessionMarkdownMessage{}
+		}
+		text := markdownTextFromContent(payload["content"])
+		return sessionMarkdownMessage{Role: role, Text: text, Timestamp: timestamp}
+	default:
+		return sessionMarkdownMessage{}
+	}
+}
+
+func markdownTextFromContent(value any) string {
+	items, ok := value.([]any)
+	if !ok {
+		return stringFromAny(value)
+	}
+	var parts []string
+	for _, item := range items {
+		content, _ := item.(map[string]any)
+		if content == nil {
+			continue
+		}
+		switch stringFromAny(content["type"]) {
+		case "input_text", "output_text", "text":
+			if text := strings.TrimSpace(stringFromAny(content["text"])); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func markdownRoleLabel(role string) string {
+	switch role {
+	case "user":
+		return "User"
+	case "assistant":
+		return "Assistant"
+	default:
+		return markdownLine(role)
+	}
+}
+
+func markdownLine(value string) string {
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return strings.TrimSpace(value)
+}
+
+func markdownInlineCode(value string) string {
+	return strings.ReplaceAll(value, "`", "'")
+}
+
+func exportMarkdownFilename(title string, exportedAt time.Time) string {
+	name := sanitizeExportFilename(title)
+	if name == "" {
+		name = "codex-conversation"
+	}
+	return fmt.Sprintf("%s-%s.md", name, exportedAt.Format("20060102-150405"))
+}
+
+func sanitizeExportFilename(value string) string {
+	value = strings.TrimSpace(value)
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if r < 32 || r == ' ' || r == '\t' || strings.ContainsRune(`<>:"/\|?*`, r) {
+			if !lastDash {
+				builder.WriteRune('-')
+				lastDash = true
+			}
+		} else {
+			builder.WriteRune(r)
+			lastDash = false
+		}
+		if builder.Len() >= 80 {
+			break
+		}
+	}
+	return strings.Trim(builder.String(), "-._ ")
+}
+
+func codexGlobalStatePath(home string) string {
+	return filepath.Join(home, ".codex-global-state.json")
+}
+
+func readCodexGlobalState(home string) (map[string]any, error) {
+	path := codexGlobalStatePath(home)
+	state := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return state, nil
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return state, nil
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	if state == nil {
+		state = map[string]any{}
+	}
+	return state, nil
+}
+
+func writeCodexGlobalState(home string, state map[string]any) error {
+	return atomicWriteJSON(codexGlobalStatePath(home), state)
+}
+
+func updateCodexGlobalStateForProjectlessMove(home string, lookup sessionLookupResult) error {
+	return updateCodexGlobalStateForSession(home, lookup, "", true)
+}
+
+func updateCodexGlobalStateForWorkspaceMove(home string, lookup sessionLookupResult, targetCWD string) error {
+	return updateCodexGlobalStateForSession(home, lookup, targetCWD, false)
+}
+
+func updateCodexGlobalStateForSession(home string, lookup sessionLookupResult, targetCWD string, projectless bool) error {
+	state, err := readCodexGlobalState(home)
+	if err != nil {
+		return err
+	}
+	ids := lookup.allIDs()
+	canonical := lookup.canonicalOr("")
+	if canonical != "" {
+		ids = appendSessionIDVariants(ids, canonical)
+	}
+	ids = uniqueNonEmptyStrings(ids)
+	bareIDs := uniqueBareSessionIDs(ids)
+	idSet := map[string]bool{}
+	for _, id := range ids {
+		idSet[id] = true
+		idSet[bareSessionID(id)] = true
+	}
+
+	if projectless {
+		existing := stringsFromAnySlice(state["projectless-thread-ids"])
+		state["projectless-thread-ids"] = uniqueNonEmptyStrings(append(existing, bareIDs...))
+	} else {
+		var next []string
+		for _, id := range stringsFromAnySlice(state["projectless-thread-ids"]) {
+			if !idSet[id] {
+				next = append(next, id)
+			}
+		}
+		if len(next) > 0 {
+			state["projectless-thread-ids"] = next
+		} else {
+			delete(state, "projectless-thread-ids")
+		}
+	}
+
+	removeGlobalStateMapEntries(state, "thread-workspace-root-hints", idSet)
+	removeGlobalStateMapEntries(state, "thread-project-assignments", idSet)
+	if !projectless && strings.TrimSpace(targetCWD) != "" {
+		hints := mapFromAny(state["thread-workspace-root-hints"])
+		for _, id := range bareIDs {
+			hints[id] = targetCWD
+		}
+		state["thread-workspace-root-hints"] = hints
+	}
+	return writeCodexGlobalState(home, state)
+}
+
+func removeGlobalStateMapEntries(state map[string]any, key string, ids map[string]bool) {
+	values := mapFromAny(state[key])
+	if len(values) == 0 {
+		return
+	}
+	for id := range ids {
+		delete(values, id)
+	}
+	if len(values) == 0 {
+		delete(state, key)
+		return
+	}
+	state[key] = values
+}
+
+func mapFromAny(value any) map[string]any {
+	typed, ok := value.(map[string]any)
+	if !ok || typed == nil {
+		return map[string]any{}
+	}
+	next := map[string]any{}
+	for key, item := range typed {
+		next[key] = item
+	}
+	return next
+}
+
+func stringsFromAnySlice(value any) []string {
+	switch items := value.(type) {
+	case []any:
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			if text := strings.TrimSpace(stringFromAny(item)); text != "" {
+				values = append(values, text)
+			}
+		}
+		return values
+	case []string:
+		values := make([]string, 0, len(items))
+		for _, item := range items {
+			if text := strings.TrimSpace(item); text != "" {
+				values = append(values, text)
+			}
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func uniqueBareSessionIDs(ids []string) []string {
+	values := make([]string, 0, len(ids))
+	for _, id := range ids {
+		values = append(values, bareSessionID(id))
+	}
+	return uniqueNonEmptyStrings(values)
 }
 
 func createSessionDeleteBackup(lookup sessionLookupResult) (string, error) {

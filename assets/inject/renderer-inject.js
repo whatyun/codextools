@@ -3956,10 +3956,11 @@
 
   async function moveSessionToProjectless(ref) {
     if (!ref.session_id) throw new Error("未找到会话 ID");
-    await setProjectlessThreadIds(ref, "add");
-    await clearThreadWorkspaceHints(ref);
-    const sortKey = await postJson("/thread-sort-key", ref).catch(() => ({}));
-    return { status: "moved", session_id: ref.session_id, updated_at: sortKey?.updated_at, updated_at_ms: sortKey?.updated_at_ms, created_at_ms: sortKey?.created_at_ms };
+    const result = await postJson("/move-thread-projectless", ref);
+    if (result.status !== "moved") throw new Error(result.message || "移动普通对话失败");
+    setProjectlessThreadIds(ref, "add").catch(() => {});
+    clearThreadWorkspaceHints(ref).catch(() => {});
+    return result;
   }
 
   function isNativeProjectTarget(target) {
@@ -3972,8 +3973,8 @@
     if (!isNativeProjectTarget(target)) throw new Error("目标项目不在 Codex 项目列表中");
     const result = await postJson("/move-thread-workspace", { ...ref, target_cwd: target.path });
     if (result.status !== "moved") throw new Error(result.message || "移动项目失败");
-    await setProjectlessThreadIds(ref, "remove");
-    await clearThreadWorkspaceHints(ref);
+    setProjectlessThreadIds(ref, "remove").catch(() => {});
+    clearThreadWorkspaceHints(ref).catch(() => {});
     return result;
   }
 
@@ -4074,7 +4075,8 @@
     const shouldReload = isCurrentSessionRow(row, ref);
     row.remove();
     if (shouldReload) {
-      window.location.reload();
+      const home = new URL("/", window.location.href);
+      window.location.assign(home.href);
     }
   }
 

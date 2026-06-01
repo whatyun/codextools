@@ -101,7 +101,7 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 	switch req.URL.Path {
 	case "/backend/status", "/backend/repair":
 		writeHelperJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "后端已连接", "version": version, "transport": "http-helper"})
-	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/thread-sort-key", "/thread-sort-keys":
+	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
 		var payload map[string]any
 		_ = json.Unmarshal(body, &payload)
 		writeHelperJSON(w, http.StatusOK, handleSessionDataRoute(req.URL.Path, payload))
