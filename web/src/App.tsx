@@ -316,6 +316,50 @@ type CcsProvidersResult = CommandResult<{
   providers: CcsProviderImport[];
 }>;
 
+type ComputerUseStatusResult = CommandResult<{
+  platform: string;
+  supported: boolean;
+  envEnabled: boolean;
+  processEnv: string;
+  userEnv: string;
+  marketplaceRoot: string;
+  marketplaceReady: boolean;
+  marketplaceManifest: boolean;
+  marketplacePlugin: boolean;
+  cacheLatest: boolean;
+  cacheVersion: string;
+  configReady: boolean;
+  configPath: string;
+  configMarketplace: boolean;
+  configPlugin: boolean;
+  configWindows: boolean;
+  helperTransport: boolean;
+  backupPath?: string | null;
+  allReady: boolean;
+}>;
+
+type SkillMCPBackupInfo = {
+  id: string;
+  createdAt: string;
+  label: string;
+  path: string;
+  hasSkills: boolean;
+  hasPluginCache: boolean;
+  hasBundledMarket: boolean;
+  hasConfigSnapshot: boolean;
+  configSnapshotBytes: number;
+  sizeBytes: number;
+  restoreSourceBackup?: string;
+  restoreConfigBackup?: string;
+};
+
+type SkillMCPBackupsResult = CommandResult<{
+  backupRoot: string;
+  backups: SkillMCPBackupInfo[];
+  backup?: SkillMCPBackupInfo;
+  currentBackup?: SkillMCPBackupInfo;
+}>;
+
 type LogsResult = CommandResult<{
   path: string;
   text: string;
@@ -471,6 +515,8 @@ export function App() {
   const [relay, setRelay] = useState<RelayResult | null>(null);
   const [relayFiles, setRelayFiles] = useState<RelayFilesResult | null>(null);
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResult | null>(null);
+  const [computerUse, setComputerUse] = useState<ComputerUseStatusResult | null>(null);
+  const [skillMcpBackups, setSkillMcpBackups] = useState<SkillMCPBackupsResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
@@ -630,6 +676,61 @@ export function App() {
     return result;
   };
 
+  const refreshComputerUse = async (silent = false) => {
+    const result = await run(() => call<ComputerUseStatusResult>("load_computer_use_status"));
+    if (result) {
+      setComputerUse(result);
+      if (!silent || result.status === "failed") showResultNotice("Computer Use", result, { silentSuccess: true });
+    }
+    return result;
+  };
+
+  const repairComputerUse = async () => {
+    const result = await run(() => call<ComputerUseStatusResult>("repair_computer_use"));
+    if (result) {
+      setComputerUse(result);
+      showResultNotice("Computer Use 修复", result);
+      await refreshRelayFiles(true);
+    }
+  };
+
+  const refreshSkillMcpBackups = async (silent = false) => {
+    const result = await run(() => call<SkillMCPBackupsResult>("list_skill_mcp_backups"));
+    if (result) {
+      setSkillMcpBackups(result);
+      if (!silent || !isSuccessStatus(result.status)) showResultNotice("Skill/MCP 备份", result, { silentSuccess: true });
+    }
+    return result;
+  };
+
+  const createSkillMcpBackup = async () => {
+    const result = await run(() => call<SkillMCPBackupsResult>("create_skill_mcp_backup", { request: { label: "manual" } }));
+    if (result) {
+      setSkillMcpBackups(result);
+      showResultNotice("Skill/MCP 备份", result);
+    }
+  };
+
+  const restoreSkillMcpBackup = async (id: string) => {
+    if (!window.confirm(`恢复 Skill/MCP 备份“${id}”？恢复前会先备份当前状态。`)) return;
+    const result = await run(() => call<SkillMCPBackupsResult>("restore_skill_mcp_backup", { request: { id } }));
+    if (result) {
+      setSkillMcpBackups(result);
+      showResultNotice("Skill/MCP 恢复", result);
+      await refreshComputerUse(true);
+      await refreshRelayFiles(true);
+    }
+  };
+
+  const deleteSkillMcpBackup = async (id: string) => {
+    if (!window.confirm(`删除 Skill/MCP 备份“${id}”？此操作不可撤销。`)) return;
+    const result = await run(() => call<SkillMCPBackupsResult>("delete_skill_mcp_backup", { request: { id } }));
+    if (result) {
+      setSkillMcpBackups(result);
+      showResultNotice("Skill/MCP 删除", result);
+    }
+  };
+
   const refreshToolHealth = async (silent = false) => {
     const [overviewResult, guideResult, relayResult, ccsResult] = await Promise.all([
       refreshOverview(true),
@@ -693,7 +794,11 @@ export function App() {
       await refreshCcsProviders(true);
     }
     if (next === "settings") await refreshSettings(true);
-    if (next === "providerSync") await refreshSettings(true);
+    if (next === "providerSync") {
+      await refreshSettings(true);
+      await refreshComputerUse(true);
+      await refreshSkillMcpBackups(true);
+    }
     if (next === "logs") await refreshLogs(true);
     if (next === "diagnostics") await refreshDiagnostics(true);
     if (next === "maintenance") {
@@ -1228,6 +1333,12 @@ export function App() {
       syncProvidersNow,
       repairCodexPlugins,
       repairCodexGoals,
+      refreshComputerUse,
+      repairComputerUse,
+      refreshSkillMcpBackups,
+      createSkillMcpBackup,
+      restoreSkillMcpBackup,
+      deleteSkillMcpBackup,
       setLaunchMode: async (launchMode: LaunchMode) => {
         await saveLaunchMode(launchMode);
       },
@@ -1275,7 +1386,7 @@ export function App() {
       disableWatcher: () => watcherAction("disable_watcher"),
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
     }),
-    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay],
+    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups],
   );
 
   return (
@@ -1378,7 +1489,14 @@ export function App() {
             <EnhanceScreen form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
           ) : null}
           {route === "providerSync" ? (
-            <ProviderSyncScreen settings={settings} form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
+            <ProviderSyncScreen
+              settings={settings}
+              computerUse={computerUse}
+              skillMcpBackups={skillMcpBackups}
+              form={settingsForm}
+              onFormChange={setSettingsForm}
+              actions={actions}
+            />
           ) : null}
           {route === "maintenance" ? (
             <MaintenanceScreen
@@ -1432,6 +1550,12 @@ type Actions = {
   syncProvidersNow: () => Promise<void>;
   repairCodexPlugins: () => Promise<void>;
   repairCodexGoals: () => Promise<void>;
+  refreshComputerUse: () => Promise<ComputerUseStatusResult | null>;
+  repairComputerUse: () => Promise<void>;
+  refreshSkillMcpBackups: () => Promise<SkillMCPBackupsResult | null>;
+  createSkillMcpBackup: () => Promise<void>;
+  restoreSkillMcpBackup: (id: string) => Promise<void>;
+  deleteSkillMcpBackup: (id: string) => Promise<void>;
   setLaunchMode: (launchMode: LaunchMode) => Promise<void>;
   refreshRelay: () => Promise<RelayResult | null>;
   refreshSettings: () => Promise<SettingsResult | null>;
@@ -2245,6 +2369,13 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
+function formatBackupTime(value: string) {
+  if (!value) return "未知时间";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
 function NavGroup({
   activeRoute,
   group,
@@ -2583,15 +2714,20 @@ function UserScriptsScreen({ settings, market, actions }: { settings: SettingsRe
 
 function ProviderSyncScreen({
   settings,
+  computerUse,
+  skillMcpBackups,
   form,
   onFormChange,
   actions,
 }: {
   settings: SettingsResult | null;
+  computerUse: ComputerUseStatusResult | null;
+  skillMcpBackups: SkillMCPBackupsResult | null;
   form: BackendSettings;
   onFormChange: (value: BackendSettings) => void;
   actions: Actions;
 }) {
+  const backups = skillMcpBackups?.backups ?? [];
   return (
     <>
       <Panel>
@@ -2631,14 +2767,94 @@ function ProviderSyncScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="说明" detail="会话、插件和追求目标都可以在这里一键整理" />
+        <CardHead title="Computer Use 修复" detail="Windows 本地修复 Computer Use 插件、marketplace、环境变量和 config.toml" />
+        <CardContent>
+          <div className="relay-grid compact">
+            <Metric label="平台" value={platformLabel(computerUse?.platform ?? "unknown")} />
+            <Metric label="总状态" value={computerUse?.allReady ? "可用" : computerUse?.supported === false ? "不支持" : "待修复"} />
+            <Metric label="环境变量" value={computerUse?.envEnabled ? "已开启" : "未开启"} />
+            <Metric label="插件缓存" value={computerUse?.cacheLatest ? "已写入" : "缺失"} />
+            <Metric label="Marketplace" value={computerUse?.marketplaceManifest && computerUse?.marketplacePlugin ? "完整" : "待修复"} />
+            <Metric label="Config 表" value={computerUse?.configReady ? "完整" : "待修复"} />
+          </div>
+          <div className="status-table">
+            <StatusRow title="环境变量" status={computerUse?.envEnabled ? "ok" : "missing"} path={"User=" + (computerUse?.userEnv || "-") + " Process=" + (computerUse?.processEnv || "-")} />
+            <StatusRow title="Marketplace" status={computerUse?.marketplaceManifest && computerUse?.marketplacePlugin ? "ok" : "missing"} path={computerUse?.marketplaceRoot ?? null} />
+            <StatusRow title="Helper transport" status={computerUse?.helperTransport ? "ok" : "missing"} path={computerUse?.cacheVersion ? "computer-use/" + computerUse.cacheVersion : null} />
+            <StatusRow title="config.toml" status={computerUse?.configReady ? "ok" : "missing"} path={computerUse?.configPath ?? null} />
+          </div>
+          {computerUse?.backupPath ? <div className="path-line compact-path">本次配置备份：{computerUse.backupPath}</div> : null}
+          <Toolbar>
+            <Button onClick={() => void actions.refreshComputerUse()} variant="outline">
+              <RefreshCw className="h-4 w-4" />
+              刷新状态
+            </Button>
+            <Button disabled={computerUse?.supported === false} onClick={() => void actions.repairComputerUse()} variant="secondary">
+              <Wrench className="h-4 w-4" />
+              一键修复 Computer Use
+            </Button>
+          </Toolbar>
+        </CardContent>
+      </Panel>
+      <Panel>
+        <CardHead title="Skill/MCP 备份" detail={skillMcpBackups?.backupRoot ?? "快照保存在 ~/.codex/backups_state/skill-mcp"} />
+        <CardContent>
+          <div className="relay-grid compact">
+            <Metric label="备份数量" value={String(backups.length) + " 个"} />
+            <Metric label="最近备份" value={backups[0]?.id ?? "暂无"} />
+            <Metric label="保存范围" value="skills / plugins cache / marketplace / config 表" />
+          </div>
+          <Toolbar>
+            <Button onClick={() => void actions.refreshSkillMcpBackups()} variant="outline">
+              <RefreshCw className="h-4 w-4" />
+              刷新
+            </Button>
+            <Button onClick={() => void actions.createSkillMcpBackup()} variant="secondary">
+              <Save className="h-4 w-4" />
+              创建备份
+            </Button>
+          </Toolbar>
+          <div className="table backup-table">
+            {backups.length ? (
+              backups.map((backup) => (
+                <div className="backup-row" key={backup.id}>
+                  <div>
+                    <strong>{backup.id}</strong>
+                    <span>{backup.label || "manual"} / {formatBackupTime(backup.createdAt)} / {formatBytes(backup.sizeBytes)}</span>
+                    <small>{backup.path}</small>
+                  </div>
+                  <div className="backup-flags">
+                    <Badge status={backup.hasSkills ? "ok" : "missing"} />
+                    <Badge status={backup.hasPluginCache ? "ok" : "missing"} />
+                    <Badge status={backup.hasConfigSnapshot ? "ok" : "missing"} />
+                  </div>
+                  <div className="script-row-actions">
+                    <Button onClick={() => void actions.restoreSkillMcpBackup(backup.id)} size="sm" variant="secondary">
+                      <RefreshCw className="h-4 w-4" />
+                      恢复
+                    </Button>
+                    <Button onClick={() => void actions.deleteSkillMcpBackup(backup.id)} size="sm" variant="outline">
+                      <Trash2 className="h-4 w-4" />
+                      删除
+                    </Button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="empty">暂无 Skill/MCP 备份。</div>
+            )}
+          </div>
+        </CardContent>
+      </Panel>
+      <Panel>
+        <CardHead title="说明" detail="会话、插件、Computer Use 和 Skill/MCP 快照都可以在这里整理" />
         <CardContent>
           <GuideList
             items={[
               "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属并补回插件配置。",
-              "需要马上整理旧对话时，可以点击“立刻修复历史会话”。",
               "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置。",
-              "修复追求目标会开启 config.toml 里的 features.goals，用于恢复 Codex 的目标模式入口。",
+              "Computer Use 修复只针对 Windows，会写入本地兼容插件和用户环境变量，修复后需要重启 Codex。",
+              "Skill/MCP 恢复前会自动备份当前状态，并只替换 config.toml 里的 MCP、插件、市场、features、windows 表。",
               "切回官方时历史会话会整理为 openai；切到 API 时会整理为 CodexPlusPlus。",
             ]}
           />

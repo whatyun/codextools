@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -731,6 +732,236 @@ func TestRepairCodexPluginConfigRestoresCachedPluginTables(t *testing.T) {
 		if !strings.Contains(updated, expected) {
 			t.Fatalf("updated config missing %q:\n%s", expected, updated)
 		}
+	}
+}
+
+func TestWriteCodexConfigWithBackupCreatesUniqueBackup(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	original := "model_provider = \"openai\"\n"
+	writeTestFile(t, configPath, original)
+
+	firstBackup, err := writeCodexConfigWithBackup(configPath, "model_provider = \"one\"\n", "unit")
+	if err != nil {
+		t.Fatalf("first write failed: %v", err)
+	}
+	if firstBackup == nil {
+		t.Fatal("first write should return a backup path")
+	}
+	firstData, _ := os.ReadFile(*firstBackup)
+	if string(firstData) != original {
+		t.Fatalf("first backup content mismatch:\n%s", string(firstData))
+	}
+	secondBackup, err := writeCodexConfigWithBackup(configPath, "model_provider = \"two\"\n", "unit")
+	if err != nil {
+		t.Fatalf("second write failed: %v", err)
+	}
+	if secondBackup == nil || *secondBackup == *firstBackup {
+		t.Fatalf("second write should create a unique backup: first=%v second=%v", firstBackup, secondBackup)
+	}
+	secondData, _ := os.ReadFile(*secondBackup)
+	if string(secondData) != "model_provider = \"one\"\n" {
+		t.Fatalf("second backup content mismatch:\n%s", string(secondData))
+	}
+}
+
+func TestSaveRelayFileConfigReturnsBackupPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	writeTestFile(t, configPath, "before = true\n")
+
+	result := (&server{}).saveRelayFile(map[string]any{
+		"request": map[string]any{"kind": "config", "contents": "after = true\n"},
+	})
+
+	if result["status"] != "ok" {
+		t.Fatalf("save config should succeed: %#v", result)
+	}
+	backupPath := stringFromAny(result["backupPath"])
+	if backupPath == "" {
+		t.Fatalf("save config should return backupPath: %#v", result)
+	}
+	backup, _ := os.ReadFile(backupPath)
+	if string(backup) != "before = true\n" {
+		t.Fatalf("backup content mismatch:\n%s", string(backup))
+	}
+}
+
+func TestRelaySwitchesReturnBackupPath(t *testing.T) {
+	for _, pure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pure=%v", pure), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), "before = true\n")
+			settings := defaultSettings()
+			settings.RelayProfiles = []relayProfile{{
+				ID:        "relay",
+				Name:      "Relay",
+				BaseURL:   "https://api.example.com",
+				APIKey:    "relay-key",
+				RelayMode: "pureApi",
+				Protocol:  "responses",
+			}}
+			settings.ActiveRelayID = "relay"
+			if err := saveSettings(settings); err != nil {
+				t.Fatalf("failed to save settings: %v", err)
+			}
+			var result commandResult
+			if pure {
+				result = (&server{}).applyRelayInjection(true)
+			} else {
+				result = (&server{}).applyRelayInjection(false)
+			}
+			if result["status"] != "ok" {
+				t.Fatalf("relay switch should succeed: %#v", result)
+			}
+			backupPath := stringFromAny(result["backupPath"])
+			if backupPath == "" {
+				t.Fatalf("relay switch should return backupPath: %#v", result)
+			}
+			backup, _ := os.ReadFile(backupPath)
+			if string(backup) != "before = true\n" {
+				t.Fatalf("relay backup content mismatch:\n%s", string(backup))
+			}
+		})
+	}
+}
+
+func TestRepairComputerUseBuildsWindowsCompatibilityTree(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), "model_provider = \"openai\"\n")
+
+	status, err := repairComputerUse(home, "windows", false)
+	if err != nil {
+		t.Fatalf("repair computer use failed: %v", err)
+	}
+	if !status.MarketplacePlugin || !status.CacheLatest || !status.HelperTransport || !status.ConfigReady {
+		t.Fatalf("computer use status incomplete: %#v", status)
+	}
+	if status.BackupPath == nil {
+		t.Fatal("computer use repair should backup existing config")
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", "plugins", "computer-use", ".codex-plugin", "plugin.json"),
+		filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "latest", ".codex-plugin", "plugin.json"),
+		filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "latest", "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js"),
+	} {
+		if !fileExists(path) {
+			t.Fatalf("expected generated path: %s", path)
+		}
+	}
+	config := readFile(filepath.Join(home, "config.toml"))
+	for _, expected := range []string{
+		"[marketplaces.openai-bundled]",
+		`[plugins."computer-use@openai-bundled"]`,
+		"[windows]",
+		`sandbox = "unelevated"`,
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("config missing %q:\n%s", expected, config)
+		}
+	}
+}
+
+func TestSkillMCPBackupRestoreOnlyReplacesManagedState(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "skills", "alpha", "SKILL.md"), "alpha")
+	writeTestFile(t, filepath.Join(home, "plugins", "cache", "openai-bundled", "browser", "v1", ".codex-plugin", "plugin.json"), "{}")
+	writeTestFile(t, filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", ".agents", "plugins", "marketplace.json"), "{}")
+	writeTestFile(t, filepath.Join(home, "config.toml"), strings.Join([]string{
+		`model_provider = "openai"`,
+		`OPENAI_API_KEY = "keep"`,
+		``,
+		`[model_providers.openai]`,
+		`name = "OpenAI"`,
+		``,
+		`[mcp_servers.old]`,
+		`command = "old"`,
+		``,
+		`[plugins."old@market"]`,
+		`enabled = true`,
+		``,
+		`[features]`,
+		`goals = true`,
+		``,
+	}, "\n"))
+	backup, err := createSkillMCPBackup(home, "first")
+	if err != nil {
+		t.Fatalf("create backup failed: %v", err)
+	}
+	if !backup.HasSkills || !backup.HasPluginCache || !backup.HasBundledMarket || !backup.HasConfigSnapshot {
+		t.Fatalf("backup missing expected parts: %#v", backup)
+	}
+
+	_ = os.RemoveAll(filepath.Join(home, "skills"))
+	writeTestFile(t, filepath.Join(home, "skills", "beta", "SKILL.md"), "beta")
+	_ = os.RemoveAll(filepath.Join(home, "plugins", "cache"))
+	writeTestFile(t, filepath.Join(home, "plugins", "cache", "other", "plugin", ".codex-plugin", "plugin.json"), "{}")
+	writeTestFile(t, filepath.Join(home, "config.toml"), strings.Join([]string{
+		`model_provider = "custom"`,
+		`OPENAI_API_KEY = "preserve"`,
+		``,
+		`[model_providers.custom]`,
+		`name = "Custom"`,
+		``,
+		`[mcp_servers.new]`,
+		`command = "new"`,
+		``,
+		`[plugins."new@market"]`,
+		`enabled = true`,
+		``,
+		`[windows]`,
+		`sandbox = "danger-full-access"`,
+		``,
+	}, "\n"))
+
+	current, restored, err := restoreSkillMCPBackup(home, backup.ID)
+	if err != nil {
+		t.Fatalf("restore backup failed: %v", err)
+	}
+	if current.ID == "" || restored.RestoreSourceBackup != current.ID {
+		t.Fatalf("restore should create current backup: current=%#v restored=%#v", current, restored)
+	}
+	if !fileExists(filepath.Join(home, "skills", "alpha", "SKILL.md")) || fileExists(filepath.Join(home, "skills", "beta", "SKILL.md")) {
+		t.Fatalf("skills directory was not restored")
+	}
+	config := readFile(filepath.Join(home, "config.toml"))
+	for _, expected := range []string{
+		`model_provider = "custom"`,
+		`OPENAI_API_KEY = "preserve"`,
+		`[model_providers.custom]`,
+		`[mcp_servers.old]`,
+		`[plugins."old@market"]`,
+		`[features]`,
+		`goals = true`,
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("restored config missing %q:\n%s", expected, config)
+		}
+	}
+	for _, unexpected := range []string{
+		`[mcp_servers.new]`,
+		`[plugins."new@market"]`,
+		`sandbox = "danger-full-access"`,
+		`[model_providers.openai]`,
+	} {
+		if strings.Contains(config, unexpected) {
+			t.Fatalf("restored config should not contain %q:\n%s", unexpected, config)
+		}
+	}
+}
+
+func TestSkillMCPBackupRejectsPathTraversal(t *testing.T) {
+	home := t.TempDir()
+	if _, err := resolveSkillMCPBackupDir(home, "../escape"); err == nil {
+		t.Fatal("resolve should reject traversal id")
+	}
+	if err := deleteSkillMCPBackup(home, "../escape"); err == nil {
+		t.Fatal("delete should reject traversal id")
+	}
+	if _, _, err := restoreSkillMCPBackup(home, "../escape"); err == nil {
+		t.Fatal("restore should reject traversal id")
 	}
 }
 

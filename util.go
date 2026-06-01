@@ -216,6 +216,13 @@ func nullableString(value string) any {
 	return value
 }
 
+func nullableStringPtr(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return nullableString(*value)
+}
+
 func minRunes(value string, max int) int {
 	count := 0
 	for range value {

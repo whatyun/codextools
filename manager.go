@@ -181,6 +181,18 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.repairCodexPlugins()
 	case "repair_codex_goals":
 		return s.repairCodexGoals()
+	case "load_computer_use_status":
+		return s.loadComputerUseStatus()
+	case "repair_computer_use":
+		return s.repairComputerUse()
+	case "list_skill_mcp_backups":
+		return s.listSkillMCPBackups()
+	case "create_skill_mcp_backup":
+		return s.createSkillMCPBackup(args)
+	case "restore_skill_mcp_backup":
+		return s.restoreSkillMCPBackup(args)
+	case "delete_skill_mcp_backup":
+		return s.deleteSkillMCPBackup(args)
 	case "refresh_script_market":
 		return s.refreshScriptMarket(ctx)
 	case "install_market_script":

@@ -127,14 +127,11 @@ func repairCodexConfig(home string, options codexConfigRepairOptions) codexConfi
 		result.GoalsConfigChanged = updated != beforeGoals
 	}
 	if updated != original {
-		backupPath, err := backupCodexConfig(configPath, "config-repair")
+		backupPath, err := writeCodexConfigWithBackup(configPath, updated, "config-repair")
 		if err != nil {
-			return codexConfigRepairResult{Status: "failed", Message: "备份 config.toml 失败：" + err.Error()}
+			return codexConfigRepairResult{Status: "failed", Message: "写入 config.toml 失败：" + err.Error(), BackupPath: backupPath}
 		}
-		result.BackupPath = &backupPath
-		if err := atomicWrite(configPath, []byte(updated)); err != nil {
-			return codexConfigRepairResult{Status: "failed", Message: "写入 config.toml 失败：" + err.Error(), BackupPath: &backupPath}
-		}
+		result.BackupPath = backupPath
 	}
 	result.Message = codexConfigRepairMessage(result, options, updated != original)
 	return result

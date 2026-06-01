@@ -164,6 +164,43 @@ type marketplaceSpec struct {
 	Source string
 }
 
+type computerUseStatus struct {
+	Platform            string  `json:"platform"`
+	Supported           bool    `json:"supported"`
+	EnvEnabled          bool    `json:"envEnabled"`
+	ProcessEnv          string  `json:"processEnv"`
+	UserEnv             string  `json:"userEnv"`
+	MarketplaceRoot     string  `json:"marketplaceRoot"`
+	MarketplaceReady    bool    `json:"marketplaceReady"`
+	MarketplaceManifest bool    `json:"marketplaceManifest"`
+	MarketplacePlugin   bool    `json:"marketplacePlugin"`
+	CacheLatest         bool    `json:"cacheLatest"`
+	CacheVersion        string  `json:"cacheVersion"`
+	ConfigReady         bool    `json:"configReady"`
+	ConfigPath          string  `json:"configPath"`
+	ConfigMarketplace   bool    `json:"configMarketplace"`
+	ConfigPlugin        bool    `json:"configPlugin"`
+	ConfigWindows       bool    `json:"configWindows"`
+	HelperTransport     bool    `json:"helperTransport"`
+	BackupPath          *string `json:"backupPath,omitempty"`
+	AllReady            bool    `json:"allReady"`
+}
+
+type skillMCPBackupInfo struct {
+	ID                  string `json:"id"`
+	CreatedAt           string `json:"createdAt"`
+	Label               string `json:"label"`
+	Path                string `json:"path"`
+	HasSkills           bool   `json:"hasSkills"`
+	HasPluginCache      bool   `json:"hasPluginCache"`
+	HasBundledMarket    bool   `json:"hasBundledMarket"`
+	HasConfigSnapshot   bool   `json:"hasConfigSnapshot"`
+	ConfigSnapshotBytes int64  `json:"configSnapshotBytes"`
+	SizeBytes           int64  `json:"sizeBytes"`
+	RestoreSourceBackup string `json:"restoreSourceBackup,omitempty"`
+	RestoreConfigBackup string `json:"restoreConfigBackup,omitempty"`
+}
+
 type sessionChange struct {
 	Path              string
 	OriginalFirstLine string

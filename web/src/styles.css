@@ -1805,6 +1805,50 @@ body {
   justify-content: flex-end;
 }
 
+.backup-table {
+  margin-top: 12px;
+  gap: 0;
+}
+
+.backup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid hsl(var(--border) / 0.72);
+  padding: 12px 0;
+}
+
+.backup-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.backup-row strong,
+.backup-row span,
+.backup-row small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-row span,
+.backup-row small {
+  color: hsl(var(--muted-foreground));
+}
+
+.backup-row small {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.backup-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .script-market-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

@@ -303,25 +303,26 @@ func ensureRelaySnapshot(profile relayProfile, currentConfig string, allowLegacy
 	return profile
 }
 
-func writeRelaySnapshot(home string, relay relayProfile, pure bool) error {
+func writeRelaySnapshot(home string, relay relayProfile, pure bool) (*string, error) {
 	if err := os.MkdirAll(home, 0o755); err != nil {
-		return err
+		return nil, err
 	}
 	configContents := relay.ConfigContents
 	if pure {
 		configContents = ensureConfigBearerToken(configContents, strings.TrimSpace(relay.APIKey))
 	}
-	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configContents), 0o644); err != nil {
-		return err
+	backupPath, err := writeCodexConfigWithBackup(filepath.Join(home, "config.toml"), configContents, "relay")
+	if err != nil {
+		return backupPath, err
 	}
 	authContents := canonicalAuthContents(relay)
 	if pure && strings.TrimSpace(authContents) == "" {
-		return nil
+		return backupPath, nil
 	}
 	if strings.TrimSpace(authContents) != "" {
-		return os.WriteFile(filepath.Join(home, "auth.json"), []byte(authContents), 0o600)
+		return backupPath, os.WriteFile(filepath.Join(home, "auth.json"), []byte(authContents), 0o600)
 	}
-	return nil
+	return backupPath, nil
 }
 
 func (s *server) saveRelayFile(args map[string]any) commandResult {
@@ -340,10 +341,21 @@ func (s *server) saveRelayFile(args map[string]any) commandResult {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return failed("保存配置文件失败："+err.Error(), relayFilesPayload(codexHomeDir()))
 	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		return failed("保存配置文件失败："+err.Error(), relayFilesPayload(codexHomeDir()))
+	var backupPath *string
+	var err error
+	if kind == "config" {
+		backupPath, err = writeCodexConfigWithBackup(path, contents, "manual-save")
+	} else {
+		err = os.WriteFile(path, []byte(contents), 0o644)
 	}
-	return ok("配置文件已保存。", relayFilesPayload(codexHomeDir()))
+	if err != nil {
+		payload := relayFilesPayload(codexHomeDir())
+		payload["backupPath"] = nullableStringPtr(backupPath)
+		return failed("保存配置文件失败："+err.Error(), payload)
+	}
+	payload := relayFilesPayload(codexHomeDir())
+	payload["backupPath"] = nullableStringPtr(backupPath)
+	return ok("配置文件已保存。", payload)
 }
 
 func (s *server) importCurrentRelayFiles(args map[string]any) commandResult {
@@ -540,7 +552,8 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
-	if err := writeRelaySnapshot(home, relay, pure); err != nil {
+	backupPath, err := writeRelaySnapshot(home, relay, pure)
+	if err != nil {
 		if pure {
 			return failed("写入中转 API 模式失败："+err.Error(), relayStatusFromHome(home))
 		}
@@ -548,6 +561,7 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	}
 	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true})
 	payload := relayStatusFromHome(home)
+	payload["backupPath"] = nullableStringPtr(backupPath)
 	payload["pluginRepair"] = map[string]any{"status": repairResult.Status, "pluginCount": repairResult.PluginCount, "marketplaceCount": repairResult.MarketplaceCount, "backupPath": repairResult.BackupPath}
 	if repairResult.Status == "failed" {
 		if pure {
@@ -601,7 +615,8 @@ func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 	configPath := filepath.Join(home, "config.toml")
 	existing, _ := os.ReadFile(configPath)
 	updated := upsertModelProviderConfig(string(existing), baseURL, strings.TrimSpace(relay.APIKey), relay)
-	return os.WriteFile(configPath, []byte(updated), 0o644)
+	_, err := writeCodexConfigWithBackup(configPath, updated, "relay-apply")
+	return err
 }
 
 func effectiveBaseURL(relay relayProfile) string {
@@ -672,10 +687,13 @@ func (s *server) clearRelayInjection() commandResult {
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
-	if err := writeRelaySnapshot(home, relay, false); err != nil {
+	backupPath, err := writeRelaySnapshot(home, relay, false)
+	if err != nil {
 		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))
 	}
-	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式。", relayStatusFromHome(home))
+	payload := relayStatusFromHome(home)
+	payload["backupPath"] = nullableStringPtr(backupPath)
+	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式。", payload)
 }
 
 func writeOfficialAuthForRelay(home string, relay relayProfile) error {

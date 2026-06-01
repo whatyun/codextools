@@ -109,6 +109,83 @@ func removeTable(contents, table string) string {
 	return strings.Join(lines, "\n")
 }
 
+func upsertTomlTable(contents, table string, body []string) string {
+	header := "[" + table + "]"
+	lines := append([]string{header}, body...)
+	return appendTomlBlock(removeTable(contents, table), lines)
+}
+
+func extractTomlTables(contents string, match func(table string) bool) string {
+	var blocks [][]string
+	lines := splitLines(contents)
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+			i++
+			continue
+		}
+		table := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+		start := i
+		i++
+		for i < len(lines) {
+			next := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+				break
+			}
+			i++
+		}
+		if match(table) {
+			block := append([]string{}, lines[start:i]...)
+			for len(block) > 0 && strings.TrimSpace(block[len(block)-1]) == "" {
+				block = block[:len(block)-1]
+			}
+			blocks = append(blocks, block)
+		}
+	}
+	var out []string
+	for index, block := range blocks {
+		if index > 0 {
+			out = append(out, "")
+		}
+		out = append(out, block...)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return ensureTrailingNewline(strings.Join(out, "\n"))
+}
+
+func removeTomlTablesMatching(contents string, match func(table string) bool) string {
+	lines := splitLines(contents)
+	var out []string
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			table := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+			start := i
+			i++
+			for i < len(lines) {
+				next := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+					break
+				}
+				i++
+			}
+			if match(table) {
+				for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+					out = out[:len(out)-1]
+				}
+				continue
+			}
+			out = append(out, lines[start:i]...)
+			continue
+		}
+		out = append(out, lines[i])
+		i++
+	}
+	return ensureTrailingNewline(strings.TrimRight(strings.Join(out, "\n"), "\n"))
+}
+
 func unquoteToml(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, `"`)
