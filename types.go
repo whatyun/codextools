@@ -47,12 +47,13 @@ type relayProfile struct {
 }
 
 type launchStatus struct {
-	Status      string  `json:"status"`
-	Message     string  `json:"message"`
-	StartedAtMS uint64  `json:"started_at_ms"`
-	DebugPort   *uint16 `json:"debug_port"`
-	HelperPort  *uint16 `json:"helper_port"`
-	CodexApp    *string `json:"codex_app"`
+	Status      string         `json:"status"`
+	Message     string         `json:"message"`
+	StartedAtMS uint64         `json:"started_at_ms"`
+	DebugPort   *uint16        `json:"debug_port"`
+	HelperPort  *uint16        `json:"helper_port"`
+	CodexApp    *string        `json:"codex_app"`
+	Detail      map[string]any `json:"detail,omitempty"`
 }
 
 type launcherRuntime struct {

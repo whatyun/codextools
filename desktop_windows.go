@@ -27,6 +27,7 @@ func runManagerDesktopWindow(title, url string) error {
 		},
 	})
 	if w == nil {
+		appendDiagnosticLog("manager.webview2_fallback", map[string]any{"url": url, "reason": "webview2 unavailable"})
 		return openURL(url)
 	}
 	defer w.Destroy()

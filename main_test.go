@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -1182,13 +1183,38 @@ func TestCodexLaunchPayloadPrefersDirectExecutableWhenReadable(t *testing.T) {
 }
 
 func TestWindowsPackagedExplorerCommandShape(t *testing.T) {
-	command := windowsPackagedExplorerCommand("OpenAI.Codex_abc!App", []string{"--remote-debugging-port=9229"})
+	command := windowsPackagedExplorerCommand("OpenAI.Codex_abc!App")
 
-	if len(command) != 3 {
+	if len(command) != 2 {
 		t.Fatalf("command length mismatch: %#v", command)
 	}
-	if command[0] != "explorer.exe" || command[1] != `shell:AppsFolder\OpenAI.Codex_abc!App` || command[2] != "--remote-debugging-port=9229" {
+	if command[0] != "explorer.exe" || command[1] != `shell:AppsFolder\OpenAI.Codex_abc!App` {
 		t.Fatalf("command shape mismatch: %#v", command)
+	}
+}
+
+func TestPackagedCodexDebugPortErrorGivesActionableGuidance(t *testing.T) {
+	err := packagedCodexDebugPortError("OpenAI.Codex_abc!App", 9229, "explorer")
+	message := err.Error()
+
+	for _, expected := range []string{"Windows Store/MSIX", "调试端口 9229", "Codex.exe", "--remote-debugging-port"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("error should contain %q, got %q", expected, message)
+		}
+	}
+}
+
+func TestLaunchFailureDetailIncludesRecommendedAction(t *testing.T) {
+	detail := launchFailureDetail(`C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`, 9229, 57321, errors.New("no cdp"))
+
+	if got := stringFromAny(detail["recommended_action"]); !strings.Contains(got, "Codex.exe") {
+		t.Fatalf("recommended action should mention Codex.exe, got %q", got)
+	}
+	if got := stringFromAny(detail["error"]); got != "no cdp" {
+		t.Fatalf("error mismatch: %q", got)
+	}
+	if got := stringFromAny(detail["codex_app"]); got == "" {
+		t.Fatal("codex app should be included")
 	}
 }
 

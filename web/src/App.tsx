@@ -108,6 +108,7 @@ type LaunchStatus = {
   debug_port: number | null;
   helper_port: number | null;
   codex_app: string | null;
+  detail?: Record<string, unknown>;
 };
 
 type OverviewResult = CommandResult<{
@@ -451,7 +452,7 @@ function syncMarketInstalledState(current: ScriptMarketResult | null, userScript
   };
 }
 
-type Route = "overview" | "installGuide" | "relay" | "enhance" | "providerSync" | "maintenance" | "settings" | "logs" | "diagnostics";
+type Route = "overview" | "installGuide" | "relay" | "enhance" | "userScripts" | "providerSync" | "maintenance" | "settings" | "logs" | "diagnostics" | "about";
 type Theme = "dark" | "light";
 
 const routes: Array<{ id: Route; label: string; helper: string; group: "main" | "support"; icon: LucideIcon }> = [
@@ -459,11 +460,13 @@ const routes: Array<{ id: Route; label: string; helper: string; group: "main" | 
   { id: "installGuide", label: "新手引导", helper: "安装和配置", group: "main", icon: Sparkles },
   { id: "relay", label: "连接服务", helper: "账号和 API", group: "main", icon: KeyRound },
   { id: "enhance", label: "界面功能", helper: "删除、导出、脚本", group: "main", icon: Hammer },
+  { id: "userScripts", label: "脚本中心", helper: "市场和本地脚本", group: "main", icon: ScrollText },
   { id: "maintenance", label: "修复工具", helper: "入口和路径", group: "main", icon: Wrench },
   { id: "providerSync", label: "历史修复", helper: "旧对话可见", group: "support", icon: Link2 },
   { id: "settings", label: "高级设置", helper: "启动参数", group: "support", icon: Settings },
   { id: "logs", label: "运行日志", helper: "排查问题", group: "support", icon: ScrollText },
   { id: "diagnostics", label: "诊断报告", helper: "复制给开发者", group: "support", icon: Activity },
+  { id: "about", label: "关于", helper: "版本和项目", group: "support", icon: Info },
 ];
 
 const defaultSettings: BackendSettings = {
@@ -793,6 +796,10 @@ export function App() {
       await refreshRelayFiles(true);
       await refreshCcsProviders(true);
     }
+    if (next === "userScripts") {
+      await refreshSettings(true);
+      await refreshScriptMarket(true);
+    }
     if (next === "settings") await refreshSettings(true);
     if (next === "providerSync") {
       await refreshSettings(true);
@@ -804,6 +811,10 @@ export function App() {
     if (next === "maintenance") {
       await refreshOverview(true);
       await refreshWatcher(true);
+    }
+    if (next === "about") {
+      await refreshOverview(true);
+      await checkUpdate(true);
     }
   };
 
@@ -1488,6 +1499,7 @@ export function App() {
           {route === "enhance" ? (
             <EnhanceScreen form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
           ) : null}
+          {route === "userScripts" ? <UserScriptsScreen settings={settings} market={scriptMarket} actions={actions} /> : null}
           {route === "providerSync" ? (
             <ProviderSyncScreen
               settings={settings}
@@ -1517,6 +1529,7 @@ export function App() {
           {route === "diagnostics" ? (
             <DiagnosticsScreen diagnostics={diagnostics} actions={actions} />
           ) : null}
+          {route === "about" ? <AboutScreen overview={overview} updateInfo={updateInfo} actions={actions} /> : null}
         </section>
       </main>
       {notice ? (
@@ -3993,12 +4006,18 @@ function Badge({ status }: { status: string }) {
 
 function LatestLaunch({ status }: { status: LaunchStatus | null }) {
   if (!status) return <div className="empty">暂无启动状态。</div>;
+  const recommendedAction = typeof status.detail?.recommended_action === "string" ? status.detail.recommended_action : "";
+  const activationMethod = typeof status.detail?.activation_method === "string" ? status.detail.activation_method : "";
+  const appUserModelId = typeof status.detail?.appUserModelId === "string" ? status.detail.appUserModelId : "";
   return (
     <div className="metric-list">
       <Metric label="状态" value={status.status} />
       <Metric label="消息" value={status.message} />
       <Metric label="Debug" value={String(status.debug_port ?? "-")} />
       <Metric label="Helper" value={String(status.helper_port ?? "-")} />
+      {activationMethod ? <Metric label="启动方式" value={activationMethod} /> : null}
+      {appUserModelId ? <Metric label="AppUserModelID" value={appUserModelId} /> : null}
+      {recommendedAction ? <Metric label="建议处理" value={recommendedAction} /> : null}
       <Metric label="时间" value={formatTime(status.started_at_ms)} />
     </div>
   );
@@ -4048,11 +4067,13 @@ function routeSubtitle(route: Route) {
     installGuide: "按新手流程完成安装、导入和模式配置",
     relay: "选择官方登录或 API 服务，不必手动找配置文件",
     enhance: "打开会话删除、导出、项目移动和脚本能力",
+    userScripts: "管理脚本市场、本地脚本和启停状态",
     providerSync: "切换模式后，让旧对话重新出现在列表里",
     maintenance: "找不到入口、路径不对或启动异常时使用",
     settings: "主题、命令包装器和启动参数，普通使用可忽略",
     logs: "查看最近运行记录",
     diagnostics: "生成可复制的问题报告",
+    about: "查看版本、项目链接和更新状态",
   };
   return subtitles[route];
 }

@@ -98,6 +98,9 @@ func tailFile(path string, maxLines int) (string, error) {
 func (s *server) diagnosticsReport() string {
 	overview := s.loadOverview()
 	settings := loadSettings()
+	var latestLaunch launchStatus
+	latestLaunchPath := latestStatusPath()
+	latestLaunchLoaded := readJSON(latestLaunchPath, &latestLaunch) == nil
 	report := map[string]any{
 		"generatedAtMs": time.Now().UnixMilli(),
 		"version":       version,
@@ -105,7 +108,11 @@ func (s *server) diagnosticsReport() string {
 		"settings":      settings,
 		"logs": map[string]any{
 			"diagnosticLogPath": diagnosticLogPath(),
-			"latestStatusPath":  latestStatusPath(),
+			"latestStatusPath":  latestLaunchPath,
+		},
+		"latestLaunch": map[string]any{
+			"loaded": latestLaunchLoaded,
+			"status": latestLaunch,
 		},
 		"platform": map[string]any{"os": runtime.GOOS, "arch": runtime.GOARCH},
 	}

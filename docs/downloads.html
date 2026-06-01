@@ -170,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.23-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -193,20 +193,20 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.23-beta.1-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.23-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -214,16 +214,20 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.23-beta.1 test build</strong>
+          <strong>Version 1.1.23</strong>
           <ul>
+            <li>Restore the About and Script Center pages in the manager sidebar.</li>
+            <li>Fix Windows Store/MSIX Codex launch detection: CodexTools now requires a real CDP `/json` response before treating launch as successful, and shows an actionable Codex.exe path hint when the debug port is refused.</li>
             <li>Force a backup before every config.toml overwrite path, including relay switches, manual saves, and config repair.</li>
             <li>Add Windows Computer Use repair that writes the local compatibility plugin, bundled marketplace, helper transport, environment flag, and config tables without running remote scripts.</li>
             <li>Add Skill/MCP backup management for local snapshots, restore, and deletion. Restore creates a fresh backup first and only replaces MCP, plugin, marketplace, features, and windows config tables.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.23-beta.1 测试版</strong>
+          <strong>版本 1.1.23 正式版</strong>
           <ul>
+            <li>恢复管理工具左侧导航里的“关于”和“脚本中心”。</li>
+            <li>修复 Windows Store/MSIX 版 Codex 启动误判：必须真实读取到 CDP `/json` 后才算启动成功；调试端口被拒绝时会提示选择可执行 Codex.exe 或修复镜像版。</li>
             <li>所有会覆盖 config.toml 的路径都会先强制备份，包括 relay 切换、手动保存和配置修复。</li>
             <li>新增 Windows Computer Use 一键修复：本地写入兼容插件、bundled marketplace、helper transport、环境变量和 config 表，不运行远程脚本。</li>
             <li>新增 Skill/MCP 备份管理，可创建、恢复、删除本地快照；恢复前会自动备份当前状态，并且只替换 MCP、插件、市场、features、windows 相关 config 表。</li>
@@ -253,7 +257,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS installer packages install `Codex++ 管理工具.app` and `Codex++.app` into `/Applications`.</li>
             <li>The macOS pkg installers and zip app bundles are unsigned community builds; use the first launch note above if Gatekeeper blocks them.</li>
             <li>Windows x64 is for traditional Intel/AMD PCs. Windows arm64 is for Windows on ARM devices.</li>
-            <li>This is a prerelease test build for config backup, Computer Use repair, and Skill/MCP backup flows.</li>
+            <li>This official release restores About/Script Center, fixes Windows Store/MSIX launch detection, and keeps config backup, Computer Use repair, and Skill/MCP backup flows.</li>
           </ul>
         </div>
         <div data-lang="zh">
@@ -262,7 +266,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS 安装包会把 `Codex++ 管理工具.app` 和 `Codex++.app` 安装到 `/Applications`。</li>
             <li>macOS pkg 安装包和 zip app 包都是未签名社区构建；如果被 Gatekeeper 阻止，请使用上方首次启动提醒。</li>
             <li>Windows x64 适合传统 Intel/AMD 电脑；Windows arm64 适合 Windows ARM 设备。</li>
-            <li>这是用于验证 config 备份、Computer Use 修复和 Skill/MCP 备份流程的预发布测试版。</li>
+            <li>这个正式版恢复“关于”和“脚本中心”，修复 Windows Store/MSIX 启动误判，并保留 config 备份、Computer Use 修复和 Skill/MCP 备份流程。</li>
           </ul>
         </div>
       </section>
