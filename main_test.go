@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -878,6 +879,7 @@ func TestRelaySwitchesReturnBackupPath(t *testing.T) {
 
 func TestRepairComputerUseBuildsWindowsCompatibilityTree(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", "1")
 	writeTestFile(t, filepath.Join(home, "config.toml"), "model_provider = \"openai\"\n")
 
 	status, err := repairComputerUse(home, "windows", false)
@@ -891,6 +893,8 @@ func TestRepairComputerUseBuildsWindowsCompatibilityTree(t *testing.T) {
 		t.Fatal("computer use repair should backup existing config")
 	}
 	for _, path := range []string{
+		filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled"),
+		filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", ".agents", "plugins", "marketplace.json"),
 		filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", "plugins", "computer-use", ".codex-plugin", "plugin.json"),
 		filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "latest", ".codex-plugin", "plugin.json"),
 		filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "latest", "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js"),
@@ -903,12 +907,164 @@ func TestRepairComputerUseBuildsWindowsCompatibilityTree(t *testing.T) {
 	for _, expected := range []string{
 		"[marketplaces.openai-bundled]",
 		`[plugins."computer-use@openai-bundled"]`,
+		"[mcp_servers.node_repl]",
+		`BROWSER_USE_MARKETPLACE_NAME = "openai-bundled"`,
+		"CODEX_HOME = " + quoteToml(home),
 		"[windows]",
 		`sandbox = "unelevated"`,
 	} {
 		if !strings.Contains(config, expected) {
 			t.Fatalf("config missing %q:\n%s", expected, config)
 		}
+	}
+}
+
+func TestRepairComputerUsePreservesOfficialMarketplacePlugin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", "1")
+	writeTestFile(t, filepath.Join(home, "config.toml"), "model_provider = \"openai\"\n")
+	officialPlugin := filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", "plugins", "computer-use")
+	writeTestFile(t, filepath.Join(officialPlugin, ".codex-plugin", "plugin.json"), `{"name":"computer-use","version":"26.527.31326"}`)
+	writeTestFile(t, filepath.Join(officialPlugin, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js"), "official-helper")
+	writeTestFile(t, filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", ".agents", "plugins", "marketplace.json"), `{"name":"openai-bundled","plugins":[{"name":"computer-use","source":{"source":"bundled","path":"./plugins/computer-use"}}]}`)
+
+	status, err := repairComputerUse(home, "windows", false)
+	if err != nil {
+		t.Fatalf("repair computer use failed: %v", err)
+	}
+	if !status.MarketplacePlugin || !status.CacheLatest || !status.HelperTransport || !status.ConfigReady {
+		t.Fatalf("computer use files should be ready with official plugin: %#v", status)
+	}
+	if got := readFile(filepath.Join(officialPlugin, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js")); got != "official-helper" {
+		t.Fatalf("official marketplace plugin should not be overwritten: %q", got)
+	}
+	config := readFile(filepath.Join(home, "config.toml"))
+	if !strings.Contains(config, `source = "`+filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled")+`"`) {
+		t.Fatalf("config should point to local bundled marketplace:\n%s", config)
+	}
+}
+
+func TestRepairComputerUsePreservesOfficialCachedPlugin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", "1")
+	writeTestFile(t, filepath.Join(home, "config.toml"), "model_provider = \"openai\"\n")
+	officialCache := filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "26.527.31326")
+	writeTestFile(t, filepath.Join(officialCache, ".codex-plugin", "plugin.json"), `{"name":"computer-use","version":"26.527.31326"}`)
+	writeTestFile(t, filepath.Join(officialCache, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js"), "official-cache-helper")
+
+	status, err := repairComputerUse(home, "windows", false)
+	if err != nil {
+		t.Fatalf("repair computer use failed: %v", err)
+	}
+	if !status.MarketplacePlugin || !status.CacheLatest || !status.HelperTransport || !status.ConfigReady {
+		t.Fatalf("computer use files should be ready with official cache: %#v", status)
+	}
+	if got := readFile(filepath.Join(officialCache, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js")); got != "official-cache-helper" {
+		t.Fatalf("official cached plugin should not be overwritten: %q", got)
+	}
+	if strings.Contains(readFile(filepath.Join(officialCache, ".codex-plugin", "plugin.json")), computerUsePluginVersion) {
+		t.Fatalf("official cache manifest should not be replaced by local fallback")
+	}
+}
+
+func TestRepairComputerUseMaterializesMissingMarketplaceFromCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", "1")
+	writeTestFile(t, filepath.Join(home, "config.toml"), "model_provider = \"openai\"\n")
+	cacheLatest := filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "latest")
+	writeTestFile(t, filepath.Join(cacheLatest, ".codex-plugin", "plugin.json"), `{"name":"computer-use","version":"26.527.31326"}`)
+	writeTestFile(t, filepath.Join(cacheLatest, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js"), "official-cache-helper")
+
+	status, err := repairComputerUse(home, "windows", false)
+	if err != nil {
+		t.Fatalf("repair computer use failed: %v", err)
+	}
+	if !status.MarketplaceManifest || !status.MarketplacePlugin || !status.CacheLatest || !status.HelperTransport || !status.ConfigReady {
+		t.Fatalf("computer use files should be ready when marketplace is restored from cache: %#v", status)
+	}
+	marketplacePlugin := filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", "plugins", "computer-use")
+	if got := readFile(filepath.Join(marketplacePlugin, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js")); got != "official-cache-helper" {
+		t.Fatalf("marketplace plugin should be copied from official cache: %q", got)
+	}
+	manifest := readFile(filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", ".agents", "plugins", "marketplace.json"))
+	for _, expected := range []string{`"name": "computer-use"`, `"path": "./plugins/computer-use"`} {
+		if !strings.Contains(manifest, expected) {
+			t.Fatalf("marketplace manifest missing %q:\n%s", expected, manifest)
+		}
+	}
+	if strings.Contains(readFile(filepath.Join(marketplacePlugin, ".codex-plugin", "plugin.json")), computerUsePluginVersion) {
+		t.Fatalf("marketplace plugin should not be replaced by local fallback")
+	}
+}
+
+func TestRepairComputerUseReturnsFailureWhenFinalStatusIncomplete(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), "model_provider = \"openai\"\n")
+
+	status, err := repairComputerUse(home, "windows", false)
+	if err == nil {
+		t.Fatal("repair computer use should fail when environment variable was not enabled")
+	}
+	if !strings.Contains(err.Error(), "CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE") {
+		t.Fatalf("failure should include missing env detail: %v", err)
+	}
+	if !status.MarketplaceManifest || !status.MarketplacePlugin || !status.CacheLatest || !status.HelperTransport || !status.ConfigReady {
+		t.Fatalf("repair should still report completed file state: %#v", status)
+	}
+}
+
+func TestRepairComputerUseFailureReloadsPartialStatus(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", "1")
+	configPath := filepath.Join(home, "config.toml")
+	if err := os.MkdirAll(configPath, 0o755); err != nil {
+		t.Fatalf("create config directory failed: %v", err)
+	}
+
+	status, err := repairComputerUse(home, "windows", false)
+	if err == nil {
+		t.Fatal("repair computer use should fail when config.toml is a directory")
+	}
+	if !status.MarketplaceReady || !status.MarketplaceManifest || !status.MarketplacePlugin || !status.CacheLatest || !status.HelperTransport {
+		t.Fatalf("partial status should be reloaded after failure: %#v", status)
+	}
+}
+
+func TestCodexHomeDirHonorsCODEXHOME(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if got := codexHomeDir(); got != filepath.Clean(home) {
+		t.Fatalf("codexHomeDir should honor CODEX_HOME: got %q want %q", got, filepath.Clean(home))
+	}
+}
+
+func TestAtomicWriteUsesReplaceFile(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows replaceFile behavior is covered by cross-compiled source check")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("before"), 0o644); err != nil {
+		t.Fatalf("seed file failed: %v", err)
+	}
+	if err := atomicWrite(path, []byte("after")); err != nil {
+		t.Fatalf("atomic write should replace existing file on windows: %v", err)
+	}
+	if got := readFile(path); got != "after" {
+		t.Fatalf("atomic write content mismatch: %q", got)
+	}
+}
+
+func TestWindowsAtomicWriteUsesReplaceExistingRename(t *testing.T) {
+	data, err := os.ReadFile("atomic_rename_windows.go")
+	if err != nil {
+		t.Fatalf("read atomic_rename_windows.go failed: %v", err)
+	}
+	matched, err := regexp.Match(`windows\.Rename\(\s*source,\s*target\s*\)`, data)
+	if err != nil {
+		t.Fatalf("regexp failed: %v", err)
+	}
+	if !matched {
+		t.Fatalf("windows replaceFile must use windows.Rename so existing targets are replaced:\n%s", string(data))
 	}
 }
 

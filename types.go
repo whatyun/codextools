@@ -166,25 +166,31 @@ type marketplaceSpec struct {
 }
 
 type computerUseStatus struct {
-	Platform            string  `json:"platform"`
-	Supported           bool    `json:"supported"`
-	EnvEnabled          bool    `json:"envEnabled"`
-	ProcessEnv          string  `json:"processEnv"`
-	UserEnv             string  `json:"userEnv"`
-	MarketplaceRoot     string  `json:"marketplaceRoot"`
-	MarketplaceReady    bool    `json:"marketplaceReady"`
-	MarketplaceManifest bool    `json:"marketplaceManifest"`
-	MarketplacePlugin   bool    `json:"marketplacePlugin"`
-	CacheLatest         bool    `json:"cacheLatest"`
-	CacheVersion        string  `json:"cacheVersion"`
-	ConfigReady         bool    `json:"configReady"`
-	ConfigPath          string  `json:"configPath"`
-	ConfigMarketplace   bool    `json:"configMarketplace"`
-	ConfigPlugin        bool    `json:"configPlugin"`
-	ConfigWindows       bool    `json:"configWindows"`
-	HelperTransport     bool    `json:"helperTransport"`
-	BackupPath          *string `json:"backupPath,omitempty"`
-	AllReady            bool    `json:"allReady"`
+	Platform                string  `json:"platform"`
+	Supported               bool    `json:"supported"`
+	CodexHome               string  `json:"codexHome"`
+	EnvEnabled              bool    `json:"envEnabled"`
+	ProcessEnv              string  `json:"processEnv"`
+	UserEnv                 string  `json:"userEnv"`
+	MarketplaceRoot         string  `json:"marketplaceRoot"`
+	MarketplaceManifestPath string  `json:"marketplaceManifestPath"`
+	MarketplacePluginPath   string  `json:"marketplacePluginPath"`
+	MarketplaceReady        bool    `json:"marketplaceReady"`
+	MarketplaceManifest     bool    `json:"marketplaceManifest"`
+	MarketplacePlugin       bool    `json:"marketplacePlugin"`
+	CacheLatest             bool    `json:"cacheLatest"`
+	CacheLatestPath         string  `json:"cacheLatestPath"`
+	CacheVersion            string  `json:"cacheVersion"`
+	ConfigReady             bool    `json:"configReady"`
+	ConfigPath              string  `json:"configPath"`
+	ConfigMarketplace       bool    `json:"configMarketplace"`
+	ConfigPlugin            bool    `json:"configPlugin"`
+	ConfigNodeRepl          bool    `json:"configNodeRepl"`
+	ConfigWindows           bool    `json:"configWindows"`
+	HelperTransport         bool    `json:"helperTransport"`
+	HelperTransportPath     string  `json:"helperTransportPath"`
+	BackupPath              *string `json:"backupPath,omitempty"`
+	AllReady                bool    `json:"allReady"`
 }
 
 type skillMCPBackupInfo struct {

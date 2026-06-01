@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="$ROOT/dist/releases"
 BUILD="$ROOT/dist/build/macos"
-VERSION="${VERSION:-1.1.22}"
+VERSION="${VERSION:-1.1.24}"
 TARGET_ARCHES="${TARGET_ARCHES:-arm64 amd64}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 export COPYFILE_DISABLE=1
@@ -143,8 +143,8 @@ build_arch() {
   mkdir -p "$arch_build" "$package_dir"
 
   pushd "$ROOT" >/dev/null
-  GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -ldflags "-X main.binaryRole=manager" -o "$arch_build/codextools" .
-  GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -ldflags "-X main.binaryRole=launcher" -o "$arch_build/codextools-launcher" .
+  GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -buildvcs=false -ldflags "-X main.binaryRole=manager" -o "$arch_build/codextools" .
+  GOOS=darwin GOARCH="$goarch" CGO_ENABLED=1 go build -buildvcs=false -ldflags "-X main.binaryRole=launcher" -o "$arch_build/codextools-launcher" .
   popd >/dev/null
 
   create_app "$app_dir" "$APP_NAME" "codextools" "$arch_build/codextools" "com.hereww.codextools" "false"

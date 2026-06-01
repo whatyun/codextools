@@ -367,6 +367,14 @@ func codexResourcesDir() string {
 	if path := resolveCodexApp(loadSettings().CodexAppPath); path != "" && runtime.GOOS == "darwin" && strings.EqualFold(filepath.Ext(path), ".app") {
 		return filepath.Join(path, "Contents", "Resources")
 	}
+	if path := resolveCodexApp(loadSettings().CodexAppPath); path != "" && runtime.GOOS == "windows" {
+		if resources := filepath.Join(path, "resources"); isDir(resources) {
+			return resources
+		}
+		if resources := filepath.Join(path, "app", "resources"); isDir(resources) {
+			return resources
+		}
+	}
 	if runtime.GOOS == "darwin" && isDir("/Applications/Codex.app/Contents/Resources") {
 		return "/Applications/Codex.app/Contents/Resources"
 	}

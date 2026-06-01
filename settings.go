@@ -85,6 +85,9 @@ func diagnosticLogPath() string {
 }
 
 func codexHomeDir() string {
+	if custom := strings.TrimSpace(os.Getenv("CODEX_HOME")); custom != "" {
+		return filepath.Clean(os.ExpandEnv(custom))
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ".codex"
@@ -282,7 +285,7 @@ func atomicWrite(path string, data []byte) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return replaceFile(tmp, path)
 }
 
 func settingsPayload(message string) commandResult {

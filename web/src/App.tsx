@@ -320,21 +320,27 @@ type CcsProvidersResult = CommandResult<{
 type ComputerUseStatusResult = CommandResult<{
   platform: string;
   supported: boolean;
+  codexHome: string;
   envEnabled: boolean;
   processEnv: string;
   userEnv: string;
   marketplaceRoot: string;
+  marketplaceManifestPath: string;
+  marketplacePluginPath: string;
   marketplaceReady: boolean;
   marketplaceManifest: boolean;
   marketplacePlugin: boolean;
   cacheLatest: boolean;
+  cacheLatestPath: string;
   cacheVersion: string;
   configReady: boolean;
   configPath: string;
   configMarketplace: boolean;
   configPlugin: boolean;
+  configNodeRepl: boolean;
   configWindows: boolean;
   helperTransport: boolean;
+  helperTransportPath: string;
   backupPath?: string | null;
   allReady: boolean;
 }>;
@@ -2792,11 +2798,16 @@ function ProviderSyncScreen({
           </div>
           <div className="status-table">
             <StatusRow title="环境变量" status={computerUse?.envEnabled ? "ok" : "missing"} path={"User=" + (computerUse?.userEnv || "-") + " Process=" + (computerUse?.processEnv || "-")} />
-            <StatusRow title="Marketplace" status={computerUse?.marketplaceManifest && computerUse?.marketplacePlugin ? "ok" : "missing"} path={computerUse?.marketplaceRoot ?? null} />
-            <StatusRow title="Helper transport" status={computerUse?.helperTransport ? "ok" : "missing"} path={computerUse?.cacheVersion ? "computer-use/" + computerUse.cacheVersion : null} />
+            <StatusRow title="Codex home" status={computerUse?.codexHome ? "ok" : "missing"} path={computerUse?.codexHome ?? null} />
+            <StatusRow title="Marketplace 根目录" status={computerUse?.marketplaceReady ? "ok" : "missing"} path={computerUse?.marketplaceRoot ?? null} />
+            <StatusRow title="Marketplace manifest" status={computerUse?.marketplaceManifest ? "ok" : "missing"} path={computerUse?.marketplaceManifestPath ?? null} />
+            <StatusRow title="Marketplace 插件" status={computerUse?.marketplacePlugin ? "ok" : "missing"} path={computerUse?.marketplacePluginPath ?? null} />
+            <StatusRow title="插件缓存" status={computerUse?.cacheLatest ? "ok" : "missing"} path={computerUse?.cacheLatestPath ?? (computerUse?.cacheVersion ? "computer-use/" + computerUse.cacheVersion : null)} />
+            <StatusRow title="Helper transport" status={computerUse?.helperTransport ? "ok" : "missing"} path={computerUse?.helperTransportPath ?? null} />
             <StatusRow title="config.toml" status={computerUse?.configReady ? "ok" : "missing"} path={computerUse?.configPath ?? null} />
           </div>
           {computerUse?.backupPath ? <div className="path-line compact-path">本次配置备份：{computerUse.backupPath}</div> : null}
+          <div className="path-line compact-path">修复后请关闭所有 Codex 窗口，再从 Codex++ 入口重新启动；增强菜单应显示 Codex++ 1.1.24。</div>
           <Toolbar>
             <Button onClick={() => void actions.refreshComputerUse()} variant="outline">
               <RefreshCw className="h-4 w-4" />

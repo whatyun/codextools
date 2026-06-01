@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -33,16 +34,21 @@ func (s *server) loadComputerUseStatus() commandResult {
 }
 
 func (s *server) repairComputerUse() commandResult {
-	status, err := repairComputerUse(codexHomeDir(), runtime.GOOS, true)
+	home := codexHomeDir()
+	status, err := repairComputerUse(home, runtime.GOOS, true)
 	payload, _ := structToMap(status)
 	if err != nil {
+		status = loadComputerUseStatus(home)
+		status.Platform = runtime.GOOS
+		status.Supported = runtime.GOOS == "windows"
+		payload, _ = structToMap(status)
 		resultStatus := "failed"
 		if !status.Supported {
 			resultStatus = "unsupported"
 		}
 		return commandResultWithStatus(resultStatus, "Computer Use 修复失败："+err.Error(), payload)
 	}
-	return commandResultWithStatus("ok", "Computer Use 已修复；请重启 Codex 让环境变量和插件缓存生效。", payload)
+	return commandResultWithStatus("ok", "Computer Use 已修复；请关闭所有 Codex 窗口后，从 Codex++ 入口重新启动，让环境变量、marketplace 和插件缓存生效。", payload)
 }
 
 func commandResultWithStatus(status, message string, payload map[string]any) commandResult {
@@ -66,9 +72,11 @@ func structToMap(value any) (map[string]any, error) {
 }
 
 func loadComputerUseStatus(home string) computerUseStatus {
+	home = filepath.Clean(home)
 	status := computerUseStatus{
 		Platform:        runtime.GOOS,
 		Supported:       runtime.GOOS == "windows",
+		CodexHome:       home,
 		ProcessEnv:      os.Getenv("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE"),
 		UserEnv:         computerUseUserEnv(),
 		MarketplaceRoot: computerUseMarketplaceRoot(home),
@@ -81,20 +89,26 @@ func loadComputerUseStatus(home string) computerUseStatus {
 func fillComputerUseFileStatus(home string, status *computerUseStatus) {
 	marketplaceRoot := computerUseMarketplaceRoot(home)
 	marketplacePlugin := filepath.Join(marketplaceRoot, "plugins", computerUsePluginName)
-	cacheRoot := filepath.Join(home, "plugins", "cache", computerUseMarketplace, computerUsePluginName)
-	cacheLatest := filepath.Join(cacheRoot, "latest")
-	cacheVersion := filepath.Join(cacheRoot, computerUsePluginVersion)
-	helperTransport := filepath.Join(cacheLatest, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js")
-	if !isDir(cacheLatest) && isDir(cacheVersion) {
-		helperTransport = filepath.Join(cacheVersion, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js")
+	marketplaceManifestPath := filepath.Join(marketplaceRoot, ".agents", "plugins", "marketplace.json")
+	marketplacePluginPath := filepath.Join(marketplacePlugin, ".codex-plugin", "plugin.json")
+	cachePluginRoot := bestComputerUseCachedPluginRoot(home)
+	if cachePluginRoot == "" {
+		cachePluginRoot = computerUseCacheLatestRoot(home)
 	}
+	cachePluginPath := filepath.Join(cachePluginRoot, ".codex-plugin", "plugin.json")
+	helperTransport := computerUseHelperTransportPath(cachePluginRoot)
 
+	status.CodexHome = home
 	status.MarketplaceRoot = marketplaceRoot
+	status.MarketplaceManifestPath = marketplaceManifestPath
+	status.MarketplacePluginPath = marketplacePluginPath
 	status.MarketplaceReady = isDir(marketplaceRoot)
-	status.MarketplaceManifest = fileExists(filepath.Join(marketplaceRoot, ".agents", "plugins", "marketplace.json"))
-	status.MarketplacePlugin = fileExists(filepath.Join(marketplacePlugin, ".codex-plugin", "plugin.json"))
-	status.CacheLatest = fileExists(filepath.Join(cacheLatest, ".codex-plugin", "plugin.json")) || fileExists(filepath.Join(cacheVersion, ".codex-plugin", "plugin.json"))
-	status.CacheVersion = computerUsePluginVersion
+	status.MarketplaceManifest = fileExists(marketplaceManifestPath)
+	status.MarketplacePlugin = fileExists(marketplacePluginPath)
+	status.CacheLatestPath = cachePluginPath
+	status.CacheLatest = fileExists(cachePluginPath)
+	status.CacheVersion = filepath.Base(cachePluginRoot)
+	status.HelperTransportPath = helperTransport
 	status.HelperTransport = fileExists(helperTransport)
 	status.EnvEnabled = status.ProcessEnv == "1" || status.UserEnv == "1"
 
@@ -102,15 +116,18 @@ func fillComputerUseFileStatus(home string, status *computerUseStatus) {
 	contents := string(config)
 	marketplace := tableValues(contents, "marketplaces."+computerUseMarketplace)
 	plugin := tableValues(contents, fmt.Sprintf("plugins.%s", quoteToml(computerUsePluginName+"@"+computerUseMarketplace)))
+	nodeReplEnv := tableValues(contents, "mcp_servers.node_repl.env")
 	windows := tableValues(contents, "windows")
 	status.ConfigMarketplace = strings.TrimSpace(unquoteToml(marketplace["source_type"])) == "local" && strings.TrimSpace(unquoteToml(marketplace["source"])) != ""
 	status.ConfigPlugin = strings.TrimSpace(plugin["enabled"]) == "true"
+	status.ConfigNodeRepl = strings.TrimSpace(unquoteToml(nodeReplEnv["BROWSER_USE_MARKETPLACE_NAME"])) == computerUseMarketplace
 	status.ConfigWindows = strings.TrimSpace(unquoteToml(windows["sandbox"])) == "unelevated"
 	status.ConfigReady = status.ConfigMarketplace && status.ConfigPlugin && status.ConfigWindows
 	status.AllReady = status.Supported && status.EnvEnabled && status.MarketplaceManifest && status.MarketplacePlugin && status.CacheLatest && status.HelperTransport && status.ConfigReady
 }
 
 func repairComputerUse(home, platform string, setUserEnv bool) (computerUseStatus, error) {
+	home = filepath.Clean(home)
 	status := loadComputerUseStatus(home)
 	status.Platform = platform
 	status.Supported = platform == "windows"
@@ -118,37 +135,39 @@ func repairComputerUse(home, platform string, setUserEnv bool) (computerUseStatu
 		return status, fmt.Errorf("当前平台是 %s，只支持 Windows", platform)
 	}
 	if err := os.MkdirAll(home, 0o755); err != nil {
-		return status, err
+		return loadComputerUseStatus(home), fmt.Errorf("创建 Codex home 失败 %s: %w", home, err)
 	}
 	marketplaceRoot := computerUseMarketplaceRoot(home)
 	marketplacePlugin := filepath.Join(marketplaceRoot, "plugins", computerUsePluginName)
-	cacheRoot := filepath.Join(home, "plugins", "cache", computerUseMarketplace, computerUsePluginName)
-	cacheVersion := filepath.Join(cacheRoot, computerUsePluginVersion)
-	cacheLatest := filepath.Join(cacheRoot, "latest")
-	for _, dir := range []string{marketplaceRoot, marketplacePlugin, cacheVersion} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return status, err
-		}
+	if err := syncBundledMarketplaceFromInstalledCodex(marketplaceRoot); err != nil {
+		appendDiagnosticLog("computer_use.marketplace_sync_failed", map[string]any{
+			"marketplace_root": marketplaceRoot,
+			"error":            err.Error(),
+		})
 	}
-	if err := writeComputerUsePluginTree(marketplacePlugin); err != nil {
-		return status, err
+	if err := os.MkdirAll(marketplaceRoot, 0o755); err != nil {
+		return loadComputerUseStatus(home), fmt.Errorf("创建 Computer Use marketplace 目录失败 %s: %w", marketplaceRoot, err)
 	}
-	if err := writeComputerUsePluginTree(cacheVersion); err != nil {
-		return status, err
+	usedLocalFallback, err := materializeComputerUseMarketplacePlugin(home, marketplacePlugin)
+	if err != nil {
+		return loadComputerUseStatus(home), err
 	}
-	if err := replaceDirectory(cacheLatest, cacheVersion); err != nil {
-		return status, err
+	if err := ensureComputerUseCachedPlugin(home, marketplacePlugin, usedLocalFallback); err != nil {
+		return loadComputerUseStatus(home), err
 	}
-	if err := updateComputerUseMarketplaceManifest(marketplaceRoot); err != nil {
-		return status, err
+	if isDir(marketplaceRoot) {
+		_ = makeTreeWritable(marketplaceRoot)
+	}
+	if err := updateComputerUseMarketplaceManifest(marketplaceRoot, usedLocalFallback); err != nil {
+		return loadComputerUseStatus(home), fmt.Errorf("写入 marketplace manifest 失败 %s: %w", marketplaceRoot, err)
 	}
 	backupPath, err := updateComputerUseCodexConfig(home, marketplaceRoot)
 	if err != nil {
-		return status, err
+		return loadComputerUseStatus(home), fmt.Errorf("更新 config.toml 失败: %w", err)
 	}
 	if setUserEnv {
 		if err := setComputerUseUserEnv(); err != nil {
-			return status, err
+			return loadComputerUseStatus(home), fmt.Errorf("设置用户环境变量失败: %w", err)
 		}
 	}
 	status = loadComputerUseStatus(home)
@@ -156,11 +175,238 @@ func repairComputerUse(home, platform string, setUserEnv bool) (computerUseStatu
 	status.Supported = true
 	status.BackupPath = backupPath
 	status.AllReady = status.Supported && status.EnvEnabled && status.MarketplaceManifest && status.MarketplacePlugin && status.CacheLatest && status.HelperTransport && status.ConfigReady
+	if err := validateComputerUseReady(status); err != nil {
+		return status, err
+	}
 	return status, nil
 }
 
 func computerUseMarketplaceRoot(home string) string {
 	return filepath.Join(home, ".tmp", "bundled-marketplaces", computerUseMarketplace)
+}
+
+func computerUseCacheRoot(home string) string {
+	return filepath.Join(home, "plugins", "cache", computerUseMarketplace, computerUsePluginName)
+}
+
+func computerUseCacheLatestRoot(home string) string {
+	return filepath.Join(computerUseCacheRoot(home), "latest")
+}
+
+func computerUseHelperTransportPath(root string) string {
+	return filepath.Join(root, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js")
+}
+
+func bestComputerUseCachedPluginRoot(home string) string {
+	candidates := computerUseCachedPluginRoots(home)
+	for _, candidate := range candidates {
+		if fileExists(computerUseHelperTransportPath(candidate)) {
+			return candidate
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return ""
+}
+
+func computerUseCachedPluginRoots(home string) []string {
+	cacheRoot := computerUseCacheRoot(home)
+	var roots []string
+	latest := computerUseCacheLatestRoot(home)
+	if fileExists(filepath.Join(latest, ".codex-plugin", "plugin.json")) {
+		roots = append(roots, latest)
+	}
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil {
+		return roots
+	}
+	var versions []string
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.EqualFold(entry.Name(), "latest") {
+			continue
+		}
+		versions = append(versions, entry.Name())
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return compareVersions(versions[i], versions[j]) > 0
+	})
+	for _, version := range versions {
+		root := filepath.Join(cacheRoot, version)
+		if fileExists(filepath.Join(root, ".codex-plugin", "plugin.json")) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+func materializeComputerUseMarketplacePlugin(home, marketplacePlugin string) (bool, error) {
+	if fileExists(filepath.Join(marketplacePlugin, ".codex-plugin", "plugin.json")) {
+		return false, nil
+	}
+	if root := bestComputerUseCachedPluginRoot(home); root != "" {
+		if err := replaceDirectory(marketplacePlugin, root); err != nil {
+			return false, fmt.Errorf("从插件缓存补全 Computer Use marketplace 插件失败 %s -> %s: %w", root, marketplacePlugin, err)
+		}
+		if fileExists(filepath.Join(marketplacePlugin, ".codex-plugin", "plugin.json")) {
+			return false, nil
+		}
+	}
+	if err := os.MkdirAll(marketplacePlugin, 0o755); err != nil {
+		return true, fmt.Errorf("创建 Computer Use 插件目录失败 %s: %w", marketplacePlugin, err)
+	}
+	if err := writeComputerUsePluginTree(marketplacePlugin); err != nil {
+		return true, fmt.Errorf("写入本地 fallback 插件失败 %s: %w", marketplacePlugin, err)
+	}
+	return true, nil
+}
+
+func ensureComputerUseCachedPlugin(home, marketplacePlugin string, usedLocalFallback bool) error {
+	if root := bestComputerUseCachedPluginRoot(home); root != "" && fileExists(computerUseHelperTransportPath(root)) {
+		return nil
+	}
+	version := computerUsePluginVersion
+	if !usedLocalFallback {
+		if pluginVersion := computerUsePluginVersionFromRoot(marketplacePlugin); pluginVersion != "" {
+			version = pluginVersion
+		}
+	}
+	cacheRoot := computerUseCacheRoot(home)
+	cacheVersion := filepath.Join(cacheRoot, version)
+	cacheLatest := computerUseCacheLatestRoot(home)
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		return fmt.Errorf("创建插件缓存目录失败 %s: %w", cacheRoot, err)
+	}
+	if err := replaceDirectory(cacheVersion, marketplacePlugin); err != nil {
+		return fmt.Errorf("写入插件缓存失败 %s: %w", cacheVersion, err)
+	}
+	if err := replaceDirectory(cacheLatest, cacheVersion); err != nil {
+		return fmt.Errorf("更新 latest 插件缓存失败 %s: %w", cacheLatest, err)
+	}
+	return nil
+}
+
+func computerUsePluginVersionFromRoot(root string) string {
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := readJSON(filepath.Join(root, ".codex-plugin", "plugin.json"), &manifest); err != nil {
+		return ""
+	}
+	version := strings.TrimSpace(manifest.Version)
+	if version == "" || version == "." || version == ".." || strings.ContainsAny(version, `/\:`) {
+		return ""
+	}
+	return version
+}
+
+func syncBundledMarketplaceFromInstalledCodex(marketplaceRoot string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	sourceRoot := installedBundledMarketplaceRoot()
+	if sourceRoot == "" || samePath(sourceRoot, marketplaceRoot) {
+		return nil
+	}
+	tempRoot := marketplaceRoot + ".sync-tmp-" + time.Now().Format("20060102150405")
+	if err := os.RemoveAll(tempRoot); err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempRoot)
+	if err := copyDirectory(sourceRoot, tempRoot); err != nil {
+		return err
+	}
+	if err := makeTreeWritable(tempRoot); err != nil {
+		return err
+	}
+	if isDir(marketplaceRoot) {
+		_ = makeTreeWritable(marketplaceRoot)
+	}
+	if err := os.RemoveAll(marketplaceRoot); err != nil {
+		return err
+	}
+	return os.Rename(tempRoot, marketplaceRoot)
+}
+
+func installedBundledMarketplaceRoot() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	var candidates []string
+	addCandidate := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		for _, candidate := range []string{
+			filepath.Join(path, "resources", "plugins", computerUseMarketplace),
+			filepath.Join(path, "app", "resources", "plugins", computerUseMarketplace),
+			filepath.Join(filepath.Dir(path), "app", "resources", "plugins", computerUseMarketplace),
+		} {
+			if candidate != "" {
+				candidates = append(candidates, candidate)
+			}
+		}
+	}
+	settings := loadSettings()
+	addCandidate(resolveCodexApp(settings.CodexAppPath))
+	addCandidate(resolveCodexApp(""))
+	for _, root := range windowsInstalledCodexPackageRoots() {
+		addCandidate(root)
+	}
+	for _, candidate := range candidates {
+		if fileExists(filepath.Join(candidate, ".agents", "plugins", "marketplace.json")) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func windowsInstalledCodexPackageRoots() []string {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	commands := [][]string{
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.PackageFullName -like 'OpenAI.Codex_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+	}
+	var roots []string
+	for _, command := range commands {
+		cmd := exec.Command(command[0], command[1:]...)
+		hideSubprocessWindow(cmd)
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				roots = append(roots, line)
+			}
+		}
+	}
+	return roots
+}
+
+func makeTreeWritable(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o755)
+		}
+		return os.Chmod(path, 0o644)
+	})
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func writeComputerUsePluginTree(root string) error {
@@ -230,7 +476,7 @@ The Desktop app must be launched with ` + "`CODEX_ELECTRON_ENABLE_WINDOWS_COMPUT
 `
 }
 
-func updateComputerUseMarketplaceManifest(marketplaceRoot string) error {
+func updateComputerUseMarketplaceManifest(marketplaceRoot string, forceLocalEntry bool) error {
 	manifestPath := filepath.Join(marketplaceRoot, ".agents", "plugins", "marketplace.json")
 	var manifest map[string]any
 	if err := readJSON(manifestPath, &manifest); err != nil || manifest == nil {
@@ -243,6 +489,9 @@ func updateComputerUseMarketplaceManifest(marketplaceRoot string) error {
 	manifest["name"] = computerUseMarketplace
 	if _, ok := manifest["interface"].(map[string]any); !ok {
 		manifest["interface"] = map[string]any{"displayName": "OpenAI Bundled"}
+	}
+	if !forceLocalEntry && computerUseManifestHasEntry(manifest) {
+		return atomicWriteJSON(manifestPath, manifest)
 	}
 	entry := map[string]any{
 		"name": computerUsePluginName,
@@ -270,6 +519,44 @@ func updateComputerUseMarketplaceManifest(marketplaceRoot string) error {
 	return atomicWriteJSON(manifestPath, manifest)
 }
 
+func computerUseManifestHasEntry(manifest map[string]any) bool {
+	if existing, ok := manifest["plugins"].([]any); ok {
+		for _, item := range existing {
+			itemMap, _ := item.(map[string]any)
+			if stringFromAny(itemMap["name"]) == computerUsePluginName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateComputerUseReady(status computerUseStatus) error {
+	var missing []string
+	if !status.EnvEnabled {
+		missing = append(missing, "环境变量 CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE")
+	}
+	if !status.MarketplaceManifest {
+		missing = append(missing, status.MarketplaceManifestPath)
+	}
+	if !status.MarketplacePlugin {
+		missing = append(missing, status.MarketplacePluginPath)
+	}
+	if !status.CacheLatest {
+		missing = append(missing, status.CacheLatestPath)
+	}
+	if !status.HelperTransport {
+		missing = append(missing, status.HelperTransportPath)
+	}
+	if !status.ConfigReady {
+		missing = append(missing, status.ConfigPath)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("Computer Use 修复后仍缺少关键项目：%s", strings.Join(missing, "；"))
+	}
+	return nil
+}
+
 func updateComputerUseCodexConfig(home, marketplaceRoot string) (*string, error) {
 	configPath := filepath.Join(home, "config.toml")
 	contents := readFile(configPath)
@@ -281,6 +568,7 @@ func updateComputerUseCodexConfig(home, marketplaceRoot string) (*string, error)
 	updated = upsertTomlTable(updated, fmt.Sprintf("plugins.%s", quoteToml(computerUsePluginName+"@"+computerUseMarketplace)), []string{
 		"enabled = true",
 	})
+	updated, _ = repairNodeReplMCPConfig(home, updated)
 	updated = upsertTomlTable(updated, "windows", []string{
 		`sandbox = "unelevated"`,
 	})

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="$ROOT/dist/releases"
 BUILD="$ROOT/dist/build/windows"
-VERSION="${VERSION:-1.1.22}"
+VERSION="${VERSION:-1.1.24}"
 TARGET_ARCHES="${TARGET_ARCHES:-amd64 arm64}"
 ICON_PNG="$ROOT/assets/icons/codextools-1024.png"
 ICON_ICO="$BUILD/codextools.ico"
@@ -150,9 +150,9 @@ build_arch() {
 
   pushd "$ROOT" >/dev/null
   build_resource "$goarch" "CodexTools manager" "codextools.exe"
-  GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=manager" -o "$package_dir/codextools.exe" .
+  GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=manager" -o "$package_dir/codextools.exe" .
   build_resource "$goarch" "CodexTools launcher" "codextools-launcher.exe"
-  GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=launcher" -o "$package_dir/codextools-launcher.exe" .
+  GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=launcher" -o "$package_dir/codextools-launcher.exe" .
   rm -f "$ROOT"/codextools_windows_*.syso
   popd >/dev/null
 
