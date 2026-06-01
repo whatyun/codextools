@@ -170,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.24-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.24-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.24-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.24-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.24-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.24-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.24-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.24-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.25-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -193,20 +193,20 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.24-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.24-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.24-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.24-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.24-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.24-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.24-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.24-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.25-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -214,25 +214,21 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.24</strong>
+          <strong>Version 1.1.25</strong>
           <ul>
-            <li>Fix Windows Computer Use repair by preserving the official openai-bundled marketplace and official computer-use plugin first.</li>
-            <li>Restore the local openai-bundled marketplace mirror from the existing computer-use cache when marketplace.json or plugins/computer-use is missing.</li>
-            <li>Use the local compatibility helper only as a fallback when the official computer-use plugin is missing.</li>
-            <li>Fix Windows config.toml atomic writes so existing files are replaced safely instead of failing during repair.</li>
-            <li>Keep the strict Codex++ launch check: Windows Store/MSIX launches must expose the CDP debug port before injection is treated as ready.</li>
-            <li>Improve Computer Use diagnostics with exact Codex home, marketplace, plugin cache, helper transport, and config paths.</li>
+            <li>Move-to-projectless now goes through the Go bridge and updates Codex global state so thread lists stay in sync.</li>
+            <li>Move-to-workspace also refreshes global workspace hints and projectless markers after the rollout and SQLite records are updated.</li>
+            <li>Add Markdown export bridge support for sessions, exporting user and assistant messages while excluding tool output and reasoning records.</li>
+            <li>Reloading the current moved session now returns to the Codex home view instead of reloading a stale conversation URL.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.24 正式版</strong>
+          <strong>版本 1.1.25</strong>
           <ul>
-            <li>修复 Windows Computer Use 一键修复：优先保留官方 openai-bundled marketplace 和官方 computer-use 插件。</li>
-            <li>当 marketplace.json 或 plugins/computer-use 缺失时，会从已有 computer-use 缓存反向补全本地 openai-bundled marketplace 镜像。</li>
-            <li>只有官方 computer-use 插件缺失时，才写入本地兼容 helper 作为兜底。</li>
-            <li>修复 Windows 覆盖 config.toml 的原子写入问题，避免修复过程中因文件已存在而失败。</li>
-            <li>继续保留严格的 Codex++ 启动校验：Windows Store/MSIX 必须暴露 CDP 调试端口后才视为可注入。</li>
-            <li>Computer Use 状态页增加精确路径诊断，显示 Codex home、marketplace、插件缓存、helper transport 和 config 路径。</li>
+            <li>移动到普通对话现在通过 Go 桥接执行，并同步 Codex 全局状态，让会话列表保持一致。</li>
+            <li>移动到项目也会在更新 rollout 和 SQLite 记录后刷新全局 workspace hint 与普通对话标记。</li>
+            <li>新增会话 Markdown 导出桥接，只导出用户和助手消息，并排除工具输出和推理记录。</li>
+            <li>移动当前会话后会回到 Codex 首页，避免重新加载已经过期的会话 URL。</li>
           </ul>
         </div>
       </section>
