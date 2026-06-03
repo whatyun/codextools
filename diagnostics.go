@@ -6,12 +6,18 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
+
+var diagnosticThrottle sync.Map
 
 func appendDiagnosticLog(event string, detail map[string]any) {
 	if detail == nil {
 		detail = map[string]any{}
+	}
+	if shouldThrottleDiagnosticLog(event, detail, time.Now()) {
+		return
 	}
 	redacted := redactForLog(detail)
 	record := map[string]any{
@@ -34,6 +40,26 @@ func appendDiagnosticLog(event string, detail map[string]any) {
 	}
 	defer file.Close()
 	_, _ = file.Write(append(data, '\n'))
+}
+
+func shouldThrottleDiagnosticLog(event string, detail map[string]any, now time.Time) bool {
+	if event != "renderer.service_tier_dispatcher_patch_failed" {
+		return false
+	}
+	nestedDetail := mapArg(detail, "detail")
+	if stringFromAny(nestedDetail["errorMessage"]) != "Codex dispatcher unavailable" {
+		return false
+	}
+	const interval = time.Minute
+	key := event + ":" + stringFromAny(nestedDetail["errorMessage"])
+	lastValue, ok := diagnosticThrottle.Load(key)
+	if ok {
+		if last, ok := lastValue.(time.Time); ok && now.Sub(last) < interval {
+			return true
+		}
+	}
+	diagnosticThrottle.Store(key, now)
+	return false
 }
 
 func redactForLog(value any) any {

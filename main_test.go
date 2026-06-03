@@ -54,6 +54,50 @@ func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
 	}
 }
 
+func TestBuildCodexLaunchCommandKeepsDebugArgumentsForExecutable(t *testing.T) {
+	command := buildCodexLaunchCommand(filepath.Join(t.TempDir(), "Codex.exe"), 9229, []string{"--force_high_performance_gpu"})
+
+	if len(command) != 4 {
+		t.Fatalf("command length mismatch: %#v", command)
+	}
+	if !strings.EqualFold(filepath.Base(command[0]), "Codex.exe") {
+		t.Fatalf("command should target Codex.exe: %#v", command)
+	}
+	if command[1] != "--remote-debugging-port=9229" {
+		t.Fatalf("debug port argument mismatch: %#v", command)
+	}
+	if command[2] != "--remote-allow-origins=http://127.0.0.1:9229" {
+		t.Fatalf("remote origin argument mismatch: %#v", command)
+	}
+	if command[3] != "--force_high_performance_gpu" {
+		t.Fatalf("extra argument mismatch: %#v", command)
+	}
+}
+
+func TestManagerLaunchAppPathSkipsPackagedOverrideWithoutExecutable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows launch path fallback only applies on Windows")
+	}
+	requested := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+
+	if got := managerLaunchAppPath(requested, defaultSettings()); got != "" {
+		t.Fatalf("packaged override without direct executable should be skipped, got %q", got)
+	}
+}
+
+func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows launch path fallback only applies on Windows")
+	}
+	appDir := filepath.Join(t.TempDir(), "Codex")
+	exe := filepath.Join(appDir, "Codex.exe")
+	writeTestFile(t, exe, "binary")
+
+	if got := managerLaunchAppPath(exe, defaultSettings()); got != appDir {
+		t.Fatalf("direct executable override should be normalized and kept, got %q", got)
+	}
+}
+
 func TestRendererInjectionDoesNotDisablePluginUnlockInRelayMode(t *testing.T) {
 	for _, forbidden := range []string{
 		`codexPlusBackendSettings.launchMode === "relay";`,
@@ -1179,6 +1223,97 @@ func writeTestFile(t *testing.T, path, contents string) {
 	}
 }
 
+func createProviderSyncThreadsTable(t *testing.T, dbPath string, includeThreadSource bool) {
+	t.Helper()
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test sqlite db: %v", err)
+	}
+	defer db.Close()
+	threadSourceColumn := ""
+	if includeThreadSource {
+		threadSourceColumn = "thread_source TEXT,"
+	}
+	if _, err := db.Exec(`CREATE TABLE threads (
+		id TEXT PRIMARY KEY,
+		rollout_path TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		source TEXT NOT NULL,
+		model_provider TEXT NOT NULL,
+		cwd TEXT NOT NULL,
+		title TEXT NOT NULL,
+		sandbox_policy TEXT NOT NULL,
+		approval_mode TEXT NOT NULL,
+		tokens_used INTEGER NOT NULL DEFAULT 0,
+		has_user_event INTEGER NOT NULL DEFAULT 0,
+		archived INTEGER NOT NULL DEFAULT 0,
+		archived_at INTEGER,
+		git_sha TEXT,
+		git_branch TEXT,
+		git_origin_url TEXT,
+		cli_version TEXT NOT NULL DEFAULT '',
+		first_user_message TEXT NOT NULL DEFAULT '',
+		agent_nickname TEXT,
+		agent_role TEXT,
+		memory_mode TEXT NOT NULL DEFAULT 'enabled',
+		model TEXT,
+		reasoning_effort TEXT,
+		agent_path TEXT,
+		created_at_ms INTEGER,
+		updated_at_ms INTEGER,
+		` + threadSourceColumn + `
+		preview TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("failed to create provider sync threads table: %v", err)
+	}
+}
+
+func insertProviderSyncThread(t *testing.T, dbPath string, values map[string]any) {
+	t.Helper()
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test sqlite db: %v", err)
+	}
+	defer db.Close()
+	columns, err := sqliteTableColumns(db, "threads")
+	if err != nil {
+		t.Fatalf("failed to inspect test sqlite db: %v", err)
+	}
+	var insertColumns []string
+	var args []any
+	for _, column := range columns {
+		if value, ok := values[column]; ok {
+			insertColumns = append(insertColumns, column)
+			args = append(args, value)
+		}
+	}
+	quoted := make([]string, len(insertColumns))
+	for index, column := range insertColumns {
+		quoted[index] = quoteSQLiteIdentifier(column)
+	}
+	if _, err := db.Exec("INSERT INTO threads ("+strings.Join(quoted, ", ")+") VALUES ("+sqlitePlaceholders(len(insertColumns))+")", args...); err != nil {
+		t.Fatalf("failed to insert provider sync thread: %v", err)
+	}
+}
+
+func providerSyncThreadRow(t *testing.T, dbPath, sessionID string) map[string]any {
+	t.Helper()
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test sqlite db: %v", err)
+	}
+	defer db.Close()
+	rows, err := querySessionSQLiteRows(db, "SELECT * FROM threads WHERE id = ?", sessionID)
+	if err != nil {
+		t.Fatalf("failed to query thread row: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one thread row, got %d", len(rows))
+	}
+	return rows[0].Values
+}
+
 func buildTestRelayConfig(baseURL, apiKey string) string {
 	return strings.Join([]string{
 		`model_provider = "CodexPlusPlus"`,
@@ -1367,6 +1502,104 @@ func TestBuildWindowsPackagedActivationArguments(t *testing.T) {
 	}
 }
 
+func TestProviderSyncRestoresThreadSourceForLegacyRows(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+	sessionID := "019a61dd-9748-7743-9ce9-92b8663a935b"
+	rolloutPath := filepath.Join(home, "sessions", "2026", "05", "28", "rollout-"+sessionID+".jsonl")
+	writeTestFile(t, rolloutPath, strings.Join([]string{
+		testSessionRolloutLine(sessionID, "/project", "legacy title"),
+		testRolloutResponseMessage("user", "修复历史对话"),
+	}, "\n")+"\n")
+	createProviderSyncThreadsTable(t, filepath.Join(home, "state_5.sqlite"), true)
+	insertProviderSyncThread(t, filepath.Join(home, "state_5.sqlite"), map[string]any{
+		"id":                 sessionID,
+		"rollout_path":       rolloutPath,
+		"created_at":         1779962400,
+		"updated_at":         1779962500,
+		"source":             "vscode",
+		"model_provider":     "openai",
+		"cwd":                "/project",
+		"title":              "legacy title",
+		"sandbox_policy":     `{"type":"danger-full-access"}`,
+		"approval_mode":      "never",
+		"tokens_used":        0,
+		"has_user_event":     0,
+		"archived":           0,
+		"cli_version":        "",
+		"first_user_message": "",
+		"memory_mode":        "enabled",
+		"created_at_ms":      1779962400000,
+		"updated_at_ms":      1779962500000,
+		"preview":            "",
+	})
+
+	result := runProviderSync(home)
+
+	if result.Status != "synced" {
+		t.Fatalf("sync should succeed: %#v", result)
+	}
+	if result.SQLiteRowsUpdated < 3 {
+		t.Fatalf("sync should update provider, user flag, and thread source: %#v", result)
+	}
+	row := providerSyncThreadRow(t, filepath.Join(home, "state_5.sqlite"), sessionID)
+	if got := stringFromAny(row["model_provider"]); got != "CodexPlusPlus" {
+		t.Fatalf("provider mismatch: %q", got)
+	}
+	if got := stringFromAny(row["thread_source"]); got != "user" {
+		t.Fatalf("thread_source should be restored, got %q", got)
+	}
+	if got := int64FromFlexible(row["has_user_event"]); got != 1 {
+		t.Fatalf("has_user_event should be restored, got %#v", row["has_user_event"])
+	}
+}
+
+func TestProviderSyncRestoresMissingThreadRowsFromRollouts(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+	sessionID := "019a61dd-9748-7743-9ce9-92b8663a935b"
+	rolloutPath := filepath.Join(home, "sessions", "2026", "05", "28", "rollout-"+sessionID+".jsonl")
+	writeTestFile(t, rolloutPath, strings.Join([]string{
+		testSessionRolloutLine(sessionID, "/Users/test/project", ""),
+		testRolloutResponseMessage("user", "# Context from my IDE setup:\n\n## My request for Codex:\n恢复这个历史项目会话"),
+	}, "\n")+"\n")
+	createProviderSyncThreadsTable(t, filepath.Join(home, "state_5.sqlite"), true)
+	writeTestFile(t, filepath.Join(home, ".codex-global-state.json"), `{"electron-saved-workspace-roots":["/existing"],"project-order":["/existing"]}`+"\n")
+
+	result := runProviderSync(home)
+
+	if result.Status != "synced" {
+		t.Fatalf("sync should succeed: %#v", result)
+	}
+	if result.SQLiteRowsUpdated == 0 {
+		t.Fatalf("sync should insert missing thread row: %#v", result)
+	}
+	row := providerSyncThreadRow(t, filepath.Join(home, "state_5.sqlite"), sessionID)
+	for key, expected := range map[string]string{
+		"model_provider":     "CodexPlusPlus",
+		"thread_source":      "user",
+		"cwd":                "/Users/test/project",
+		"title":              "恢复这个历史项目会话",
+		"first_user_message": "恢复这个历史项目会话",
+		"preview":            "恢复这个历史项目会话",
+	} {
+		if got := stringFromAny(row[key]); got != expected {
+			t.Fatalf("%s mismatch: got %q want %q (row=%#v)", key, got, expected, row)
+		}
+	}
+	var state map[string]any
+	if err := readJSON(filepath.Join(home, ".codex-global-state.json"), &state); err != nil {
+		t.Fatalf("global state should be readable: %v", err)
+	}
+	if !containsAnyString(state["electron-saved-workspace-roots"], "/Users/test/project") {
+		t.Fatalf("workspace roots should include restored project: %#v", state)
+	}
+	hints, _ := state["thread-workspace-root-hints"].(map[string]any)
+	if got := stringFromAny(hints[sessionID]); got != "/Users/test/project" {
+		t.Fatalf("workspace hint mismatch: %q state=%#v", got, state)
+	}
+}
+
 func TestCodexLaunchPayloadPrefersDirectExecutableWhenReadable(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows executable preference only applies on Windows")
@@ -1388,14 +1621,16 @@ func TestCodexLaunchPayloadPrefersDirectExecutableWhenReadable(t *testing.T) {
 func TestWindowsPackagedExplorerCommandShape(t *testing.T) {
 	command := windowsPackagedExplorerCommand("OpenAI.Codex_abc!App", []string{"--remote-debugging-port=9229", "--remote-allow-origins=http://127.0.0.1:9229"})
 
-	if len(command) != 4 {
+	if len(command) != 2 {
 		t.Fatalf("command length mismatch: %#v", command)
 	}
 	if command[0] != "explorer.exe" || command[1] != `shell:AppsFolder\OpenAI.Codex_abc!App` {
 		t.Fatalf("command shape mismatch: %#v", command)
 	}
-	if command[2] != "--remote-debugging-port=9229" || command[3] != "--remote-allow-origins=http://127.0.0.1:9229" {
-		t.Fatalf("explorer fallback must keep CDP arguments for Codex++ injection: %#v", command)
+	for _, part := range command {
+		if strings.Contains(part, "127.0.0.1:9229") || strings.Contains(part, "--remote-debugging-port") {
+			t.Fatalf("explorer fallback must not receive CDP arguments that can be opened as a URL: %#v", command)
+		}
 	}
 }
 
@@ -1515,6 +1750,63 @@ func TestSelectCodexToolsAssetPrefersWindowsSetup(t *testing.T) {
 	}
 	if asset.Name != "CodexTools-1.1.13-windows-x64-setup.exe" {
 		t.Fatalf("selected wrong asset: %q", asset.Name)
+	}
+}
+
+func TestCodexToolsDownloadsAssetsParsesGitHubPagesLinks(t *testing.T) {
+	assets := codexToolsDownloadsAssets(`
+		<a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">Apple Silicon</a>
+		<a href="./releases/CodexTools-1.1.26-macos-arm64.zip">Apple Silicon zip</a>
+		<a href="./releases/CodexTools-1.1.26-windows-x64-setup.exe">Windows</a>
+		<a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">Duplicate</a>
+	`)
+
+	if len(assets) != 3 {
+		t.Fatalf("expected 3 unique assets, got %d: %#v", len(assets), assets)
+	}
+	if assets[0].Name != "CodexTools-1.1.26-macos-arm64.pkg" {
+		t.Fatalf("asset name mismatch: %q", assets[0].Name)
+	}
+	if assets[0].BrowserDownloadURL != codexToolsPagesBaseURL+"releases/CodexTools-1.1.26-macos-arm64.pkg" {
+		t.Fatalf("absolute download URL mismatch: %q", assets[0].BrowserDownloadURL)
+	}
+	asset, ok := selectCodexToolsAsset(assets, "darwin", "arm64")
+	if !ok {
+		t.Fatal("expected Apple Silicon asset from downloads page")
+	}
+	if latest := codexToolsAssetVersion(asset.Name); latest != "1.1.26" {
+		t.Fatalf("selected version mismatch: %q", latest)
+	}
+}
+
+func TestCodexToolsDownloadsAssetsSelectsMacOSInstallerFromFallbackPage(t *testing.T) {
+	assets := codexToolsDownloadsAssets(`
+		<a href="./releases/CodexTools-1.1.27-macos-arm64.zip">Portable Apple Silicon zip</a>
+		<a href="./releases/CodexTools-1.1.27-macos-arm64.pkg">Download Apple Silicon installer</a>
+		<a href="./releases/CodexTools-1.1.27-macos-x64.pkg">Download Intel installer</a>
+	`)
+
+	asset, ok := selectCodexToolsAsset(assets, "darwin", "arm64")
+	if !ok {
+		t.Fatal("expected a matching macOS asset")
+	}
+	if asset.Name != "CodexTools-1.1.27-macos-arm64.pkg" {
+		t.Fatalf("selected wrong fallback asset: %q", asset.Name)
+	}
+}
+
+func TestSelectCodexToolsAssetDoesNotCrossArchitectures(t *testing.T) {
+	assets := []codexAppMirrorAsset{
+		{Name: "CodexTools-1.1.26-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
+		{Name: "CodexTools-1.1.25-macos-x64.pkg", BrowserDownloadURL: "https://example.com/macos-x64.pkg"},
+	}
+
+	asset, ok := selectCodexToolsAsset(assets, "darwin", "amd64")
+	if !ok {
+		t.Fatal("expected an Intel macOS asset")
+	}
+	if asset.Name != "CodexTools-1.1.25-macos-x64.pkg" {
+		t.Fatalf("selected cross-architecture asset: %q", asset.Name)
 	}
 }
 

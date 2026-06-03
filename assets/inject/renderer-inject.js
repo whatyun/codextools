@@ -744,6 +744,7 @@
   const codexServiceTierModulePromises = new Map();
   const codexThreadServiceTierModes = new Set(["inherit", "standard", "fast"]);
   const codexServiceTierControlModes = new Set(["inherit", "global-standard", "global-fast", "custom"]);
+  const codexServiceTierDispatcherPatchRetryDelaysMs = [500, 1500, 3000, 6000, 12000];
 
   function codexAppAssetUrl(namePart) {
     const urls = [
@@ -760,9 +761,32 @@
         const url = codexAppAssetUrl(namePart);
         if (!url) throw new Error(`未找到 Codex App asset: ${namePart}`);
         return await import(url);
+      }).catch((error) => {
+        codexServiceTierModulePromises.delete(namePart);
+        throw error;
       }));
     }
     return await codexServiceTierModulePromises.get(namePart);
+  }
+
+  function codexDispatcherFromModule(module) {
+    if (!module || typeof module !== "object") return null;
+    for (const value of Object.values(module)) {
+      if (typeof value !== "function") continue;
+      let dispatcher = null;
+      try {
+        dispatcher = value.getInstance?.();
+      } catch (_) {
+        dispatcher = null;
+      }
+      if (dispatcher && typeof dispatcher.dispatchMessage === "function") return dispatcher;
+    }
+    return null;
+  }
+
+  async function codexServiceTierDispatcher() {
+    const module = await loadCodexAppModule("setting-storage-");
+    return codexDispatcherFromModule(module);
   }
 
   async function codexSettingStorageModule() {
@@ -1238,14 +1262,29 @@
 
   function installCodexServiceTierDispatcherPatch() {
     if (window.__codexServiceTierRequestOverrideInstalled === codexServiceTierRequestOverrideVersion) return;
+    if (window.__codexServiceTierRequestOverrideInstalling === codexServiceTierRequestOverrideVersion) return;
+    if ((window.__codexServiceTierDispatcherPatchRetryAfterMs || 0) > Date.now()) return;
+    window.__codexServiceTierRequestOverrideInstalling = codexServiceTierRequestOverrideVersion;
     const patch = async () => {
       try {
-        const module = await loadCodexAppModule("setting-storage-");
-        const dispatcherClass = typeof module.v === "function" && String(module.v).includes("dispatchMessage") ? module.v : null;
-        const dispatcher = dispatcherClass?.getInstance?.();
-        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") throw new Error("Codex dispatcher unavailable");
+        const dispatcher = await codexServiceTierDispatcher();
+        if (!dispatcher || typeof dispatcher.dispatchMessage !== "function") {
+          window.__codexServiceTierRequestOverrideInstalling = "";
+          const retryCount = window.__codexServiceTierDispatcherPatchRetryCount || 0;
+          window.__codexServiceTierDispatcherPatchRetryCount = retryCount + 1;
+          const delay = codexServiceTierDispatcherPatchRetryDelaysMs[Math.min(retryCount, codexServiceTierDispatcherPatchRetryDelaysMs.length - 1)];
+          window.__codexServiceTierDispatcherPatchRetryAfterMs = Date.now() + delay;
+          clearTimeout(window.__codexServiceTierDispatcherPatchRetryTimer);
+          window.__codexServiceTierDispatcherPatchRetryTimer = setTimeout(installCodexServiceTierDispatcherPatch, delay);
+          if (!window.__codexServiceTierDispatcherUnavailableLogged) {
+            window.__codexServiceTierDispatcherUnavailableLogged = true;
+            sendCodexPlusDiagnostic("service_tier_dispatcher_unavailable", { retryDelayMs: delay });
+          }
+          return;
+        }
         if (dispatcher.__codexServiceTierOriginalDispatchMessage) {
           window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
+          window.__codexServiceTierRequestOverrideInstalling = "";
           return;
         }
         dispatcher.__codexServiceTierOriginalDispatchMessage = dispatcher.dispatchMessage.bind(dispatcher);
@@ -1256,12 +1295,21 @@
           return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);
         };
         window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
+        window.__codexServiceTierRequestOverrideInstalling = "";
+        window.__codexServiceTierDispatcherPatchRetryAfterMs = 0;
+        clearTimeout(window.__codexServiceTierDispatcherPatchRetryTimer);
         sendCodexPlusDiagnostic("service_tier_dispatcher_patch_installed", {});
       } catch (error) {
-        sendCodexPlusDiagnostic("service_tier_dispatcher_patch_failed", {
-          errorName: error?.name || "",
-          errorMessage: error?.message || String(error),
-        });
+        window.__codexServiceTierRequestOverrideInstalling = "";
+        const now = Date.now();
+        const lastLogged = window.__codexServiceTierDispatcherPatchFailureLoggedAt || 0;
+        if (now - lastLogged > 30000) {
+          window.__codexServiceTierDispatcherPatchFailureLoggedAt = now;
+          sendCodexPlusDiagnostic("service_tier_dispatcher_patch_failed", {
+            errorName: error?.name || "",
+            errorMessage: error?.message || String(error),
+          });
+        }
       }
     };
     void patch();

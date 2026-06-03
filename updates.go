@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -85,12 +87,21 @@ func latestCodexToolsUpdate(ctx context.Context, goos, goarch string) (map[strin
 		"currentVersion": version,
 		"projectUrl":     codexToolsProjectURL,
 		"releaseUrl":     codexToolsReleaseURL,
+		"downloadsUrl":   codexToolsDownloadsURL,
 		"platform":       goos,
 		"arch":           goarch,
 	}
 	release, err := getJSON[codexToolsRelease](ctx, codexToolsLatestAPIURL)
 	if err != nil {
-		return payload, err
+		fallback, fallbackErr := latestCodexToolsUpdateFromDownloadsPage(ctx, payload, goos, goarch, err)
+		if fallbackErr == nil {
+			return fallback, nil
+		}
+		payload["updateStatus"] = "degraded"
+		payload["message"] = "GitHub API 暂时不可用（" + err.Error() + "），可打开下载页手动检查更新。"
+		payload["apiError"] = err.Error()
+		payload["fallbackError"] = fallbackErr.Error()
+		return payload, nil
 	}
 	latest := cleanVersion(firstString(release.TagName, release.Name))
 	payload["latestVersion"] = latest
@@ -125,20 +136,173 @@ func latestCodexToolsUpdate(ctx context.Context, goos, goarch string) (map[strin
 	return payload, nil
 }
 
+func latestCodexToolsUpdateFromDownloadsPage(ctx context.Context, base map[string]any, goos, goarch string, apiErr error) (map[string]any, error) {
+	data, err := getBytes(ctx, codexToolsDownloadsURL)
+	if err != nil {
+		return nil, err
+	}
+	assets := codexToolsDownloadsAssets(string(data))
+	if len(assets) == 0 {
+		return nil, fmt.Errorf("下载页没有找到 CodexTools 安装包链接")
+	}
+	asset, ok := selectCodexToolsAsset(assets, goos, goarch)
+	if !ok {
+		payload := cloneStringAnyMap(base)
+		payload["releaseUrl"] = codexToolsDownloadsURL
+		payload["updateSource"] = "downloads_page"
+		if apiErr != nil {
+			payload["apiError"] = apiErr.Error()
+		}
+		payload["updateStatus"] = "missing_asset"
+		payload["message"] = "GitHub API 暂时不可用，下载页也没有找到当前系统对应安装包。"
+		return payload, nil
+	}
+	latest := codexToolsAssetVersion(asset.Name)
+	payload := cloneStringAnyMap(base)
+	payload["latestVersion"] = latest
+	payload["releaseName"] = "CodexTools " + latest
+	payload["tagName"] = "v" + latest
+	payload["releaseUrl"] = codexToolsDownloadsURL
+	payload["updateSource"] = "downloads_page"
+	if apiErr != nil {
+		payload["apiError"] = apiErr.Error()
+	}
+	if latest == "" {
+		payload["updateStatus"] = "degraded"
+		payload["message"] = "GitHub API 暂时不可用，下载页也没有可识别的版本号。"
+		return payload, nil
+	}
+	if compareVersions(latest, version) <= 0 {
+		payload["updateStatus"] = "up_to_date"
+		payload["message"] = "当前已是最新版本。"
+		return payload, nil
+	}
+	payload["updateStatus"] = "available"
+	payload["assetName"] = asset.Name
+	payload["downloadUrl"] = asset.BrowserDownloadURL
+	payload["size"] = asset.Size
+	payload["contentType"] = asset.ContentType
+	payload["message"] = "发现新版本，可下载更新包。"
+	return payload, nil
+}
+
+var codexToolsDownloadHrefPattern = regexp.MustCompile(`(?i)href=["']([^"']*CodexTools-[^"']+\.(pkg|zip|exe))["']`)
+
+func codexToolsDownloadsAssets(page string) []codexAppMirrorAsset {
+	matches := codexToolsDownloadHrefPattern.FindAllStringSubmatch(page, -1)
+	assets := make([]codexAppMirrorAsset, 0, len(matches))
+	seen := map[string]bool{}
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		href := html.UnescapeString(strings.TrimSpace(match[1]))
+		if href == "" {
+			continue
+		}
+		downloadURL := codexToolsAbsoluteDownloadURL(href)
+		if seen[downloadURL] {
+			continue
+		}
+		seen[downloadURL] = true
+		name := filepath.Base(strings.TrimPrefix(href, "./"))
+		assets = append(assets, codexAppMirrorAsset{
+			Name:               name,
+			BrowserDownloadURL: downloadURL,
+			ContentType:        codexToolsAssetContentType(name),
+		})
+	}
+	return assets
+}
+
+func codexToolsAbsoluteDownloadURL(href string) string {
+	if strings.HasPrefix(href, "https://") || strings.HasPrefix(href, "http://") {
+		return href
+	}
+	cleaned := strings.TrimLeft(strings.TrimPrefix(href, "./"), "/")
+	return codexToolsPagesBaseURL + cleaned
+}
+
+func codexToolsAssetContentType(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".pkg"):
+		return "application/octet-stream"
+	case strings.HasSuffix(lower, ".zip"):
+		return "application/zip"
+	case strings.HasSuffix(lower, ".exe"):
+		return "application/vnd.microsoft.portable-executable"
+	default:
+		return ""
+	}
+}
+
+func codexToolsAssetVersion(name string) string {
+	lower := strings.ToLower(name)
+	prefix := "codextools-"
+	index := strings.Index(lower, prefix)
+	if index < 0 {
+		return ""
+	}
+	rest := name[index+len(prefix):]
+	parts := strings.Split(rest, "-")
+	if len(parts) == 0 {
+		return ""
+	}
+	return cleanVersion(parts[0])
+}
+
 func selectCodexToolsAsset(assets []codexAppMirrorAsset, goos, goarch string) (codexAppMirrorAsset, bool) {
 	var best codexAppMirrorAsset
 	bestScore := -1_000_000
+	bestVersion := ""
 	for _, asset := range assets {
 		if strings.TrimSpace(asset.BrowserDownloadURL) == "" {
 			continue
 		}
+		if !codexToolsAssetCompatible(asset.Name, goos, goarch) {
+			continue
+		}
 		score := codexToolsAssetScore(asset.Name, goos, goarch)
-		if score > bestScore {
+		if score <= 0 {
+			continue
+		}
+		assetVersion := codexToolsAssetVersion(asset.Name)
+		if bestVersion == "" || compareVersions(assetVersion, bestVersion) > 0 || (compareVersions(assetVersion, bestVersion) == 0 && score > bestScore) {
 			best = asset
 			bestScore = score
+			bestVersion = assetVersion
 		}
 	}
 	return best, bestScore > 0
+}
+
+func codexToolsAssetCompatible(name, goos, goarch string) bool {
+	lower := strings.ToLower(name)
+	switch goos {
+	case "darwin":
+		if !strings.Contains(lower, "macos") && !strings.Contains(lower, "darwin") {
+			return false
+		}
+	case "windows":
+		if !strings.Contains(lower, "windows") && !strings.Contains(lower, "win") {
+			return false
+		}
+	default:
+		if goos != "" && !strings.Contains(lower, goos) {
+			return false
+		}
+	}
+	switch goarch {
+	case "arm64":
+		return strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64")
+	case "amd64":
+		return strings.Contains(lower, "x64") || strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64")
+	case "386":
+		return strings.Contains(lower, "x86") || strings.Contains(lower, "386") || strings.Contains(lower, "ia32")
+	default:
+		return true
+	}
 }
 
 func codexToolsAssetScore(name, goos, goarch string) int {

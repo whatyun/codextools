@@ -50,7 +50,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Component, useEffect, useMemo, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { backendInvoke, openFileDialog } from "@/backend";
@@ -133,11 +133,15 @@ type UpdateResult = CommandResult<{
   publishedAt?: string;
   projectUrl: string;
   releaseUrl: string;
+  downloadsUrl?: string;
   platform: string;
   arch: string;
   assetName?: string;
   downloadUrl?: string;
   downloadedPath?: string;
+  updateSource?: string;
+  apiError?: string;
+  fallbackError?: string;
   size?: number;
   contentType?: string;
 }>;
@@ -572,7 +576,7 @@ export function App() {
             }
           : current,
       );
-      if (result.updateStatus === "available" || !silent || !isSuccessStatus(result.status)) {
+      if (result.updateStatus === "available" || !silent) {
         showResultNotice("版本更新", result, { silentSuccess: result.updateStatus !== "available" });
       }
     }
@@ -612,7 +616,7 @@ export function App() {
       setSettingsForm(normalizeSettings(result.settings));
       setLaunchForm((current) => ({
         ...current,
-        appPath: current.appPath || result.settings.codexAppPath || "",
+        appPath: current.appPath,
       }));
       if (!silent) showResultNotice("设置已加载", result, { silentSuccess: true });
     }
@@ -868,7 +872,7 @@ export function App() {
       const normalized = normalizeSettings(result.settings);
       setSettings(result);
       setSettingsForm(normalized);
-      setLaunchForm((current) => ({ ...current, appPath: normalized.codexAppPath }));
+      setLaunchForm((current) => ({ ...current, appPath: "" }));
       showNotice("Codex 程序修复", result.message, result.status);
       await refreshOverview(true);
       await refreshInstallGuideStatus(true);
@@ -1283,7 +1287,7 @@ export function App() {
       setSettings(result);
       const normalized = normalizeSettings(result.settings);
       setSettingsForm(normalized);
-      setLaunchForm((current) => ({ ...current, appPath: normalized.codexAppPath }));
+      setLaunchForm((current) => ({ ...current, appPath: "" }));
       await refreshOverview(true);
     }
     return result;
@@ -1549,6 +1553,51 @@ export function App() {
   );
 }
 
+type AppErrorBoundaryState = {
+  error: Error | null;
+};
+
+export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
+  state: AppErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("CodexTools UI render failed", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <StartupErrorScreen error={this.state.error} onRetry={() => this.setState({ error: null })} />;
+  }
+}
+
+function StartupErrorScreen({ error, onRetry }: { error: Error; onRetry: () => void }) {
+  return (
+    <main className="startup-error">
+      <section>
+        <div className="startup-error-icon">
+          <Bell className="h-6 w-6" />
+        </div>
+        <div>
+          <p className="home-kicker">CodexTools 启动保护</p>
+          <h1>界面初始化遇到异常</h1>
+          <p>管理工具没有白屏退出。你可以重试，或把这段错误发给开发者排查。</p>
+          <code>{error.message || String(error)}</code>
+          <div className="hero-actions">
+            <Button onClick={onRetry} variant="secondary">
+              <RefreshCw className="h-4 w-4" />
+              重试界面
+            </Button>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 type Actions = {
   refreshCurrent: () => Promise<void>;
   launch: () => Promise<void>;
@@ -1635,6 +1684,8 @@ function OverviewScreen({
   const launchMode = settings?.settings.launchMode ?? "patch";
   const apiMode = apiModeLabel(relay);
   const update = updateInfo ?? overview?.update ?? null;
+  const codexApp = pathStateOrDefault(overview?.codex_app);
+  const silentShortcut = pathStateOrDefault(overview?.silent_shortcut);
   const health = healthItems(overview, relay);
   const readyCount = health.filter((item) => item.ok).length;
   const allReady = health.every((item) => item.ok);
@@ -1708,9 +1759,9 @@ function OverviewScreen({
         />
         <HomeActionCard
           title="入口和路径"
-          value={overview?.silent_shortcut.status === "installed" ? "已安装" : "建议检查"}
-          detail={overview?.codex_app.path || "如果启动失败，先到修复工具选择 Codex 应用路径。"}
-          tone={overview?.silent_shortcut.status === "installed" && overview?.codex_app.status === "found" ? "good" : "warn"}
+          value={silentShortcut.status === "installed" ? "已安装" : "建议检查"}
+          detail={codexApp.path || "如果启动失败，先到修复工具选择 Codex 应用路径。"}
+          tone={silentShortcut.status === "installed" && codexApp.status === "found" ? "good" : "warn"}
           icon={Wrench}
           actionLabel="修复工具"
           onAction={() => void actions.goMaintenance()}
@@ -4126,6 +4177,7 @@ function statusLabel(status: string) {
     missing_asset: "缺少安装包",
     downloaded: "已下载",
     opened_release: "已打开发布页",
+    degraded: "稍后再查",
   };
   return labels[status] ?? status;
 }
@@ -4174,24 +4226,27 @@ function apiModeLabel(relay: RelayResult | null) {
 }
 
 function healthItems(overview: OverviewResult | null, relay: RelayResult | null) {
+  const codexApp = pathStateOrDefault(overview?.codex_app);
+  const silentShortcut = pathStateOrDefault(overview?.silent_shortcut);
+  const managementShortcut = pathStateOrDefault(overview?.management_shortcut);
   return [
     {
       title: "Codex 应用",
-      status: overview?.codex_app.status ?? "not_checked",
-      ok: overview?.codex_app.status === "found",
-      detail: overview?.codex_app.path || "尚未检查 Codex 应用路径。",
+      status: codexApp.status,
+      ok: codexApp.status === "found",
+      detail: codexApp.path || "尚未检查 Codex 应用路径。",
     },
     {
       title: "静默启动入口",
-      status: overview?.silent_shortcut.status ?? "not_checked",
-      ok: overview?.silent_shortcut.status === "installed",
-      detail: overview?.silent_shortcut.path || "缺少 Codex++ 静默启动快捷方式时可在安装维护页修复。",
+      status: silentShortcut.status,
+      ok: silentShortcut.status === "installed",
+      detail: silentShortcut.path || "缺少 Codex++ 静默启动快捷方式时可在安装维护页修复。",
     },
     {
       title: "管理工具入口",
-      status: overview?.management_shortcut.status ?? "not_checked",
-      ok: overview?.management_shortcut.status === "installed",
-      detail: overview?.management_shortcut.path || "缺少管理工具快捷方式时可在安装维护页修复。",
+      status: managementShortcut.status,
+      ok: managementShortcut.status === "installed",
+      detail: managementShortcut.path || "缺少管理工具快捷方式时可在安装维护页修复。",
     },
     {
       title: "ChatGPT 登录",
@@ -4200,6 +4255,10 @@ function healthItems(overview: OverviewResult | null, relay: RelayResult | null)
       detail: relayOfficialAccountLabel(relay) || relay?.officialAuthSource || "官方混合 API 需要官方登录；中转 API 可不用官方登录。",
     },
   ];
+}
+
+function pathStateOrDefault(state: PathState | null | undefined): PathState {
+  return state ?? { status: "not_checked", path: null };
 }
 
 function normalizeSettings(settings: BackendSettings): BackendSettings {

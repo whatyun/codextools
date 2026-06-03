@@ -170,9 +170,9 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.25-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
               <a href="./releases/CodexTools-1.1.25-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.25-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.26-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
               <a href="./releases/CodexTools-1.1.25-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
@@ -180,9 +180,9 @@
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.25-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
               <a href="./releases/CodexTools-1.1.25-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.25-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.26-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
               <a href="./releases/CodexTools-1.1.25-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
@@ -214,21 +214,21 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.25</strong>
+          <strong>Version 1.1.26 Apple Silicon hotfix</strong>
           <ul>
-            <li>Move-to-projectless now goes through the Go bridge and updates Codex global state so thread lists stay in sync.</li>
-            <li>Move-to-workspace also refreshes global workspace hints and projectless markers after the rollout and SQLite records are updated.</li>
-            <li>Add Markdown export bridge support for sessions, exporting user and assistant messages while excluding tool output and reasoning records.</li>
-            <li>Reloading the current moved session now returns to the Codex home view instead of reloading a stale conversation URL.</li>
+            <li>Fix the macOS Apple Silicon startup path so the manager no longer opens to a blank background on affected M1/M2/M3/M4 Macs.</li>
+            <li>Startup update checks are now quiet when GitHub API returns HTTP 403, so the first window is not covered by a failure toast.</li>
+            <li>Update lookup falls back to the public downloads page and only selects packages that match the current platform and architecture.</li>
+            <li>The frontend build now targets Safari 15 and includes a visible startup error screen instead of silently rendering a blank window.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.25</strong>
+          <strong>版本 1.1.26 Apple Silicon 热修复</strong>
           <ul>
-            <li>移动到普通对话现在通过 Go 桥接执行，并同步 Codex 全局状态，让会话列表保持一致。</li>
-            <li>移动到项目也会在更新 rollout 和 SQLite 记录后刷新全局 workspace hint 与普通对话标记。</li>
-            <li>新增会话 Markdown 导出桥接，只导出用户和助手消息，并排除工具输出和推理记录。</li>
-            <li>移动当前会话后会回到 Codex 首页，避免重新加载已经过期的会话 URL。</li>
+            <li>修复 macOS Apple Silicon 启动路径，受影响的 M1/M2/M3/M4 设备不再打开后只显示空白背景。</li>
+            <li>启动时自动检查更新遇到 GitHub API HTTP 403 会静默处理，不再用失败提示遮住首屏。</li>
+            <li>更新检查增加公开下载页兜底，并且只选择匹配当前平台和芯片架构的安装包。</li>
+            <li>前端构建目标调整为 Safari 15，并加入可见启动错误页，避免异常时静默白屏。</li>
           </ul>
         </div>
       </section>

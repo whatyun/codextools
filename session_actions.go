@@ -768,6 +768,8 @@ func updateCodexGlobalStateForSession(home string, lookup sessionLookupResult, t
 	removeGlobalStateMapEntries(state, "thread-workspace-root-hints", idSet)
 	removeGlobalStateMapEntries(state, "thread-project-assignments", idSet)
 	if !projectless && strings.TrimSpace(targetCWD) != "" {
+		ensureGlobalStateWorkspaceRoot(state, "electron-saved-workspace-roots", targetCWD)
+		ensureGlobalStateWorkspaceRoot(state, "project-order", targetCWD)
 		hints := mapFromAny(state["thread-workspace-root-hints"])
 		for _, id := range bareIDs {
 			hints[id] = targetCWD
@@ -775,6 +777,15 @@ func updateCodexGlobalStateForSession(home string, lookup sessionLookupResult, t
 		state["thread-workspace-root-hints"] = hints
 	}
 	return writeCodexGlobalState(home, state)
+}
+
+func ensureGlobalStateWorkspaceRoot(state map[string]any, key, targetCWD string) {
+	targetCWD = toDesktopWorkspacePath(targetCWD)
+	if strings.TrimSpace(targetCWD) == "" {
+		return
+	}
+	roots := pathArray(state[key])
+	state[key] = dedupePaths(append(roots, targetCWD))
 }
 
 func removeGlobalStateMapEntries(state map[string]any, key string, ids map[string]bool) {

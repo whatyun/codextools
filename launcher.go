@@ -316,26 +316,14 @@ func startCodexApp(appPath string, debugPort uint16, extraArgs []string) (codexL
 				})
 				return nil, err
 			}
-			explorerErr := startWindowsPackagedAppViaExplorer(activation.appUserModelID, debugPort, buildCodexArguments(debugPort, extraArgs))
-			if explorerErr == nil {
-				if waitForCDPPortAvailable(debugPort, 15*time.Second) {
-					return &windowsPackagedExplorerLaunch{appUserModelID: activation.appUserModelID, command: windowsPackagedExplorerCommand(activation.appUserModelID, buildCodexArguments(debugPort, extraArgs)), debugPort: debugPort}, nil
-				}
-				explorerErr = packagedCodexDebugPortError(activation.appUserModelID, debugPort, "explorer")
-				appendDiagnosticLog("launcher.windows_packaged_explorer_no_cdp", map[string]any{
-					"appUserModelId": activation.appUserModelID,
-					"debug_port":     debugPort,
-					"error":          explorerErr.Error(),
-				})
-			}
 			if len(command) == 0 || strings.TrimSpace(command[0]) == "" || !fileExists(command[0]) {
-				return nil, fmt.Errorf("无法激活 Windows Codex 应用 %s：%w；explorer 兜底也失败：%v", activation.appUserModelID, activationErr, explorerErr)
+				return nil, fmt.Errorf("无法激活 Windows Codex 应用 %s：%w；未找到可直接执行的 Codex.exe，已跳过 explorer 兜底以避免把调试参数作为网页打开", activation.appUserModelID, activationErr)
 			}
 			handle, err := startCodexProcess(command)
 			if err == nil {
 				return handle, nil
 			}
-			return nil, fmt.Errorf("MSIX 激活 %s 失败：%v；explorer 兜底失败：%v；直接启动 %s 也失败：%w", activation.appUserModelID, activationErr, explorerErr, command[0], err)
+			return nil, fmt.Errorf("MSIX 激活 %s 失败：%v；直接启动 %s 也失败：%w", activation.appUserModelID, activationErr, command[0], err)
 		}
 	}
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
@@ -367,17 +355,7 @@ func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs 
 }
 
 func windowsPackagedExplorerCommand(appUserModelID string, args []string) []string {
-	command := []string{"explorer.exe", `shell:AppsFolder\` + appUserModelID}
-	return append(command, args...)
-}
-
-func startWindowsPackagedAppViaExplorer(appUserModelID string, debugPort uint16, args []string) error {
-	command := windowsPackagedExplorerCommand(appUserModelID, args)
-	_, err := startCodexProcess(command)
-	if err != nil {
-		return err
-	}
-	return nil
+	return []string{"explorer.exe", `shell:AppsFolder\` + appUserModelID}
 }
 
 func packagedCodexDebugPortError(appUserModelID string, debugPort uint16, method string) error {

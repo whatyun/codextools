@@ -215,6 +215,20 @@ type sessionChange struct {
 	Separator         string
 	ThreadID          string
 	CWD               string
+	Source            string
+	Title             string
+	FirstUserMessage  string
+	Preview           string
+	CreatedAt         int64
+	UpdatedAt         int64
+	CreatedAtMs       int64
+	UpdatedAtMs       int64
+	Archived          bool
+	CLIVersion        string
+	Model             string
+	ReasoningEffort   string
+	SandboxPolicy     string
+	ApprovalMode      string
 	HasUserEvent      bool
 	RewriteNeeded     bool
 }

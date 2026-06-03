@@ -1169,7 +1169,7 @@ func plistStringAfterKey(text, key string) string {
 
 func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	request := mapArg(args, "request")
-	appPath := normalizeCodexAppPath(stringArg(request, "appPath"))
+	appPath := managerLaunchAppPath(stringArg(request, "appPath"), loadSettings())
 	debugPort := uint16Arg(request, "debugPort", 9229)
 	helperPort := uint16Arg(request, "helperPort", 57321)
 	launcher := companionBinaryPath(silentBinary)
@@ -1216,6 +1216,31 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 		result[key] = value
 	}
 	return result
+}
+
+func managerLaunchAppPath(requested string, settings backendSettings) string {
+	appPath := normalizeCodexAppPath(requested)
+	if runtime.GOOS != "windows" || appPath == "" {
+		return appPath
+	}
+	if windowsCodexPathSupportsDirectLaunch(appPath) {
+		return appPath
+	}
+	if saved := normalizeCodexAppPath(settings.CodexAppPath); saved != "" && windowsCodexPathSupportsDirectLaunch(saved) {
+		return saved
+	}
+	if detected := resolveCodexApp(""); detected != "" && windowsCodexPathSupportsDirectLaunch(detected) {
+		return detected
+	}
+	return ""
+}
+
+func windowsCodexPathSupportsDirectLaunch(appPath string) bool {
+	if runtime.GOOS != "windows" {
+		return strings.TrimSpace(buildCodexExecutable(appPath)) != ""
+	}
+	executable := buildCodexExecutable(appPath)
+	return strings.TrimSpace(executable) != "" && fileExists(executable)
 }
 
 func waitForLaunchStatusAfter(after time.Time, timeout time.Duration) *launchStatus {

@@ -2000,6 +2000,57 @@ body {
   color: hsl(var(--foreground));
 }
 
+.startup-error {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 28px;
+}
+
+.startup-error section {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 18px;
+  width: min(680px, 100%);
+  border: 1px solid hsl(var(--border));
+  border-radius: 28px;
+  background: hsl(var(--card) / 0.92);
+  box-shadow: 0 24px 80px hsl(217 33% 20% / 0.18);
+  padding: 26px;
+}
+
+.startup-error-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  background: hsl(var(--accent));
+  color: hsl(var(--destructive));
+}
+
+.startup-error h1 {
+  margin: 4px 0 10px;
+  font-size: clamp(24px, 4vw, 34px);
+  line-height: 1.1;
+}
+
+.startup-error p {
+  margin: 0 0 14px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.7;
+}
+
+.startup-error code {
+  display: block;
+  overflow: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--muted) / 0.7);
+  color: hsl(var(--foreground));
+  padding: 12px;
+}
+
 @keyframes toast-progress {
   from {
     transform: scaleX(1);

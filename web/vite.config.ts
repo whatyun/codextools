@@ -5,6 +5,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    target: "safari15",
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

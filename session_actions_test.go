@@ -16,8 +16,10 @@ func TestMoveThreadWorkspaceUpdatesRolloutAndSQLite(t *testing.T) {
 	writeTestFile(t, rolloutPath, testSessionRolloutLine(sessionID, "/old/project", "Move me")+"\n{\"type\":\"user_message\"}\n")
 	createTestThreadsTable(t, filepath.Join(home, ".codex", "state_5.sqlite"), sessionID, rolloutPath, "/old/project", "Move me")
 	writeTestGlobalState(t, home, map[string]any{
-		"projectless-thread-ids":      []any{sessionID, "keep-me"},
-		"thread-workspace-root-hints": map[string]any{sessionID: "/old/project", "keep-me": "/keep"},
+		"projectless-thread-ids":         []any{sessionID, "keep-me"},
+		"thread-workspace-root-hints":    map[string]any{sessionID: "/old/project", "keep-me": "/keep"},
+		"electron-saved-workspace-roots": []any{"/existing/project"},
+		"project-order":                  []any{"/existing/project"},
 	})
 
 	result := handleSessionDataRoute("/move-thread-workspace", map[string]any{"session_id": "local:" + sessionID, "target_cwd": "/new/project"})
@@ -48,6 +50,12 @@ func TestMoveThreadWorkspaceUpdatesRolloutAndSQLite(t *testing.T) {
 	}
 	if got := stringFromAny(hints["keep-me"]); got != "/keep" {
 		t.Fatalf("unrelated workspace hint should remain: %q", got)
+	}
+	if !containsAnyString(state["electron-saved-workspace-roots"], "/new/project") {
+		t.Fatalf("saved workspace roots should include target project: %#v", state["electron-saved-workspace-roots"])
+	}
+	if !containsAnyString(state["project-order"], "/new/project") {
+		t.Fatalf("project order should include target project: %#v", state["project-order"])
 	}
 }
 
