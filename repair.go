@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -18,9 +20,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type codexCommandOutput struct {
+	Command string
+	Output  string
+	Err     error
+}
+
+var runCodexPluginCommand = defaultRunCodexPluginCommand
+
 func (s *server) syncProvidersNow() commandResult {
 	result := runProviderSync(codexHomeDir())
-	repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true})
+	repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
 	payload := map[string]any{
 		"syncStatus":          result.Status,
 		"targetProvider":      result.TargetProvider,
@@ -41,37 +51,43 @@ func (s *server) syncProvidersNow() commandResult {
 		message = strings.TrimSpace(message + " " + repairResult.Message)
 	}
 	return commandResult{
-		"status":              status,
-		"message":             message,
-		"syncStatus":          payload["syncStatus"],
-		"targetProvider":      payload["targetProvider"],
-		"changedSessionFiles": payload["changedSessionFiles"],
-		"sqliteRowsUpdated":   payload["sqliteRowsUpdated"],
-		"backupDir":           payload["backupDir"],
-		"syncMessage":         payload["syncMessage"],
-		"pluginCount":         repairResult.PluginCount,
-		"marketplaceCount":    repairResult.MarketplaceCount,
-		"pluginBackupPath":    repairResult.BackupPath,
+		"status":                    status,
+		"message":                   message,
+		"syncStatus":                payload["syncStatus"],
+		"targetProvider":            payload["targetProvider"],
+		"changedSessionFiles":       payload["changedSessionFiles"],
+		"sqliteRowsUpdated":         payload["sqliteRowsUpdated"],
+		"backupDir":                 payload["backupDir"],
+		"syncMessage":               payload["syncMessage"],
+		"pluginCount":               repairResult.PluginCount,
+		"marketplaceCount":          repairResult.MarketplaceCount,
+		"pluginBackupPath":          repairResult.BackupPath,
+		"marketplaceRefreshStatus":  repairResult.MarketplaceRefreshStatus,
+		"marketplaceRefreshSummary": repairResult.MarketplaceRefreshSummary,
+		"marketplaceRefreshError":   repairResult.MarketplaceRefreshError,
 	}
 }
 
 func (s *server) repairCodexPlugins() commandResult {
-	result := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true})
+	result := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
 	status := "ok"
 	if result.Status == "failed" {
 		status = "failed"
 	}
 	return commandResult{
-		"status":           status,
-		"message":          result.Message,
-		"backupPath":       result.BackupPath,
-		"pluginCount":      result.PluginCount,
-		"marketplaceCount": result.MarketplaceCount,
-		"mcpServerCount":   result.MCPServerCount,
-		"configChanged":    result.PluginConfigChanged,
-		"goalsEnabled":     result.GoalsEnabled,
-		"configPath":       filepath.Join(codexHomeDir(), "config.toml"),
-		"codexHome":        codexHomeDir(),
+		"status":                    status,
+		"message":                   result.Message,
+		"backupPath":                result.BackupPath,
+		"pluginCount":               result.PluginCount,
+		"marketplaceCount":          result.MarketplaceCount,
+		"mcpServerCount":            result.MCPServerCount,
+		"marketplaceRefreshStatus":  result.MarketplaceRefreshStatus,
+		"marketplaceRefreshSummary": result.MarketplaceRefreshSummary,
+		"marketplaceRefreshError":   result.MarketplaceRefreshError,
+		"configChanged":             result.PluginConfigChanged,
+		"goalsEnabled":              result.GoalsEnabled,
+		"configPath":                filepath.Join(codexHomeDir(), "config.toml"),
+		"codexHome":                 codexHomeDir(),
 	}
 }
 
@@ -126,6 +142,7 @@ func repairCodexConfig(home string, options codexConfigRepairOptions) codexConfi
 		result.GoalsEnabled = true
 		result.GoalsConfigChanged = updated != beforeGoals
 	}
+	changed := updated != original
 	if updated != original {
 		backupPath, err := writeCodexConfigWithBackup(configPath, updated, "config-repair")
 		if err != nil {
@@ -133,7 +150,38 @@ func repairCodexConfig(home string, options codexConfigRepairOptions) codexConfi
 		}
 		result.BackupPath = backupPath
 	}
-	result.Message = codexConfigRepairMessage(result, options, updated != original)
+	if options.Plugins && options.RefreshMarketplaces {
+		refresh := refreshCodexMarketplaces(home)
+		result.MarketplaceRefreshStatus = refresh.Status
+		result.MarketplaceRefreshSummary = refresh.Summary
+		result.MarketplaceRefreshError = refresh.Error
+		if refresh.Status == "failed" {
+			result.Status = "failed"
+		}
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			result.Status = "failed"
+			result.MarketplaceRefreshError = strings.TrimSpace(result.MarketplaceRefreshError + "；刷新后读取 config.toml 失败：" + err.Error())
+		} else {
+			refreshedOriginal := string(data)
+			refreshedUpdated, pluginCount, marketplaceCount, mcpCount := repairCodexPluginConfig(home, refreshedOriginal)
+			result.PluginCount = pluginCount
+			result.MarketplaceCount = marketplaceCount
+			result.MCPServerCount = mcpCount
+			if refreshedUpdated != refreshedOriginal {
+				backupPath, err := writeCodexConfigWithBackup(configPath, refreshedUpdated, "config-repair")
+				if err != nil {
+					return codexConfigRepairResult{Status: "failed", Message: "写入刷新后的 config.toml 失败：" + err.Error(), BackupPath: backupPath}
+				}
+				if result.BackupPath == nil {
+					result.BackupPath = backupPath
+				}
+				result.PluginConfigChanged = true
+				changed = true
+			}
+		}
+	}
+	result.Message = codexConfigRepairMessage(result, options, changed)
 	return result
 }
 
@@ -144,14 +192,7 @@ func repairCodexPluginConfig(home, contents string) (string, int, int, int) {
 		if strings.TrimSpace(marketplace.Source) == "" {
 			continue
 		}
-		if !hasTable(updated, "marketplaces."+marketplace.Name) {
-			updated = appendTomlBlock(updated, []string{
-				"[marketplaces." + marketplace.Name + "]",
-				"last_updated = " + quoteToml(time.Now().UTC().Format(time.RFC3339)),
-				`source_type = "local"`,
-				"source = " + quoteToml(marketplace.Source),
-			})
-		}
+		updated = repairCodexMarketplaceTable(updated, marketplace)
 	}
 	plugins := discoverCachedPluginEnables(home)
 	for _, plugin := range plugins {
@@ -167,6 +208,125 @@ func repairCodexPluginConfig(home, contents string) (string, int, int, int) {
 	return updated, len(plugins), len(marketplaces), mcpCount
 }
 
+func repairCodexMarketplaceTable(contents string, marketplace marketplaceSpec) string {
+	table := "marketplaces." + marketplace.Name
+	lastUpdated := quoteToml(time.Now().UTC().Format(time.RFC3339))
+	if !hasTable(contents, table) {
+		return appendTomlBlock(contents, []string{
+			"[" + table + "]",
+			"last_updated = " + lastUpdated,
+			`source_type = "local"`,
+			"source = " + quoteToml(marketplace.Source),
+		})
+	}
+	values := tableValues(contents, table)
+	sourceType := strings.TrimSpace(unquoteToml(values["source_type"]))
+	source := strings.TrimSpace(unquoteToml(values["source"]))
+	if sourceType == "local" && samePath(source, marketplace.Source) {
+		return contents
+	}
+	updated := upsertTableKey(contents, table, "last_updated", lastUpdated)
+	updated = upsertTableKey(updated, table, "source_type", quoteToml("local"))
+	updated = upsertTableKey(updated, table, "source", quoteToml(marketplace.Source))
+	return updated
+}
+
+type marketplaceRefreshResult struct {
+	Status  string
+	Summary string
+	Error   string
+}
+
+func refreshCodexMarketplaces(home string) marketplaceRefreshResult {
+	if !isDir(home) {
+		return marketplaceRefreshResult{Status: "skipped", Summary: "Codex home 不存在，已跳过 marketplace 刷新。"}
+	}
+	if !hasRefreshableCodexMarketplaces(home) {
+		return marketplaceRefreshResult{Status: "skipped", Summary: "未发现已配置或本地可用的 Codex marketplace。"}
+	}
+	commands := [][]string{
+		{"plugin", "marketplace", "upgrade"},
+		{"plugin", "marketplace", "list"},
+		{"plugin", "list"},
+	}
+	var summaries []string
+	var failures []string
+	for _, args := range commands {
+		output := runCodexPluginCommand(home, args...)
+		label := "codex " + strings.Join(args, " ")
+		if strings.TrimSpace(output.Command) != "" {
+			label = output.Command
+		}
+		if output.Err != nil {
+			failures = append(failures, label+": "+output.Err.Error()+outputPreview(output.Output))
+			continue
+		}
+		summaries = append(summaries, label+outputPreview(output.Output))
+	}
+	if len(failures) > 0 {
+		return marketplaceRefreshResult{
+			Status:  "failed",
+			Summary: strings.Join(summaries, "；"),
+			Error:   strings.Join(failures, "；"),
+		}
+	}
+	return marketplaceRefreshResult{Status: "ok", Summary: strings.Join(summaries, "；")}
+}
+
+func hasRefreshableCodexMarketplaces(home string) bool {
+	if len(discoverCodexMarketplaces(home)) > 0 {
+		return true
+	}
+	contents := readFile(filepath.Join(home, "config.toml"))
+	for _, line := range splitLines(contents) {
+		if strings.HasPrefix(strings.TrimSpace(line), "[marketplaces.") {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultRunCodexPluginCommand(home string, args ...string) codexCommandOutput {
+	command := codexCLIExecutable()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	hideSubprocessWindow(cmd)
+	cmd.Env = append(os.Environ(), "CODEX_HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		err = ctx.Err()
+	}
+	return codexCommandOutput{Command: "codex " + strings.Join(args, " "), Output: string(out), Err: err}
+}
+
+func codexCLIExecutable() string {
+	resourcesDir := codexResourcesDir()
+	candidate := filepath.Join(resourcesDir, "codex")
+	if runtime.GOOS == "windows" {
+		candidate += ".exe"
+	}
+	if fileExists(candidate) {
+		return candidate
+	}
+	if path, err := exec.LookPath("codex"); err == nil {
+		return path
+	}
+	return "codex"
+}
+
+func outputPreview(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	output = strings.Join(strings.Fields(output), " ")
+	if len(output) > 240 {
+		output = output[:240] + "..."
+	}
+	return "（" + output + "）"
+}
+
 func repairCodexGoalsConfig(contents string) string {
 	return upsertTableKey(contents, "features", "goals", "true")
 }
@@ -180,6 +340,20 @@ func codexConfigRepairMessage(result codexConfigRepairResult, options codexConfi
 			parts = append(parts, fmt.Sprintf("已恢复插件配置：%d 个插件、%d 个市场源", result.PluginCount, result.MarketplaceCount))
 		} else {
 			parts = append(parts, fmt.Sprintf("插件配置已完整：%d 个插件、%d 个市场源", result.PluginCount, result.MarketplaceCount))
+		}
+		if options.RefreshMarketplaces {
+			switch result.MarketplaceRefreshStatus {
+			case "ok":
+				parts = append(parts, "Codex 插件市场已刷新/重读")
+			case "skipped":
+				parts = append(parts, "Codex 插件市场刷新已跳过")
+			case "failed":
+				if strings.TrimSpace(result.MarketplaceRefreshError) != "" {
+					parts = append(parts, "Codex 插件市场刷新失败："+result.MarketplaceRefreshError)
+				} else {
+					parts = append(parts, "Codex 插件市场刷新失败")
+				}
+			}
 		}
 	}
 	if options.Goals {

@@ -85,7 +85,7 @@ The guided flow checks platform and architecture, confirms Codex installation, i
 - Home dashboard: launch status, active connection, UI enhancement mode, entry paths, and key health checks.
 - Beginner guide: system detection, Codex install check, CCSwitch import, mode selection, and Codex++ launch flow.
 - Connection service: official login, mixed API mode, relay/API providers, CCSwitch import, and connectivity testing.
-- UI features: session delete, Markdown export, project move, Timeline, plugin entry unlock, and forced plugin install controls.
+- UI features: session delete, Markdown export, project move, Timeline, and user script controls.
 
 Screenshot assets live in `docs/assets/` and are referenced directly by the public project page.
 

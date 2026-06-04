@@ -162,7 +162,7 @@ const enUS: TranslationDictionary = {
   "页面功能增强": "Page Feature Enhancements",
   "会话删除、导出、项目移动、Timeline 和用户脚本等界面能力": "UI capabilities including conversation deletion, export, project moving, Timeline, and user scripts",
   "启用 Codex++ 页面增强": "Enable Codex++ Page Enhancements",
-  "关闭后会停用删除、导出、项目移动、Timeline、插件相关和菜单位置增强。": "Disabling this turns off deletion, export, project moving, Timeline, plugin-related features, and menu placement enhancements.",
+  "关闭后会停用删除、导出、项目移动、Timeline 和菜单位置增强。": "Disabling this turns off deletion, export, project moving, Timeline, and menu placement enhancements.",
   "保存增强设置": "Save Enhancement Settings",
   "脚本市场": "Script Market",
   "市场状态": "Market Status",

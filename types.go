@@ -139,20 +139,24 @@ type providerSyncResult struct {
 }
 
 type codexConfigRepairResult struct {
-	Status              string
-	Message             string
-	BackupPath          *string
-	PluginCount         int
-	MarketplaceCount    int
-	MCPServerCount      int
-	GoalsEnabled        bool
-	PluginConfigChanged bool
-	GoalsConfigChanged  bool
+	Status                    string
+	Message                   string
+	BackupPath                *string
+	PluginCount               int
+	MarketplaceCount          int
+	MCPServerCount            int
+	MarketplaceRefreshStatus  string
+	MarketplaceRefreshSummary string
+	MarketplaceRefreshError   string
+	GoalsEnabled              bool
+	PluginConfigChanged       bool
+	GoalsConfigChanged        bool
 }
 
 type codexConfigRepairOptions struct {
-	Plugins bool
-	Goals   bool
+	Plugins             bool
+	Goals               bool
+	RefreshMarketplaces bool
 }
 
 type pluginEnableSpec struct {

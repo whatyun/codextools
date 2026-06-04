@@ -98,23 +98,22 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 	}
 }
 
-func TestRendererInjectionDoesNotDisablePluginUnlockInRelayMode(t *testing.T) {
+func TestRendererInjectionDoesNotPatchPluginAvailability(t *testing.T) {
 	for _, forbidden := range []string{
 		`codexPlusBackendSettings.launchMode === "relay";`,
 		`data-relay-unneeded`,
 		`兼容增强模式下无需开启`,
 		`仅关闭插件入口相关增强`,
+		`pluginEntryUnlock`,
+		`forcePluginInstall`,
+		`插件选项解锁`,
+		`特殊插件强制安装`,
+		`强制安装`,
+		`插件 - 已解锁`,
+		`Plugins - Unlocked`,
 	} {
 		if strings.Contains(rendererInjectScript, forbidden) {
-			t.Fatalf("renderer injection should not disable plugin unlock in relay mode; found %q", forbidden)
-		}
-	}
-	for _, expected := range []string{
-		"兼容增强和完整增强都会生效",
-		"通过 Codex++ 注入显示并启用插件入口",
-	} {
-		if !strings.Contains(rendererInjectScript, expected) {
-			t.Fatalf("renderer injection should describe relay plugin unlock support; missing %q", expected)
+			t.Fatalf("renderer injection should not patch plugin availability; found %q", forbidden)
 		}
 	}
 }
@@ -781,6 +780,98 @@ func TestPureAPIModeWritesImportedConfigWithoutAuthOverwrite(t *testing.T) {
 	}
 }
 
+func TestPureAPISwitchRestoresPluginsAfterSnapshotOverwrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubCodexPluginCommands(t, nil)
+	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), fakeChatGPTAuthJSON(t, "current@example.com"))
+	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), strings.Join([]string{
+		`model_provider = "openai"`,
+		``,
+		`[marketplaces.openai-curated]`,
+		`source_type = "local"`,
+		`source = "` + filepath.Join(home, ".codex", ".tmp", "plugins") + `"`,
+		``,
+		`[plugins."github@openai-curated"]`,
+		`enabled = true`,
+		``,
+	}, "\n"))
+	writeTestFile(t, filepath.Join(home, ".codex", ".tmp", "plugins", ".agents", "plugins", "marketplace.json"), `{"name":"openai-curated"}`)
+	writeTestFile(t, filepath.Join(home, ".codex", "plugins", "cache", "openai-curated", "github", "v1", ".codex-plugin", "plugin.json"), `{"name":"github"}`)
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:             "pure",
+		Name:           "Pure",
+		BaseURL:        "https://api.example.com",
+		APIKey:         "pure-key",
+		RelayMode:      "pureApi",
+		Protocol:       "responses",
+		ConfigContents: buildTestRelayConfig("https://api.example.com", "pure-key"),
+	}}
+	settings.ActiveRelayID = "pure"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).applyRelayInjection(true)
+
+	if result["status"] != "ok" {
+		t.Fatalf("pure API switch should succeed: %#v", result)
+	}
+	config := readFile(filepath.Join(home, ".codex", "config.toml"))
+	for _, expected := range []string{
+		`[marketplaces.openai-curated]`,
+		`source = "` + filepath.Join(home, ".codex", ".tmp", "plugins") + `"`,
+		`[plugins."github@openai-curated"]`,
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("config missing %q after pure API switch:\n%s", expected, config)
+		}
+	}
+	repair := result["pluginRepair"].(map[string]any)
+	if stringFromAny(repair["marketplaceRefreshStatus"]) != "ok" {
+		t.Fatalf("plugin repair should refresh marketplace: %#v", repair)
+	}
+}
+
+func TestOfficialSwitchRestoresPluginsAfterSnapshotOverwrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubCodexPluginCommands(t, nil)
+	officialAuth := fakeChatGPTAuthJSON(t, "official@example.com")
+	writeTestFile(t, filepath.Join(home, ".codex", ".tmp", "plugins", ".agents", "plugins", "marketplace.json"), `{"name":"openai-curated"}`)
+	writeTestFile(t, filepath.Join(home, ".codex", "plugins", "cache", "openai-curated", "github", "v1", ".codex-plugin", "plugin.json"), `{"name":"github"}`)
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "official",
+		Name:                 "Official",
+		RelayMode:            "official",
+		Protocol:             "responses",
+		ConfigContents:       `model_provider = "openai"` + "\n",
+		OfficialAuthContents: officialAuth,
+		OfficialAccountLabel: "official@example.com",
+	}}
+	settings.ActiveRelayID = "official"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).clearRelayInjection()
+
+	if result["status"] != "ok" {
+		t.Fatalf("official switch should succeed: %#v", result)
+	}
+	config := readFile(filepath.Join(home, ".codex", "config.toml"))
+	for _, expected := range []string{
+		`[marketplaces.openai-curated]`,
+		`[plugins."github@openai-curated"]`,
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("config missing %q after official switch:\n%s", expected, config)
+		}
+	}
+}
+
 func TestRepairCodexGoalsConfigEnablesGoalsFeature(t *testing.T) {
 	contents := strings.Join([]string{
 		`model_provider = "CodexPlusPlus"`,
@@ -824,6 +915,87 @@ func TestRepairCodexPluginConfigRestoresCachedPluginTables(t *testing.T) {
 	} {
 		if !strings.Contains(updated, expected) {
 			t.Fatalf("updated config missing %q:\n%s", expected, updated)
+		}
+	}
+}
+
+func TestRepairCodexPluginConfigCorrectsMarketplaceSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeTestFile(t, filepath.Join(home, ".tmp", "plugins", ".agents", "plugins", "marketplace.json"), `{"name":"openai-curated"}`)
+
+	updated, _, marketplaceCount, _ := repairCodexPluginConfig(home, strings.Join([]string{
+		`model_provider = "CodexPlusPlus"`,
+		``,
+		`[marketplaces.openai-curated]`,
+		`last_updated = "old"`,
+		`source_type = "local"`,
+		`source = "/stale/plugins"`,
+		`custom_flag = "keep"`,
+		``,
+	}, "\n"))
+
+	if marketplaceCount != 1 {
+		t.Fatalf("marketplace count mismatch: %d", marketplaceCount)
+	}
+	if strings.Contains(updated, `/stale/plugins`) {
+		t.Fatalf("stale marketplace source should be replaced:\n%s", updated)
+	}
+	if !strings.Contains(updated, `source = "`+filepath.Join(home, ".tmp", "plugins")+`"`) {
+		t.Fatalf("marketplace source should point to discovered local marketplace:\n%s", updated)
+	}
+	if !strings.Contains(updated, `custom_flag = "keep"`) {
+		t.Fatalf("marketplace repair should preserve unrelated table keys:\n%s", updated)
+	}
+}
+
+func TestRefreshCodexMarketplacesRereadsLocalMarketplaceWithoutGitSource(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+	writeTestFile(t, filepath.Join(home, ".tmp", "plugins", ".agents", "plugins", "marketplace.json"), `{"name":"openai-curated"}`)
+	var commands []string
+	stubCodexPluginCommands(t, nil, func(args []string) {
+		commands = append(commands, strings.Join(args, " "))
+	})
+
+	result := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
+
+	if result.Status != "ok" {
+		t.Fatalf("local marketplace refresh should not require git source: %#v", result)
+	}
+	expected := []string{"plugin marketplace upgrade", "plugin marketplace list", "plugin list"}
+	if strings.Join(commands, "\x00") != strings.Join(expected, "\x00") {
+		t.Fatalf("refresh commands mismatch:\n got: %#v\nwant: %#v", commands, expected)
+	}
+	if result.MarketplaceRefreshStatus != "ok" {
+		t.Fatalf("marketplace refresh should be ok: %#v", result)
+	}
+}
+
+func TestRepairCodexConfigRefreshFailureKeepsRestoredPluginTables(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+	writeTestFile(t, filepath.Join(home, ".tmp", "plugins", ".agents", "plugins", "marketplace.json"), `{"name":"openai-curated"}`)
+	writeTestFile(t, filepath.Join(home, "plugins", "cache", "openai-curated", "github", "v1", ".codex-plugin", "plugin.json"), `{"name":"github"}`)
+	stubCodexPluginCommands(t, map[string]error{
+		"plugin marketplace upgrade": errors.New("boom"),
+	})
+
+	result := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
+
+	if result.Status != "failed" {
+		t.Fatalf("refresh failure should fail repair result: %#v", result)
+	}
+	if !strings.Contains(result.MarketplaceRefreshError, "boom") {
+		t.Fatalf("refresh error should mention command failure: %#v", result)
+	}
+	config := readFile(filepath.Join(home, "config.toml"))
+	for _, expected := range []string{
+		`[marketplaces.openai-curated]`,
+		`[plugins."github@openai-curated"]`,
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("config should keep restored plugin table %q after refresh failure:\n%s", expected, config)
 		}
 	}
 }
@@ -1221,6 +1393,24 @@ func writeTestFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
+}
+
+func stubCodexPluginCommands(t *testing.T, failures map[string]error, observers ...func([]string)) {
+	t.Helper()
+	original := runCodexPluginCommand
+	runCodexPluginCommand = func(home string, args ...string) codexCommandOutput {
+		for _, observer := range observers {
+			observer(append([]string{}, args...))
+		}
+		key := strings.Join(args, " ")
+		if err := failures[key]; err != nil {
+			return codexCommandOutput{Command: "codex " + key, Output: "failed " + key, Err: err}
+		}
+		return codexCommandOutput{Command: "codex " + key, Output: "ok " + key}
+	}
+	t.Cleanup(func() {
+		runCodexPluginCommand = original
+	})
 }
 
 func createProviderSyncThreadsTable(t *testing.T, dbPath string, includeThreadSource bool) {

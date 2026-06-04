@@ -559,10 +559,10 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 		}
 		return failed("写入中转配置失败："+err.Error(), relayStatusFromHome(home))
 	}
-	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true})
+	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
 	payload := relayStatusFromHome(home)
 	payload["backupPath"] = nullableStringPtr(backupPath)
-	payload["pluginRepair"] = map[string]any{"status": repairResult.Status, "pluginCount": repairResult.PluginCount, "marketplaceCount": repairResult.MarketplaceCount, "backupPath": repairResult.BackupPath}
+	payload["pluginRepair"] = relayPluginRepairPayload(repairResult)
 	if repairResult.Status == "failed" {
 		if pure {
 			return failed("中转 API 模式已写入，但插件恢复失败："+repairResult.Message, payload)
@@ -571,11 +571,33 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	}
 	if pure {
 		if strings.TrimSpace(canonicalAuthContents(relay)) == "" {
-			return ok("中转 API 模式已写入：config.toml 使用当前供应商快照，auth.json 保留当前环境，因为该供应商尚未保存 auth 快照。", payload)
+			return ok("中转 API 模式已写入：config.toml 使用当前供应商快照，auth.json 保留当前环境，因为该供应商尚未保存 auth 快照；"+relayPluginRepairMessage(repairResult), payload)
 		}
-		return ok("中转 API 模式已写入：config.toml 和 auth.json 已按当前供应商快照恢复，并恢复插件配置。", payload)
+		return ok("中转 API 模式已写入：config.toml 和 auth.json 已按当前供应商快照恢复；"+relayPluginRepairMessage(repairResult), payload)
 	}
-	return ok("中转配置已按当前供应商快照写入，并恢复插件配置。", payload)
+	return ok("中转配置已按当前供应商快照写入；"+relayPluginRepairMessage(repairResult), payload)
+}
+
+func relayPluginRepairPayload(result codexConfigRepairResult) map[string]any {
+	return map[string]any{
+		"status":                    result.Status,
+		"message":                   result.Message,
+		"pluginCount":               result.PluginCount,
+		"marketplaceCount":          result.MarketplaceCount,
+		"mcpServerCount":            result.MCPServerCount,
+		"backupPath":                result.BackupPath,
+		"marketplaceRefreshStatus":  result.MarketplaceRefreshStatus,
+		"marketplaceRefreshSummary": result.MarketplaceRefreshSummary,
+		"marketplaceRefreshError":   result.MarketplaceRefreshError,
+	}
+}
+
+func relayPluginRepairMessage(result codexConfigRepairResult) string {
+	message := strings.TrimSpace(result.Message)
+	if message == "" {
+		return "插件配置已恢复，Codex 插件市场已刷新/重读。"
+	}
+	return message
 }
 
 func activeRelayProfile(settings backendSettings) relayProfile {
@@ -693,7 +715,12 @@ func (s *server) clearRelayInjection() commandResult {
 	}
 	payload := relayStatusFromHome(home)
 	payload["backupPath"] = nullableStringPtr(backupPath)
-	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式。", payload)
+	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
+	payload["pluginRepair"] = relayPluginRepairPayload(repairResult)
+	if repairResult.Status == "failed" {
+		return failed("官方登录模式已写入，但插件恢复失败："+repairResult.Message, payload)
+	}
+	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式；"+relayPluginRepairMessage(repairResult), payload)
 }
 
 func writeOfficialAuthForRelay(home string, relay relayProfile) error {

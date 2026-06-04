@@ -290,6 +290,17 @@ type RelayResult = CommandResult<{
   requiresOpenaiAuth: boolean;
   hasBearerToken: boolean;
   backupPath: string | null;
+  pluginRepair?: {
+    status: string;
+    message?: string;
+    pluginCount?: number;
+    marketplaceCount?: number;
+    mcpServerCount?: number;
+    backupPath?: string | null;
+    marketplaceRefreshStatus?: string;
+    marketplaceRefreshSummary?: string;
+    marketplaceRefreshError?: string;
+  };
 }>;
 
 type RelayFilesResult = CommandResult<{
@@ -400,6 +411,9 @@ type CodexConfigRepairResult = CommandResult<{
   pluginCount?: number;
   marketplaceCount?: number;
   mcpServerCount?: number;
+  marketplaceRefreshStatus?: string;
+  marketplaceRefreshSummary?: string;
+  marketplaceRefreshError?: string;
   configChanged?: boolean;
   goalsEnabled?: boolean;
   configPath?: string;
@@ -1145,17 +1159,17 @@ export function App() {
   };
 
   const switchOfficialMode = async () => {
-    const switched = await clearRelayInjection(true);
+    const switched = await clearRelayInjection(false);
     if (!switched) return;
     const result = await saveLaunchMode("relay", true);
-    if (result) showNotice("官方登录模式", "已切回官方登录；页面增强已设为兼容增强。", result.status);
+    if (result && !isSuccessStatus(result.status)) showNotice("页面增强模式", result.message, result.status);
   };
 
   const switchPureApiMode = async () => {
-    const switched = await applyPureApiInjection(true);
+    const switched = await applyPureApiInjection(false);
     if (!switched) return;
     const result = await saveLaunchMode("patch", true);
-    if (result) showNotice("中转 API 模式", "已切换到中转 API；页面增强已设为完整增强。", result.status);
+    if (result && !isSuccessStatus(result.status)) showNotice("页面增强模式", result.message, result.status);
   };
 
   const switchRelayProfile = async (next: BackendSettings) => {
@@ -1191,7 +1205,7 @@ export function App() {
     setRelay(result);
     await refreshRelayFiles(true);
     if (!isSuccessStatus(result.status)) {
-      showNotice("供应商切换", relayProfileReadinessText(selectedAfterSave, result), result.status);
+      showNotice("供应商切换", result.message || relayProfileReadinessText(selectedAfterSave, result), result.status);
       return false;
     }
 
@@ -1200,7 +1214,7 @@ export function App() {
     const modeResult = await saveLaunchMode(launchMode, true, selectedSettings);
     await refreshInstallGuideStatus(true);
     await refreshRelay(true);
-    if (modeResult) showNotice("供应商切换", relayProfileModeSwitchedText(currentSelected), modeResult.status);
+    if (modeResult) showNotice("供应商切换", relayProfileModeSwitchedText(currentSelected, result), modeResult.status);
     return true;
   };
 
@@ -2697,14 +2711,14 @@ function EnhanceScreen({
             />
             <span>
               <strong>启用 Codex++ 页面增强</strong>
-              <small>关闭后会停用删除、导出、项目移动、Timeline、插件相关和菜单位置增强。</small>
+              <small>关闭后会停用删除、导出、项目移动、Timeline 和菜单位置增强。</small>
             </span>
           </label>
           <ModeSelector launchMode={form.launchMode} actions={actions} />
           {form.launchMode === "relay" ? (
             <div className="hint-line">
               <ShieldCheck className="h-4 w-4" />
-              <span>当前为兼容增强模式：通过 Codex++ 注入启用插件入口、强制安装和其他页面功能，同时保留官方/混合登录兼容路径。</span>
+              <span>当前为兼容增强模式：使用更保守的官方/混合登录路径，同时保留删除、导出、项目移动等页面能力。</span>
             </div>
           ) : null}
           <div className="feature-list">
@@ -2712,8 +2726,6 @@ function EnhanceScreen({
             <FeatureItem title="Markdown 导出" detail="按本地 rollout 导出带时间戳的 Markdown。" enabled={form.enhancementsEnabled} />
             <FeatureItem title="项目移动" detail="把会话移动到普通对话或其他本地项目。" enabled={form.enhancementsEnabled} />
             <FeatureItem title="Timeline" detail="在对话右侧显示用户提问时间线。" enabled={form.enhancementsEnabled} />
-            <FeatureItem title="插件入口解锁" detail="通过 Codex++ 注入启用插件入口。" enabled={form.enhancementsEnabled} />
-            <FeatureItem title="特殊插件强制安装" detail="解除前端安装禁用状态。" enabled={form.enhancementsEnabled} />
           </div>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>保存增强设置</Button>
@@ -2926,8 +2938,8 @@ function ProviderSyncScreen({
         <CardContent>
           <GuideList
             items={[
-              "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属并补回插件配置。",
-              "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置。",
+              "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属、补回插件配置并重读插件市场。",
+              "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置，并执行 marketplace 刷新/重读。",
               "Computer Use 修复只针对 Windows，会写入本地兼容插件和用户环境变量，修复后需要重启 Codex。",
               "Skill/MCP 恢复前会自动备份当前状态，并只替换 config.toml 里的 MCP、插件、市场、features、windows 表。",
               "切回官方时历史会话会整理为 openai；切到 API 时会整理为 CodexPlusPlus。",
@@ -3954,7 +3966,7 @@ function ModeSelector({ launchMode, actions }: { launchMode: LaunchMode; actions
         type="button"
       >
         <strong>兼容增强</strong>
-        <span>适合官方登录或官方混合 API；通过 Codex++ 注入启用插件入口、强制安装、会话删除、导出、项目移动、Timeline 和用户脚本。</span>
+        <span>适合官方登录或官方混合 API；启用会话删除、导出、项目移动、Timeline 和用户脚本。</span>
       </button>
       <button
         className={`mode-option ${launchMode === "patch" ? "active" : ""}`}
@@ -3962,7 +3974,7 @@ function ModeSelector({ launchMode, actions }: { launchMode: LaunchMode; actions
         type="button"
       >
         <strong>完整增强</strong>
-        <span>适合中转 API；启用插件入口、强制安装、会话删除导出、项目移动等全部页面能力。</span>
+        <span>适合中转 API；启用会话删除、导出、项目移动等全部页面能力。</span>
       </button>
     </div>
   );
@@ -4505,10 +4517,14 @@ function relayProfileSwitchCommand(profile: RelayProfile): "clear_relay_injectio
   return "clear_relay_injection";
 }
 
-function relayProfileModeSwitchedText(profile: RelayProfile): string {
-  if (profile.relayMode === "pureApi") return "已按此供应商切换到中转 API；页面增强已设为完整增强。";
-  if (profile.relayMode === "mixedApi") return "已按此供应商使用官方登录，并混入 API Key；页面增强已设为兼容增强。";
-  return "已按此供应商切回官方登录；页面增强已设为兼容增强。";
+function relayProfileModeSwitchedText(profile: RelayProfile, relay?: RelayResult | null): string {
+  const base = profile.relayMode === "pureApi"
+    ? "已按此供应商切换到中转 API；页面增强已设为完整增强。"
+    : profile.relayMode === "mixedApi"
+      ? "已按此供应商使用官方登录，并混入 API Key；页面增强已设为兼容增强。"
+      : "已按此供应商切回官方登录；页面增强已设为兼容增强。";
+  const repairMessage = relay?.pluginRepair?.message?.trim();
+  return repairMessage ? `${base} ${repairMessage}` : base;
 }
 
 function withGeneratedRelayFiles(profile: RelayProfile): RelayProfile {
