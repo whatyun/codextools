@@ -220,6 +220,8 @@
             <li>Adds Codex app version-aware plugin unlock behavior, using legacy entry unlocks before 26.601.2237 and marketplace request patching for modern builds.</li>
             <li>Replaces the platform-specific launcher mutex with a resilient loopback/file-lock guard to prevent duplicate launcher instances across platforms.</li>
             <li>Exposes the runtime Codex app version through the bridge settings payload and expands parity tests for bridge settings and launcher guard behavior.</li>
+            <li>Rebuilds the macOS pkg staging flow so both apps are installed into `/Applications` without relocatable bundle metadata or extended attributes.</li>
+            <li>Normalizes live context entry payloads so empty MCP server, skill, and plugin lists stay as arrays instead of `null`.</li>
           </ul>
         </div>
         <div data-lang="zh">
@@ -229,6 +231,8 @@
             <li>新增按 Codex app 版本选择插件解锁策略：26.601.2237 之前使用 legacy entry unlock，现代版本使用 marketplace request patch。</li>
             <li>用更稳健的 loopback/file-lock 守卫替代平台专用 launcher mutex，避免跨平台重复启动器实例。</li>
             <li>bridge settings 会暴露运行中的 Codex app 版本，并补充 bridge settings 与 launcher guard 行为测试。</li>
+            <li>重建 macOS pkg 打包流程，确保两个 app 安装到 `/Applications`，并去掉可迁移 bundle 元数据和扩展属性。</li>
+            <li>规范 live context entries 返回值，空的 MCP server、skill、plugin 列表保持为数组而不是 `null`。</li>
           </ul>
         </div>
       </section>
@@ -255,7 +259,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS installer packages install `Codex++ 管理工具.app` and `Codex++.app` into `/Applications`.</li>
             <li>The macOS pkg installers and zip app bundles are unsigned community builds; use the first launch note above if Gatekeeper blocks them.</li>
             <li>Windows x64 is for traditional Intel/AMD PCs. Windows arm64 is for Windows on ARM devices.</li>
-            <li>This release consolidates recent Codex++ 1.2.2 parity work and launcher/plugin compatibility fixes.</li>
+            <li>This rebuild keeps the 1.1.28 version while refreshing the macOS pkg packaging flow and live context entry handling.</li>
           </ul>
         </div>
         <div data-lang="zh">
@@ -264,7 +268,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS 安装包会把 `Codex++ 管理工具.app` 和 `Codex++.app` 安装到 `/Applications`。</li>
             <li>macOS pkg 安装包和 zip app 包都是未签名社区构建；如果被 Gatekeeper 阻止，请使用上方首次启动提醒。</li>
             <li>Windows x64 适合传统 Intel/AMD 电脑；Windows arm64 适合 Windows ARM 设备。</li>
-            <li>这个版本合并近期 Codex++ 1.2.2 对齐工作，并修复 launcher 与插件兼容性策略。</li>
+            <li>这次重建保持 1.1.28 版本号，同时刷新 macOS pkg 打包流程和 live context entries 处理。</li>
           </ul>
         </div>
       </section>

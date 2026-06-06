@@ -123,6 +123,43 @@ CodexTools macOS package (${label})
 TXT
 }
 
+copy_app_bundle() {
+  local source_app="$1"
+  local target_app="$2"
+
+  rm -rf "$target_app"
+  ditto --norsrc --noextattr --noacl --noqtn "$source_app" "$target_app"
+  xattr -cr "$target_app" 2>/dev/null || true
+  find "$target_app" -name '._*' -delete
+}
+
+plist_set_or_add() {
+  local plist="$1"
+  local path="$2"
+  local type="$3"
+  local value="$4"
+
+  /usr/libexec/PlistBuddy -c "Set $path $value" "$plist" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add $path $type $value" "$plist" >/dev/null
+}
+
+force_component_bundle_policy() {
+  local plist="$1"
+  local index=0
+
+  while /usr/libexec/PlistBuddy -c "Print :$index" "$plist" >/dev/null 2>&1; do
+    plist_set_or_add "$plist" ":$index:BundleIsRelocatable" bool false
+    plist_set_or_add "$plist" ":$index:BundleIsVersionChecked" bool false
+    plist_set_or_add "$plist" ":$index:BundleOverwriteAction" string upgrade
+    index=$((index + 1))
+  done
+
+  if [[ "$index" -eq 0 ]]; then
+    echo "error: pkgbuild did not detect any app bundles in $plist" >&2
+    return 1
+  fi
+}
+
 build_arch() {
   local goarch="$1"
   local label
@@ -135,6 +172,7 @@ build_arch() {
   local zip_path="$DIST/${package_name}.zip"
   local pkg_root="$arch_build/pkg-root"
   local component_pkg="$arch_build/${package_name}-component.pkg"
+  local component_plist="$arch_build/component.plist"
   local pkg_path="$DIST/${package_name}.pkg"
   local pkg_resources="$arch_build/pkg-resources"
   local distribution_xml="$arch_build/distribution.xml"
@@ -154,8 +192,8 @@ build_arch() {
   cp "$arch_build/codextools" "$launcher_app_dir/Contents/MacOS/codextools"
   verify_macos_deployment_target "$app_dir"
   verify_macos_deployment_target "$launcher_app_dir"
-  cp -R "$launcher_app_dir" "$package_dir/"
-  cp -R "$app_dir" "$package_dir/"
+  copy_app_bundle "$launcher_app_dir" "$package_dir/$LAUNCHER_NAME.app"
+  copy_app_bundle "$app_dir" "$package_dir/$APP_NAME.app"
   cp "$ROOT/README.md" "$package_dir/README.md"
   cp "$ROOT/README.zh-CN.md" "$package_dir/README.zh-CN.md"
   write_start_here "$package_dir/START-HERE.txt" "$label"
@@ -165,10 +203,13 @@ build_arch() {
 
   rm -rf "$pkg_root"
   mkdir -p "$pkg_root/Applications" "$pkg_resources"
-  cp -R "$launcher_app_dir" "$pkg_root/Applications/"
-  cp -R "$app_dir" "$pkg_root/Applications/"
-  xattr -cr "$pkg_root"
+  copy_app_bundle "$launcher_app_dir" "$pkg_root/Applications/$LAUNCHER_NAME.app"
+  copy_app_bundle "$app_dir" "$pkg_root/Applications/$APP_NAME.app"
+  xattr -cr "$pkg_root" 2>/dev/null || true
   find "$pkg_root" -name '._*' -delete
+  if command -v dot_clean >/dev/null 2>&1; then
+    dot_clean -m "$pkg_root" >/dev/null 2>&1 || true
+  fi
   cat > "$pkg_resources/ReadMe.html" <<HTML
 <!doctype html>
 <html>
@@ -190,11 +231,18 @@ xattr -cr "/Applications/Codex++.app"</pre>
   </body>
 </html>
 HTML
+  pkgbuild --analyze --root "$pkg_root" "$component_plist" >/dev/null
+  force_component_bundle_policy "$component_plist"
   pkgbuild \
     --root "$pkg_root" \
     --identifier "com.hereww.codextools.pkg.${label}" \
     --version "$VERSION" \
     --install-location "/" \
+    --component-plist "$component_plist" \
+    --filter '/\.DS_Store$' \
+    --filter '/\._[^/]*$' \
+    --filter '/CVS$' \
+    --filter '/\.svn$' \
     "$component_pkg" >/dev/null
   cat > "$distribution_xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>

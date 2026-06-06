@@ -815,7 +815,7 @@ export function App() {
   const refreshLiveContextEntries = async (silent = false) => {
     const result = await run(() => call<LiveContextEntriesResult>("read_live_context_entries"));
     if (result) {
-      setLiveContextEntries(result.entries);
+      setLiveContextEntries(normalizeContextEntries(result.entries));
       if (!silent || !isSuccessStatus(result.status)) showResultNotice("工具与插件", result, { silentSuccess: true });
     }
     return result;
@@ -1272,7 +1272,7 @@ export function App() {
       }),
     );
     if (result) {
-      setLiveContextEntries(result.entries);
+      setLiveContextEntries(normalizeContextEntries(result.entries));
       if (!silent || !isSuccessStatus(result.status)) showResultNotice("工具与插件同步", result, { silentSuccess: true });
       await refreshRelayFiles(true);
     }
@@ -4241,13 +4241,14 @@ function contextEntriesFromSettings(settings: BackendSettings): CodexContextEntr
   };
 }
 
-function contextEntriesWithLiveEntries(settings: BackendSettings, liveEntries: CodexContextEntries | null): CodexContextEntries {
+function contextEntriesWithLiveEntries(settings: BackendSettings, liveEntries: Partial<CodexContextEntries> | null): CodexContextEntries {
   const commonEntries = contextEntriesFromSettings(settings);
   if (!liveEntries) return commonEntries;
+  const normalizedLiveEntries = normalizeContextEntries(liveEntries);
   const liveByKind: Record<ContextKind, Map<string, CodexContextEntry>> = {
-    mcp: new Map(liveEntries.mcpServers.map((entry) => [entry.id, entry])),
-    skill: new Map(liveEntries.skills.map((entry) => [entry.id, entry])),
-    plugin: new Map(liveEntries.plugins.map((entry) => [entry.id, entry])),
+    mcp: new Map(normalizedLiveEntries.mcpServers.map((entry) => [entry.id, entry])),
+    skill: new Map(normalizedLiveEntries.skills.map((entry) => [entry.id, entry])),
+    plugin: new Map(normalizedLiveEntries.plugins.map((entry) => [entry.id, entry])),
   };
   return {
     mcpServers: mergeLiveContextEntries(commonEntries.mcpServers, liveByKind.mcp),
@@ -4269,7 +4270,7 @@ function mergeLiveContextEntries(entries: CodexContextEntry[], liveEntries: Map<
   return merged;
 }
 
-function contextEntriesByKind(entries: CodexContextEntries, kind: ContextKind): CodexContextEntry[] {
+function contextEntriesByKind(entries: Partial<CodexContextEntries>, kind: ContextKind): CodexContextEntry[] {
   if (kind === "mcp") return dedupeContextEntryList(entries.mcpServers);
   if (kind === "skill") return dedupeContextEntryList(entries.skills);
   return dedupeContextEntryList(entries.plugins);
@@ -4384,10 +4385,32 @@ function setContextEntryEnabled(tomlBody: string, enabled: boolean) {
   return normalizeConfigText(next.join("\n"));
 }
 
-function dedupeContextEntryList(entries: CodexContextEntry[]): CodexContextEntry[] {
+function dedupeContextEntryList(entries: unknown): CodexContextEntry[] {
   const byId = new Map<string, CodexContextEntry>();
-  for (const entry of entries) byId.set(entry.id, entry);
+  if (!Array.isArray(entries)) return [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Partial<CodexContextEntry>;
+    const id = String(candidate.id ?? "").trim();
+    if (!id) continue;
+    byId.set(id, {
+      id,
+      kind: candidate.kind === "skill" || candidate.kind === "plugin" ? candidate.kind : "mcp",
+      title: String(candidate.title ?? id),
+      summary: String(candidate.summary ?? ""),
+      tomlBody: String(candidate.tomlBody ?? ""),
+      enabled: candidate.enabled !== false,
+    });
+  }
   return Array.from(byId.values());
+}
+
+function normalizeContextEntries(entries?: Partial<CodexContextEntries> | null): CodexContextEntries {
+  return {
+    mcpServers: dedupeContextEntryList(entries?.mcpServers).map((entry) => ({ ...entry, kind: "mcp" })),
+    skills: dedupeContextEntryList(entries?.skills).map((entry) => ({ ...entry, kind: "skill" })),
+    plugins: dedupeContextEntryList(entries?.plugins).map((entry) => ({ ...entry, kind: "plugin" })),
+  };
 }
 
 function normalizeContextSelection(selection?: Partial<RelayContextSelection>): RelayContextSelection {

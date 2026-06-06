@@ -159,6 +159,36 @@ func TestBuildWatcherInstallPlanMatchesOriginalWindowsShape(t *testing.T) {
 	}
 }
 
+func TestMacOSReleasePackageForcesApplicationsInstallLocation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("scripts", "build", "macos-release.sh"))
+	if err != nil {
+		t.Fatalf("failed to read macOS release script: %v", err)
+	}
+	script := string(data)
+	for _, expected := range []string{
+		`pkgbuild --analyze --root "$pkg_root" "$component_plist"`,
+		`:BundleIsRelocatable" bool false`,
+		`:BundleIsVersionChecked" bool false`,
+		`:BundleOverwriteAction" string upgrade`,
+		`--install-location "/"`,
+		`--component-plist "$component_plist"`,
+		`ditto --norsrc --noextattr --noacl --noqtn`,
+		`"$pkg_root/Applications"`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("macOS pkg script must force /Applications install; missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		`cp -R "$launcher_app_dir" "$pkg_root/Applications/"`,
+		`cp -R "$app_dir" "$pkg_root/Applications/"`,
+	} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("macOS pkg script should stage app bundles with ditto --norsrc, found %q", forbidden)
+		}
+	}
+}
+
 func TestParseWindowsUninstallRegistryValue(t *testing.T) {
 	output := `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexTools
     DisplayName    REG_SZ    CodexTools
@@ -187,6 +217,24 @@ func TestNormalizeSettingsLanguage(t *testing.T) {
 	settings = normalizeSettings(backendSettings{Language: "unsupported"})
 	if settings.Language != defaultLanguage {
 		t.Fatalf("unsupported language should fall back to %q, got %q", defaultLanguage, settings.Language)
+	}
+}
+
+func TestListContextEntriesJSONUsesEmptyArrays(t *testing.T) {
+	entries := listContextEntriesFromConfig("")
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("failed to marshal entries: %v", err)
+	}
+	text := string(data)
+
+	for _, expected := range []string{`"mcpServers":[]`, `"skills":[]`, `"plugins":[]`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("empty context entries should marshal arrays, missing %s in %s", expected, text)
+		}
+	}
+	if strings.Contains(text, "null") {
+		t.Fatalf("empty context entries should not marshal null lists: %s", text)
 	}
 }
 

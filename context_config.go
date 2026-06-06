@@ -21,6 +21,14 @@ type codexContextEntries struct {
 	Plugins    []codexContextEntry `json:"plugins"`
 }
 
+func emptyCodexContextEntries() codexContextEntries {
+	return codexContextEntries{
+		MCPServers: []codexContextEntry{},
+		Skills:     []codexContextEntry{},
+		Plugins:    []codexContextEntry{},
+	}
+}
+
 func splitContextConfigSections(config string) (string, string) {
 	var common []string
 	var context []string
@@ -170,7 +178,7 @@ func listContextEntriesFromConfig(config string) codexContextEntries {
 
 func parseContextEntries(config, kind, tableName string) []codexContextEntry {
 	lines := splitLines(config)
-	var entries []codexContextEntry
+	entries := []codexContextEntry{}
 	for i := 0; i < len(lines); {
 		trimmed := strings.TrimSpace(lines[i])
 		if !isTomlHeader(trimmed) {

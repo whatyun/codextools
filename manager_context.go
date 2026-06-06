@@ -18,7 +18,7 @@ func (s *server) readLiveContextEntries() commandResult {
 func (s *server) syncLiveContextEntries(args map[string]any) commandResult {
 	var settings backendSettings
 	if err := remarshal(mapArg(args, "request")["settings"], &settings); err != nil {
-		return failed("同步 live 工具与插件失败："+err.Error(), map[string]any{"entries": codexContextEntries{}})
+		return failed("同步 live 工具与插件失败："+err.Error(), map[string]any{"entries": emptyCodexContextEntries()})
 	}
 	settings = normalizeSettings(settings)
 	configPath := filepath.Join(codexHomeDir(), "config.toml")
@@ -27,10 +27,10 @@ func (s *server) syncLiveContextEntries(args map[string]any) commandResult {
 	selected := filterCommonConfigForSelection(settings.RelayContextConfigContents, contextSelectionForAllEntries(settings.RelayContextConfigContents))
 	updated := joinConfigSections(common, selected)
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		return failed("创建 Codex 配置目录失败："+err.Error(), map[string]any{"entries": codexContextEntries{}})
+		return failed("创建 Codex 配置目录失败："+err.Error(), map[string]any{"entries": emptyCodexContextEntries()})
 	}
 	if _, err := writeCodexConfigWithBackup(configPath, updated, "context-sync"); err != nil {
-		return failed("写入 live config.toml 失败："+err.Error(), map[string]any{"entries": codexContextEntries{}})
+		return failed("写入 live config.toml 失败："+err.Error(), map[string]any{"entries": emptyCodexContextEntries()})
 	}
 	return ok("live 工具与插件已同步。", map[string]any{
 		"entries": listContextEntriesFromConfig(updated),
@@ -41,7 +41,7 @@ func (s *server) upsertContextEntry(args map[string]any) commandResult {
 	request := mapArg(args, "request")
 	var settings backendSettings
 	if err := remarshal(request["settings"], &settings); err != nil {
-		return failed("保存工具与插件失败："+err.Error(), map[string]any{"settings": loadSettings(), "entries": codexContextEntries{}})
+		return failed("保存工具与插件失败："+err.Error(), map[string]any{"settings": loadSettings(), "entries": emptyCodexContextEntries()})
 	}
 	settings = normalizeSettings(settings)
 	updated, err := upsertContextEntryInConfig(
@@ -51,7 +51,7 @@ func (s *server) upsertContextEntry(args map[string]any) commandResult {
 		stringFromAny(request["tomlBody"]),
 	)
 	if err != nil {
-		return failed("保存工具与插件失败："+err.Error(), map[string]any{"settings": settings, "entries": codexContextEntries{}})
+		return failed("保存工具与插件失败："+err.Error(), map[string]any{"settings": settings, "entries": emptyCodexContextEntries()})
 	}
 	settings.RelayContextConfigContents = updated
 	settings = normalizeSettings(settings)
@@ -65,7 +65,7 @@ func (s *server) deleteContextEntry(args map[string]any) commandResult {
 	request := mapArg(args, "request")
 	var settings backendSettings
 	if err := remarshal(request["settings"], &settings); err != nil {
-		return failed("删除工具与插件失败："+err.Error(), map[string]any{"settings": loadSettings(), "entries": codexContextEntries{}})
+		return failed("删除工具与插件失败："+err.Error(), map[string]any{"settings": loadSettings(), "entries": emptyCodexContextEntries()})
 	}
 	settings = normalizeSettings(settings)
 	kind := stringArg(request, "kind")
