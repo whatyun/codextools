@@ -170,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.26-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.26-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.26-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.26-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.26-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.26-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.27-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -193,20 +193,20 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.26-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.26-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.26-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.26-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.26-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.26-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.26-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.26-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.27-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -214,21 +214,21 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.26 Apple Silicon hotfix</strong>
+          <strong>Version 1.1.27</strong>
           <ul>
-            <li>Fix the macOS Apple Silicon startup path so the manager no longer opens to a blank background on affected M1/M2/M3/M4 Macs.</li>
-            <li>Startup update checks are now quiet when GitHub API returns HTTP 403, so the first window is not covered by a failure toast.</li>
-            <li>Update lookup falls back to the public downloads page and only selects packages that match the current platform and architecture.</li>
-            <li>The frontend build now targets Safari 15 and includes a visible startup error screen instead of silently rendering a blank window.</li>
+            <li>Add Codex++ parity controls for context config, model catalog, relay/profile flags, goals, service tier, and native menu placement.</li>
+            <li>Implement Go bridge support for Zed Remote open flows and upstream worktree creation flows.</li>
+            <li>Refresh the renderer injection to remove plugin unlock patching while preserving session, timeline, script, relay, and native bridge features.</li>
+            <li>Improve relay and config repair parity with Codex++ 1.2.2 behavior, including context, model, and bridge state handling.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.26 Apple Silicon 热修复</strong>
+          <strong>版本 1.1.27</strong>
           <ul>
-            <li>修复 macOS Apple Silicon 启动路径，受影响的 M1/M2/M3/M4 设备不再打开后只显示空白背景。</li>
-            <li>启动时自动检查更新遇到 GitHub API HTTP 403 会静默处理，不再用失败提示遮住首屏。</li>
-            <li>更新检查增加公开下载页兜底，并且只选择匹配当前平台和芯片架构的安装包。</li>
-            <li>前端构建目标调整为 Safari 15，并加入可见启动错误页，避免异常时静默白屏。</li>
+            <li>新增 Codex++ 对齐控制：context config、模型目录、relay/profile 开关、goals、service tier 和原生菜单位置。</li>
+            <li>实现 Zed Remote 打开流程和 upstream worktree 创建流程的 Go 桥接。</li>
+            <li>刷新 renderer 注入逻辑，移除插件解锁 patch，同时保留会话、Timeline、脚本、relay 和原生桥接功能。</li>
+            <li>按 Codex++ 1.2.2 行为改进 relay 与 config 修复对齐，包括 context、model 和 bridge 状态处理。</li>
           </ul>
         </div>
       </section>
@@ -255,7 +255,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS installer packages install `Codex++ 管理工具.app` and `Codex++.app` into `/Applications`.</li>
             <li>The macOS pkg installers and zip app bundles are unsigned community builds; use the first launch note above if Gatekeeper blocks them.</li>
             <li>Windows x64 is for traditional Intel/AMD PCs. Windows arm64 is for Windows on ARM devices.</li>
-            <li>This official release restores About/Script Center, fixes Windows Store/MSIX launch detection, and keeps config backup, Computer Use repair, and Skill/MCP backup flows.</li>
+            <li>This release tracks Codex++ 1.2.2 parity work across context config, model catalog, relay controls, Zed Remote, and upstream worktree creation.</li>
           </ul>
         </div>
         <div data-lang="zh">
@@ -264,7 +264,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS 安装包会把 `Codex++ 管理工具.app` 和 `Codex++.app` 安装到 `/Applications`。</li>
             <li>macOS pkg 安装包和 zip app 包都是未签名社区构建；如果被 Gatekeeper 阻止，请使用上方首次启动提醒。</li>
             <li>Windows x64 适合传统 Intel/AMD 电脑；Windows arm64 适合 Windows ARM 设备。</li>
-            <li>这个正式版恢复“关于”和“脚本中心”，修复 Windows Store/MSIX 启动误判，并保留 config 备份、Computer Use 修复和 Skill/MCP 备份流程。</li>
+            <li>这个版本对齐 Codex++ 1.2.2 的 context config、模型目录、relay 控制、Zed Remote 和 upstream worktree 创建能力。</li>
           </ul>
         </div>
       </section>
