@@ -22,6 +22,14 @@
   const zedRemoteOpenVersion = "1";
   const zedRemoteOpenInMenuVersion = "1";
   const zedRemoteOpenInMenuActivationWindowMs = 600;
+  const upstreamWorktreeDialogClass = "codex-upstream-worktree-dialog";
+  const upstreamBranchSelectionKey = "codexUpstreamBranchSelection";
+  const upstreamProjectContextKey = "codexUpstreamProjectContext";
+  const upstreamProjectContextTtlMs = 20 * 60 * 1000;
+  const upstreamBranchDefaultsCacheTtlMs = 5000;
+  const upstreamRemoteBranchDefaultsCacheTtlMs = 15000;
+  const upstreamBranchOptionAttribute = "data-codex-upstream-branch-option";
+  const branchWorktreePathAttribute = "data-codex-branch-worktree-path";
   const timelineQuestionLimit = 40;
   const timelineMinTopPercent = 2;
   const timelineMaxTopPercent = 98;
@@ -57,6 +65,8 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "2";
+  const codexPluginMarketplaceUnlockVersion = "10";
+  const codexForcePluginInstallRefreshIntervalMs = 1000;
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -95,7 +105,11 @@
     threadTitle: "[data-thread-title]",
     appHeader: ".app-header-tint",
     nativeMenuBar: "[class*=\"ms-auto\"][class*=\"flex\"][class*=\"items-center\"]",
+    headerContextMenuSurface: '[data-testid="app-shell-header-context-menu-surface"]',
     archiveNav: 'button[aria-label="已归档对话"], button[aria-label="Archived conversations"]',
+    disabledInstallButton: 'button:disabled, button[aria-disabled="true"], [role="button"][aria-disabled="true"], button[data-disabled], [role="button"][data-disabled], button.cursor-not-allowed, [role="button"].cursor-not-allowed, button.pointer-events-none, [role="button"].pointer-events-none',
+    pluginNavButton: 'nav[role="navigation"] button.h-token-nav-row.w-full',
+    pluginSvgPath: 'svg path[d^="M7.94562 14.0277"]',
   };
 
   function installStyle() {
@@ -532,6 +546,13 @@
       .codex-plus-tab-button[data-active="true"] { background: #10a37f; color: white; border-color: #10a37f; }
       .codex-plus-panel[hidden] { display: none; }
       .codex-plus-action-button { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
+      .codex-plus-worktree-actions { display: inline-flex; align-items: center; gap: 8px; }
+      .codex-plus-form-field { display: grid; gap: 4px; margin-top: 10px; color: #d4d4d8; font: 12px system-ui, sans-serif; text-align: left; }
+      .codex-plus-form-field input { width: min(520px, 72vw); border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: #18181b; color: #f4f4f5; padding: 8px 10px; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .codex-plus-form-message { min-height: 18px; margin-top: 10px; color: #a1a1aa; font: 12px system-ui, sans-serif; text-align: left; }
+      .codex-plus-form-message[data-status="ok"] { color: #34d399; }
+      .codex-plus-form-message[data-status="failed"] { color: #f87171; }
+      .codex-plus-form-message[data-status="loading"] { color: #fbbf24; }
       .codex-plus-backend-status { display: grid; gap: 4px; min-width: 132px; justify-items: end; }
       .codex-plus-backend-label { color: #a1a1aa; font-size: 12px; }
       .codex-plus-backend-label[data-status="ok"] { color: #34d399; }
@@ -626,12 +647,43 @@
   }
 
   function defaultCodexPlusSettings() {
-    return { modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, nativeMenuPlacement: true };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false };
+  }
+
+  const codexPlusBackendSettingMap = {
+    pluginEntryUnlock: "codexAppPluginEntryUnlock",
+    pluginMarketplaceUnlock: "codexAppPluginMarketplaceUnlock",
+    forcePluginInstall: "codexAppForcePluginInstall",
+    modelWhitelistUnlock: "codexAppModelWhitelistUnlock",
+    sessionDelete: "codexAppSessionDelete",
+    markdownExport: "codexAppMarkdownExport",
+    projectMove: "codexAppProjectMove",
+    conversationTimeline: "codexAppConversationTimeline",
+    conversationView: "codexAppConversationView",
+    threadScrollRestore: "codexAppThreadScrollRestore",
+    zedRemoteOpen: "codexAppZedRemoteOpen",
+    upstreamWorktreeCreate: "codexAppUpstreamWorktreeCreate",
+    nativeMenuPlacement: "codexAppNativeMenuPlacement",
+    serviceTierControls: "codexAppServiceTierControls",
+  };
+
+  function backendCodexPlusSettings() {
+    const settings = {};
+    Object.entries(codexPlusBackendSettingMap).forEach(([localKey, backendKey]) => {
+      if (typeof codexPlusBackendSettings[backendKey] === "boolean") {
+        settings[localKey] = codexPlusBackendSettings[backendKey];
+      }
+    });
+    return settings;
   }
 
   function codexPlusSettings() {
+    const relayPatchDisabled = codexPlusBackendSettings.launchMode === "relay";
     if (codexPlusBackendSettings.enhancementsEnabled === false) {
       return {
+        pluginEntryUnlock: false,
+        pluginMarketplaceUnlock: false,
+        forcePluginInstall: false,
         modelWhitelistUnlock: false,
         sessionDelete: false,
         markdownExport: false,
@@ -641,17 +693,36 @@
         conversationViewMaxWidth: conversationViewDefaultWidth,
         threadScrollRestore: false,
         zedRemoteOpen: false,
+        upstreamWorktreeCreate: false,
         nativeMenuPlacement: false,
+        serviceTierControls: false,
       };
     }
     try {
-      return { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}") };
+      const settings = { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}"), ...backendCodexPlusSettings() };
+      if (relayPatchDisabled) {
+        settings.pluginEntryUnlock = false;
+        settings.pluginMarketplaceUnlock = false;
+        settings.forcePluginInstall = false;
+      }
+      return settings;
     } catch {
-      return defaultCodexPlusSettings();
+      const settings = { ...defaultCodexPlusSettings(), ...backendCodexPlusSettings() };
+      if (relayPatchDisabled) {
+        settings.pluginEntryUnlock = false;
+        settings.pluginMarketplaceUnlock = false;
+        settings.forcePluginInstall = false;
+      }
+      return settings;
     }
   }
 
   function setCodexPlusSetting(key, value) {
+    const backendKey = codexPlusBackendSettingMap[key];
+    if (backendKey) {
+      setBackendSetting(backendKey, value);
+      return;
+    }
     let stored = {};
     try {
       stored = JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}");
@@ -670,6 +741,14 @@
       (window.__codexThreadScrollSyncTimers || []).forEach((timer) => clearTimeout(timer));
       window.__codexThreadScrollSyncTimers = [];
       window.__codexThreadScrollRuntime = null;
+    }
+    if (key === "serviceTierControls") {
+      if (value) {
+        void loadCodexServiceTierState();
+      } else {
+        removeCodexServiceTierBadges();
+        refreshCodexServiceTierControls();
+      }
     }
     renderCodexPlusMenu();
     scan();
@@ -714,6 +793,9 @@
   }
 
   let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch" };
+  let codexPlusBackendSettingsLoaded = false;
+  const upstreamBranchDefaultsCache = new Map();
+  const upstreamBranchDefaultsInflight = new Map();
   let codexServiceTierState = {
     status: "loading",
     serviceTier: null,
@@ -1309,6 +1391,7 @@
         throw new Error("invalid backend settings response");
       }
       codexPlusBackendSettings = { ...codexPlusBackendSettings, ...settings };
+      codexPlusBackendSettingsLoaded = true;
       refreshCodexPlusBackendToggles();
       return true;
     } catch (_) {
@@ -1503,8 +1586,24 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="enhancementsEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">插件市场解锁</div><div class="codex-plus-row-description">API Key 模式下扩展插件市场请求，尽量显示完整插件列表；兼容增强模式会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginMarketplaceUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+            </div>
+            <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">强制解锁入口</div><div class="codex-plus-row-description">强制显示并启用插件入口；兼容增强模式会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginEntryUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+            </div>
+            <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">特殊插件强制安装</div><div class="codex-plus-row-description">解除 App unavailable / 应用不可用导致的前端安装禁用；兼容增强模式会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="forcePluginInstall" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+            </div>
+            <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">模型白名单解锁</div><div class="codex-plus-row-description">从环境变量和 Codex config.toml 中的中转站 /v1/models 拉取模型，并补进模型选择列表。</div></div>
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="modelWhitelistUnlock"><span></span></button>
+            </div>
+            <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">Fast 按钮</div><div class="codex-plus-row-description">显示服务模式切换入口，可控制 Standard / Fast / priority。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="serviceTierControls"><span></span></button>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">服务模式</div><div class="codex-plus-row-description">继承使用 config.toml 的 service tier；全局模式覆盖全部 thread；自定义允许按 thread 覆盖。</div></div>
@@ -1554,6 +1653,13 @@
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">Zed Remote open</div><div class="codex-plus-row-description">Open supported remote SSH file references in Zed without patching Codex.app.</div></div>
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="zedRemoteOpen"><span></span></button>
+            </div>
+            <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">Upstream worktree</div><div class="codex-plus-row-description">从最新 upstream 分支创建 Git worktree。</div></div>
+              <div class="codex-plus-worktree-actions">
+                <button type="button" class="codex-plus-action-button" data-codex-upstream-worktree-open="true">创建</button>
+                <button type="button" class="codex-plus-toggle" data-codex-plus-setting="upstreamWorktreeCreate"><span></span></button>
+              </div>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">历史会话修复</div><div class="codex-plus-row-description">切换官方登录、混合 API 或纯 API 后，让旧对话重新显示在当前模式下。</div></div>
@@ -1627,6 +1733,14 @@
       }
       if (target?.closest("[data-codex-open-manager]")) {
         openManagerFromCodex();
+        return;
+      }
+      if (target?.closest("[data-codex-upstream-worktree-open]")) {
+        if (!codexPlusSettings().upstreamWorktreeCreate) {
+          showToast("Upstream worktree 已关闭", null);
+          return;
+        }
+        openUpstreamWorktreeDialog();
         return;
       }
       if (target?.closest("[data-codex-backend-repair]")) {
@@ -1825,6 +1939,395 @@
       updateFloatingCodexPlusMenuPosition(menu);
     }
     removeDuplicateCodexPlusMenus(menu);
+  }
+
+  function appServerModelRequestMethod(method, params) {
+    if (method === "send-cli-request-for-host" && params?.method) return String(params.method);
+    return String(method || "");
+  }
+
+  function pluginPatchDisabledInRelayMode() {
+    return !codexPlusBackendSettingsLoaded || codexPlusBackendSettings.launchMode === "relay";
+  }
+
+  function patchPluginMarketplaceRequestParams(method, params) {
+    if (method !== "list-plugins" || !params || typeof params !== "object") return params;
+    const next = { ...params };
+    const hadMarketplaceKinds = Object.prototype.hasOwnProperty.call(next, "marketplaceKinds");
+    if (hadMarketplaceKinds) delete next.marketplaceKinds;
+    sendCodexPlusDiagnostic("plugin_marketplace_request_expanded", {
+      hadMarketplaceKinds,
+      cwdCount: Array.isArray(next.cwds) ? next.cwds.length : 0,
+    });
+    return next;
+  }
+
+  function pluginMarketplaceAliasForName(name) {
+    if (name === "openai-bundled") return "";
+    if (name === "openai-curated") return "codex-plus-openai-curated";
+    if (name === "openai-primary-runtime") return "codex-plus-openai-primary-runtime";
+    return "";
+  }
+
+  function displayNameForPluginMarketplaceName(name, fallback) {
+    if (name === "openai-bundled" || name === "codex-plus-openai-bundled") return "OpenAI插件1(Codex++)";
+    if (name === "openai-curated" || name === "codex-plus-openai-curated") return "OpenAI插件2(Codex++)";
+    if (name === "openai-primary-runtime" || name === "codex-plus-openai-primary-runtime") return "OpenAI插件3(Codex++)";
+    return fallback;
+  }
+
+  function patchPluginMarketplaceObject(marketplace) {
+    if (!marketplace || typeof marketplace !== "object" || marketplace.__codexPlusMarketplaceUnlockPatched) return false;
+    const alias = pluginMarketplaceAliasForName(marketplace.name);
+    if (alias) marketplace.name = alias;
+    const displayName = displayNameForPluginMarketplaceName(marketplace.name, marketplace.displayName || marketplace.title || marketplace.label || marketplace.name);
+    if (!displayName || displayName === marketplace.name) return false;
+    marketplace.displayName = displayName;
+    marketplace.title = displayName;
+    marketplace.label = displayName;
+    if (marketplace.interface && typeof marketplace.interface === "object") {
+      marketplace.interface = { ...marketplace.interface, displayName, name: displayName, title: displayName, label: displayName };
+    } else {
+      marketplace.interface = { displayName, name: displayName, title: displayName, label: displayName };
+    }
+    marketplace.__codexPlusMarketplaceUnlockPatched = true;
+    return true;
+  }
+
+  function restorePluginMarketplaceName(name) {
+    if (name === "codex-plus-openai-bundled") return "openai-bundled";
+    if (name === "codex-plus-openai-curated") return "openai-curated";
+    if (name === "codex-plus-openai-primary-runtime") return "openai-primary-runtime";
+    return name;
+  }
+
+  function codexPluginOfficialMarketplaceName(name) {
+    const restored = restorePluginMarketplaceName(name);
+    return restored === "openai-bundled" || restored === "openai-curated" || restored === "openai-primary-runtime";
+  }
+
+  function isCodexPluginBuildFlavorFilter(callback, sample) {
+    if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
+    let source = "";
+    try {
+      source = Function.prototype.toString.call(callback);
+    } catch {
+      return false;
+    }
+    if (!source.includes("!u(e.marketplaceName)||e.marketplaceName===r")) return false;
+    if (!sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName))) return false;
+    return sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName) && !callback(plugin));
+  }
+
+  function isCodexPluginMarketplaceHiddenFilter(callback, sample) {
+    if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
+    let source = "";
+    try {
+      source = Function.prototype.toString.call(callback);
+    } catch {
+      return false;
+    }
+    if (!source.includes("!t.includes(e.name)")) return false;
+    if (!sample.some((marketplace) => codexPluginOfficialMarketplaceName(marketplace?.name))) return false;
+    return sample.some((marketplace) => codexPluginOfficialMarketplaceName(marketplace?.name) && !callback(marketplace));
+  }
+
+  function installPluginBuildFlavorFilterPatch() {
+    if (window.__codexPluginBuildFlavorFilterPatch === codexPluginMarketplaceUnlockVersion) return;
+    if (pluginPatchDisabledInRelayMode()) return;
+    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
+    const originalFilter = Array.prototype.__codexPluginBuildFlavorOriginalFilter || Array.prototype.filter;
+    if (!Array.prototype.__codexPluginBuildFlavorOriginalFilter) {
+      Object.defineProperty(Array.prototype, "__codexPluginBuildFlavorOriginalFilter", {
+        value: originalFilter,
+        configurable: true,
+        writable: true,
+      });
+    }
+    if (Array.prototype.filter.__codexPluginBuildFlavorPatched === codexPluginMarketplaceUnlockVersion) {
+      window.__codexPluginBuildFlavorFilterPatch = codexPluginMarketplaceUnlockVersion;
+      return;
+    }
+    const patchedFilter = function codexPluginBuildFlavorFilterPatch(callback, thisArg) {
+      if (isCodexPluginBuildFlavorFilter(callback, this)) {
+        sendCodexPlusDiagnostic("plugin_build_flavor_filter_bypassed", { pluginCount: this.length });
+        return Array.from(this);
+      }
+      if (isCodexPluginMarketplaceHiddenFilter(callback, this)) {
+        sendCodexPlusDiagnostic("plugin_marketplace_hidden_filter_bypassed", { marketplaceCount: this.length });
+        return Array.from(this);
+      }
+      return originalFilter.call(this, callback, thisArg);
+    };
+    patchedFilter.__codexPluginBuildFlavorPatched = codexPluginMarketplaceUnlockVersion;
+    Array.prototype.filter = patchedFilter;
+    window.__codexPluginBuildFlavorFilterPatch = codexPluginMarketplaceUnlockVersion;
+    sendCodexPlusDiagnostic("plugin_build_flavor_filter_patch_installed", {});
+  }
+
+  function restorePluginMarketplaceRequestParams(params, method = "") {
+    if (!params || typeof params !== "object") return params;
+    let next = params;
+    if (Array.isArray(params.marketplaceKinds)) {
+      const nextKinds = params.marketplaceKinds.map((kind) => kind === "remote:openai-curated" ? "openai-curated" : restorePluginMarketplaceName(kind));
+      next = { ...next, marketplaceKinds: Array.from(new Set(nextKinds)) };
+    }
+    if (method === "install-plugin") {
+      next = next === params ? { ...params } : { ...next };
+      if (next.remoteMarketplaceName) next.remoteMarketplaceName = restorePluginMarketplaceName(next.remoteMarketplaceName);
+      if (typeof next.marketplacePath === "string" && next.marketplacePath.startsWith("remote:")) {
+        const remoteMarketplaceName = next.marketplacePath.slice("remote:".length);
+        delete next.marketplacePath;
+        next.remoteMarketplaceName = restorePluginMarketplaceName(remoteMarketplaceName);
+      }
+    }
+    return next;
+  }
+
+  function patchPluginMarketplaceResult(method, result) {
+    if (method !== "list-plugins") return result;
+    try {
+      let patchedCount = 0;
+      if (Array.isArray(result?.marketplaces)) {
+        result.marketplaces.forEach((marketplace) => {
+          if (patchPluginMarketplaceObject(marketplace)) patchedCount += 1;
+        });
+      }
+      if (patchedCount > 0) sendCodexPlusDiagnostic("plugin_marketplace_response_expanded", { patchedCount });
+    } catch (error) {
+      sendCodexPlusDiagnostic("plugin_marketplace_response_patch_failed", { errorName: error?.name || "", errorMessage: error?.message || String(error) });
+    }
+    return result;
+  }
+
+  function patchPluginMarketplaceRequestClient(client) {
+    if (!client || typeof client.sendRequest !== "function") return false;
+    if (client.__codexPluginMarketplaceUnlockPatch === codexPluginMarketplaceUnlockVersion) return true;
+    const originalSendRequest = client.__codexPluginMarketplaceOriginalSendRequest || client.sendRequest.bind(client);
+    client.__codexPluginMarketplaceOriginalSendRequest = originalSendRequest;
+    client.sendRequest = async function codexPluginMarketplacePatchedSendRequest(method, params, options) {
+      const requestMethod = appServerModelRequestMethod(String(method || ""), params);
+      const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restorePluginMarketplaceRequestParams(params, requestMethod));
+      const result = await originalSendRequest(method, requestParams, options);
+      return patchPluginMarketplaceResult(requestMethod, result);
+    };
+    client.__codexPluginMarketplaceUnlockPatch = codexPluginMarketplaceUnlockVersion;
+    return true;
+  }
+
+  function installPluginMarketplaceRequestPatch() {
+    if (window.__codexPluginMarketplaceUnlockInstalled === codexPluginMarketplaceUnlockVersion) return;
+    if (pluginPatchDisabledInRelayMode()) return;
+    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
+    const patch = async () => {
+      try {
+        const module = await loadCodexAppModule("app-server-manager-signals-");
+        const candidates = Object.values(module).filter((value) => value && typeof value === "object");
+        let patchedCount = 0;
+        for (const candidate of candidates) {
+          if (patchPluginMarketplaceRequestClient(candidate)) patchedCount += 1;
+          if (typeof candidate.sendRequest !== "function" && typeof candidate.get === "function") {
+            try {
+              if (patchPluginMarketplaceRequestClient(candidate.get())) patchedCount += 1;
+            } catch (_) {}
+          }
+        }
+        if (patchedCount > 0) {
+          window.__codexPluginMarketplaceUnlockInstalled = codexPluginMarketplaceUnlockVersion;
+          sendCodexPlusDiagnostic("plugin_marketplace_request_patch_installed", { candidateCount: candidates.length, patchedCount });
+        }
+      } catch (error) {
+        sendCodexPlusDiagnostic("plugin_marketplace_request_patch_failed", { errorName: error?.name || "", errorMessage: error?.message || String(error) });
+      }
+    };
+    void patch();
+  }
+
+  function reactFiberFrom(element) {
+    const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber"));
+    return fiberKey ? element[fiberKey] : null;
+  }
+
+  function authContextValueFrom(element) {
+    for (let fiber = reactFiberFrom(element); fiber; fiber = fiber.return) {
+      for (const value of [fiber.memoizedProps?.value, fiber.pendingProps?.value]) {
+        if (value && typeof value === "object" && typeof value.setAuthMethod === "function" && "authMethod" in value) return value;
+      }
+    }
+    return null;
+  }
+
+  function spoofChatGPTAuthMethod(element) {
+    const auth = authContextValueFrom(element);
+    if (!auth || auth.authMethod === "chatgpt") return false;
+    auth.setAuthMethod("chatgpt");
+    return true;
+  }
+
+  function pluginEntryButton() {
+    const byIcon = document.querySelector(`${selectors.pluginNavButton} ${selectors.pluginSvgPath}`)?.closest("button");
+    if (byIcon) return byIcon;
+    return Array.from(document.querySelectorAll(selectors.pluginNavButton))
+      .find((button) => /^(插件|Plugins)(\s+-\s+.*)?$/i.test((button.textContent || "").trim())) || null;
+  }
+
+  function labelUnlockedPluginEntry(button) {
+    const labelTextNode = Array.from(button.querySelectorAll("span, div")).reverse()
+      .flatMap((node) => Array.from(node.childNodes))
+      .find((node) => node.nodeType === 3 && /^(插件|Plugins)( - 已解锁| - Unlocked)?$/i.test((node.nodeValue || "").trim()));
+    if (!labelTextNode) return;
+    const current = (labelTextNode.nodeValue || "").trim();
+    labelTextNode.nodeValue = /^Plugins/i.test(current) ? "Plugins - Unlocked" : "插件 - 已解锁";
+  }
+
+  function clearPluginEntryUnlockLabel(button) {
+    const labelTextNode = Array.from(button.querySelectorAll("span, div")).reverse()
+      .flatMap((node) => Array.from(node.childNodes))
+      .find((node) => node.nodeType === 3 && /^(插件 - 已解锁|Plugins - Unlocked)$/i.test((node.nodeValue || "").trim()));
+    if (labelTextNode) labelTextNode.nodeValue = /^Plugins/i.test((labelTextNode.nodeValue || "").trim()) ? "Plugins" : "插件";
+  }
+
+  function enablePluginEntry() {
+    if (pluginPatchDisabledInRelayMode()) return;
+    if (!codexPlusSettings().pluginEntryUnlock) return;
+    const pluginButton = pluginEntryButton();
+    if (!pluginButton) return;
+    const spoofed = spoofChatGPTAuthMethod(pluginButton);
+    pluginButton.disabled = false;
+    pluginButton.removeAttribute("disabled");
+    pluginButton.style.display = "";
+    pluginButton.querySelectorAll("*").forEach((node) => {
+      node.style.display = "";
+    });
+    labelUnlockedPluginEntry(pluginButton);
+    const reactPropsKey = Object.keys(pluginButton).find((key) => key.startsWith("__reactProps"));
+    if (reactPropsKey) pluginButton[reactPropsKey].disabled = false;
+    if (pluginButton.dataset.codexPluginEnabled !== "true") {
+      pluginButton.dataset.codexPluginEnabled = "true";
+      pluginButton.addEventListener("click", () => spoofChatGPTAuthMethod(pluginButton), true);
+    }
+    sendCodexPlusDiagnostic("plugin_entry_unlock_applied", { spoofed });
+  }
+
+  function pluginInstallCandidates() {
+    const nodes = Array.from(document.querySelectorAll(selectors.disabledInstallButton));
+    return Array.from(new Set(nodes.map((node) => node.closest?.("button, [role='button']") || node)));
+  }
+
+  function installButtonLabel(element) {
+    return (element.textContent || "").trim();
+  }
+
+  function isInstallButtonLabel(text) {
+    return /^安装\s*/.test(text) || /^Install\s*/i.test(text) || text === "强制安装";
+  }
+
+  function patchReactDisabledProps(element) {
+    Object.keys(element)
+      .filter((key) => key.startsWith("__reactProps"))
+      .forEach((key) => {
+        const props = element[key];
+        if (!props || typeof props !== "object") return;
+        props.disabled = false;
+        props["aria-disabled"] = false;
+        props["data-disabled"] = undefined;
+      });
+  }
+
+  function clearDisabledState(element) {
+    if (!(element instanceof HTMLElement)) return;
+    if ("disabled" in element) element.disabled = false;
+    element.removeAttribute("disabled");
+    element.removeAttribute("aria-disabled");
+    element.removeAttribute("data-disabled");
+    element.removeAttribute("inert");
+    element.classList.remove("disabled", "opacity-50", "cursor-not-allowed", "pointer-events-none");
+    element.classList.add("codex-force-install-unlocked");
+    element.style.pointerEvents = "auto";
+    element.style.opacity = "";
+    element.style.cursor = "pointer";
+    element.tabIndex = 0;
+    patchReactDisabledProps(element);
+  }
+
+  function installButtonUnlockNodes(button) {
+    const nodes = [button];
+    button.querySelectorAll?.("button, [role='button'], [disabled], [aria-disabled], [data-disabled], .cursor-not-allowed, .pointer-events-none").forEach((node) => nodes.push(node));
+    let parent = button.parentElement;
+    for (let depth = 0; parent && depth < 3; depth += 1, parent = parent.parentElement) {
+      if (parent.matches?.("button, [role='button'], [disabled], [aria-disabled], [data-disabled], .cursor-not-allowed, .pointer-events-none")) nodes.push(parent);
+    }
+    return Array.from(new Set(nodes));
+  }
+
+  function installForcedInstallGuard(button) {
+    if (button.dataset.codexForceInstallUnlocked === "true") return;
+    button.dataset.codexForceInstallUnlocked = "true";
+    const keepUnlocked = () => installButtonUnlockNodes(button).forEach(clearDisabledState);
+    ["pointerdown", "mousedown", "mouseup", "click", "focus"].forEach((eventName) => button.addEventListener(eventName, keepUnlocked, true));
+  }
+
+  function unblockButtonElement(button) {
+    installButtonUnlockNodes(button).forEach(clearDisabledState);
+    installForcedInstallGuard(button);
+  }
+
+  function labelForcedInstallButton(button) {
+    const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    while (!textNode && walker.nextNode()) {
+      const node = walker.currentNode;
+      if (isInstallButtonLabel((node.nodeValue || "").trim())) textNode = node;
+    }
+    if (textNode) textNode.nodeValue = "强制安装";
+  }
+
+  function clearForcedInstallButtonLabel(button) {
+    const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    while (!textNode && walker.nextNode()) {
+      const node = walker.currentNode;
+      if ((node.nodeValue || "").trim() === "强制安装") textNode = node;
+    }
+    if (textNode) textNode.nodeValue = "安装";
+  }
+
+  function clearPluginPatchArtifacts() {
+    const pluginButton = pluginEntryButton();
+    if (pluginButton) {
+      delete pluginButton.dataset.codexPluginEnabled;
+      clearPluginEntryUnlockLabel(pluginButton);
+    }
+    pluginInstallCandidates().forEach(clearForcedInstallButtonLabel);
+  }
+
+  function unblockPluginInstallButtons() {
+    if (pluginPatchDisabledInRelayMode()) return;
+    if (!codexPlusSettings().forcePluginInstall) return;
+    pluginInstallCandidates().forEach((button) => {
+      const text = installButtonLabel(button);
+      if (!isInstallButtonLabel(text)) return;
+      unblockButtonElement(button);
+      labelForcedInstallButton(button);
+    });
+  }
+
+  function refreshForcePluginInstallUnlockLoop() {
+    const shouldRun = !pluginPatchDisabledInRelayMode() && codexPlusSettings().forcePluginInstall;
+    if (!shouldRun) {
+      clearInterval(window.__codexForcePluginInstallRefreshTimer);
+      window.__codexForcePluginInstallRefreshTimer = null;
+      return;
+    }
+    if (window.__codexForcePluginInstallRefreshTimer) return;
+    window.__codexForcePluginInstallRefreshTimer = setInterval(() => {
+      if (!codexPlusSettings().forcePluginInstall || pluginPatchDisabledInRelayMode()) {
+        clearInterval(window.__codexForcePluginInstallRefreshTimer);
+        window.__codexForcePluginInstallRefreshTimer = null;
+        return;
+      }
+      unblockPluginInstallButtons();
+    }, codexForcePluginInstallRefreshIntervalMs);
   }
 
   let cachedSessionRows = [];
@@ -3117,6 +3620,17 @@
     return targets;
   }
 
+  function currentProjectRepoPath() {
+    const targets = nativeProjectTargets();
+    const selected = targets.find((target) => {
+      const rowText = `${target.row?.className || ""} ${target.listItem?.className || ""}`;
+      return target.row?.getAttribute?.("aria-current") === "page" ||
+        target.listItem?.getAttribute?.("aria-current") === "page" ||
+        /\b(active|selected|bg-token-list-hover-background)\b/.test(rowText);
+    });
+    return selected?.path || targets[0]?.path || "";
+  }
+
   function serializableProjectTarget(target) {
     return { kind: target.kind, label: target.label, description: target.description, path: target.path, normalizedPath: target.normalizedPath || normalizeWorkspacePath(target.path) };
   }
@@ -3797,6 +4311,114 @@
     setProjectlessThreadIds(ref, "remove").catch(() => {});
     clearThreadWorkspaceHints(ref).catch(() => {});
     return result;
+  }
+
+  function upstreamWorktreeField(dialog, name) {
+    return dialog.querySelector(`[data-codex-upstream-worktree-field="${name}"]`);
+  }
+
+  function upstreamWorktreePayload(dialog) {
+    return {
+      repoPath: upstreamWorktreeField(dialog, "repoPath")?.value || currentProjectRepoPath() || "",
+      branchName: upstreamWorktreeField(dialog, "branchName")?.value || "",
+      worktreePath: upstreamWorktreeField(dialog, "worktreePath")?.value || "",
+      remote: upstreamWorktreeField(dialog, "remote")?.value || "upstream",
+      baseBranch: upstreamWorktreeField(dialog, "baseBranch")?.value || "main",
+      fetch: true,
+    };
+  }
+
+  function setUpstreamWorktreeMessage(dialog, message, status = "idle") {
+    const messageNode = dialog.querySelector("[data-codex-upstream-worktree-message]");
+    if (!messageNode) return;
+    messageNode.dataset.status = status;
+    messageNode.textContent = message || "";
+  }
+
+  async function loadUpstreamWorktreeDefaults(dialog) {
+    const repoPath = upstreamWorktreeField(dialog, "repoPath")?.value?.trim() || currentProjectRepoPath() || "";
+    if (!repoPath) {
+      setUpstreamWorktreeMessage(dialog, "填写仓库路径后会自动读取 remote 和当前分支。", "idle");
+      return;
+    }
+    setUpstreamWorktreeMessage(dialog, "正在读取仓库默认值…", "loading");
+    try {
+      const result = await postJson("/upstream-worktree/defaults", { repoPath });
+      if (result?.status !== "ok") {
+        setUpstreamWorktreeMessage(dialog, result?.message || "读取仓库默认值失败", "failed");
+        return;
+      }
+      const repo = upstreamWorktreeField(dialog, "repoPath");
+      const remote = upstreamWorktreeField(dialog, "remote");
+      const baseBranch = upstreamWorktreeField(dialog, "baseBranch");
+      if (repo && !repo.value) repo.value = result.repoRoot || repoPath;
+      if (remote && !remote.value) remote.value = result.defaultRemote || "upstream";
+      if (baseBranch && (!baseBranch.value || baseBranch.value === "main")) baseBranch.value = result.defaultBaseBranch || "main";
+      setUpstreamWorktreeMessage(dialog, `将从 ${remote?.value || "upstream"}/${baseBranch?.value || "main"} 创建 worktree。`, "ok");
+    } catch (error) {
+      setUpstreamWorktreeMessage(dialog, error?.message || "读取仓库默认值失败", "failed");
+    }
+  }
+
+  async function submitUpstreamWorktree(dialog) {
+    const payload = upstreamWorktreePayload(dialog);
+    if (!payload.repoPath || !payload.branchName || !payload.worktreePath || !payload.remote || !payload.baseBranch) {
+      setUpstreamWorktreeMessage(dialog, "仓库路径、分支名、worktree 路径、remote 和 base branch 都必须填写。", "failed");
+      return;
+    }
+    setUpstreamWorktreeMessage(dialog, "正在 fetch 并创建 worktree…", "loading");
+    try {
+      const result = await postJson("/upstream-worktree/create", payload);
+      if (result?.status === "ok") {
+        setUpstreamWorktreeMessage(dialog, `已从 ${result.sourceRef} 创建：${result.worktreePath}`, "ok");
+        showToast(`已创建 upstream worktree：${result.branchName}`, null);
+      } else {
+        setUpstreamWorktreeMessage(dialog, result?.message || "创建 upstream worktree 失败", "failed");
+      }
+    } catch (error) {
+      setUpstreamWorktreeMessage(dialog, error?.message || "创建 upstream worktree 失败", "failed");
+    }
+  }
+
+  function openUpstreamWorktreeDialog() {
+    document.querySelectorAll(`.${upstreamWorktreeDialogClass}`).forEach((node) => node.remove());
+    const overlay = document.createElement("div");
+    overlay.className = `codex-delete-confirm-overlay ${upstreamWorktreeDialogClass}`;
+    overlay.innerHTML = `
+      <div class="codex-delete-confirm-content" role="dialog" aria-modal="true" aria-label="Create upstream worktree">
+        <div class="codex-delete-confirm-title">Create from upstream</div>
+        <div class="codex-delete-confirm-message">等价于 git worktree add -b branch path upstream/base。创建前会先 fetch 远端分支。</div>
+        <label class="codex-plus-form-field">仓库路径<input data-codex-upstream-worktree-field="repoPath" type="text" placeholder="/path/to/repo" value="${escapeHtml(currentProjectRepoPath() || "")}"></label>
+        <label class="codex-plus-form-field">新分支名<input data-codex-upstream-worktree-field="branchName" type="text" placeholder="feature/my-task"></label>
+        <label class="codex-plus-form-field">Worktree 路径<input data-codex-upstream-worktree-field="worktreePath" type="text" placeholder="/path/to/worktrees/my-task"></label>
+        <label class="codex-plus-form-field">Remote<input data-codex-upstream-worktree-field="remote" type="text" value="upstream"></label>
+        <label class="codex-plus-form-field">Base branch<input data-codex-upstream-worktree-field="baseBranch" type="text" value="main"></label>
+        <div class="codex-plus-form-message" data-codex-upstream-worktree-message>填写仓库路径后会自动读取 remote 和当前分支。</div>
+        <div class="codex-delete-confirm-actions">
+          <button type="button" data-codex-upstream-worktree-cancel="true">取消</button>
+          <button type="button" data-codex-upstream-worktree-defaults="true">读取默认值</button>
+          <button type="button" data-codex-upstream-worktree-submit="true">Create from upstream</button>
+        </div>
+      </div>
+    `;
+    overlay.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+      if (event.target === overlay || target?.closest("[data-codex-upstream-worktree-cancel]")) {
+        overlay.remove();
+        return;
+      }
+      if (target?.closest("[data-codex-upstream-worktree-defaults]")) {
+        loadUpstreamWorktreeDefaults(overlay);
+        return;
+      }
+      if (target?.closest("[data-codex-upstream-worktree-submit]")) {
+        submitUpstreamWorktree(overlay);
+      }
+    }, true);
+    upstreamWorktreeField(overlay, "repoPath")?.addEventListener("change", () => loadUpstreamWorktreeDefaults(overlay));
+    document.body.appendChild(overlay);
+    upstreamWorktreeField(overlay, "repoPath")?.focus();
+    void loadUpstreamWorktreeDefaults(overlay);
   }
 
   function showToast(message, undoToken) {
@@ -4906,6 +5528,10 @@
   }
 
   function installCodexServiceTierBadge() {
+    if (!codexPlusSettings().serviceTierControls) {
+      removeCodexServiceTierBadges();
+      return;
+    }
     const composer = codexServiceTierFindComposerEl();
     const placement = composer ? codexServiceTierBadgePlacement(composer) : null;
     const existingBadges = Array.from(document.querySelectorAll(`[data-codex-service-tier-badge="true"]`));
@@ -4930,6 +5556,10 @@
       placement.parent.insertBefore(badge, before);
     }
     refreshCodexServiceTierBadges();
+  }
+
+  function removeCodexServiceTierBadges() {
+    document.querySelectorAll(`[data-codex-service-tier-badge="true"]`).forEach((badge) => badge.remove());
   }
 
   function conversationViewRememberOriginals(el) {
@@ -5716,6 +6346,16 @@
   }
 
   function scanDeferred() {
+    if (pluginPatchDisabledInRelayMode()) {
+      clearPluginPatchArtifacts();
+      refreshForcePluginInstallUnlockLoop();
+    } else {
+      enablePluginEntry();
+      installPluginBuildFlavorFilterPatch();
+      installPluginMarketplaceRequestPatch();
+      unblockPluginInstallButtons();
+      refreshForcePluginInstallUnlockLoop();
+    }
     sessionRows().forEach(tryAttachButton);
     syncActionGroupsLayout();
     updateDeleteButtonOffsets();

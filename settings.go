@@ -148,7 +148,7 @@ func loadSettings() backendSettings {
 	settings = normalizeSettings(settings)
 	if migrated, changed := migrateOfficialAuthBinding(settings); changed {
 		settings = migrated
-		_ = atomicWriteJSON(settingsPath(), settings)
+		_ = atomicWriteSettingsPreservingUnknown(settingsPath(), settings)
 	}
 	return settings
 }
@@ -373,7 +373,33 @@ func saveSettings(settings backendSettings) error {
 			settings.CodexAppPath = ""
 		}
 	}
-	return atomicWriteJSON(settingsPath(), settings)
+	return atomicWriteSettingsPreservingUnknown(settingsPath(), settings)
+}
+
+func atomicWriteSettingsPreservingUnknown(path string, settings backendSettings) error {
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	var next map[string]json.RawMessage
+	if err := json.Unmarshal(data, &next); err != nil {
+		return err
+	}
+	var merged map[string]json.RawMessage
+	if existing, err := os.ReadFile(path); err == nil && len(existing) > 0 {
+		_ = json.Unmarshal(existing, &merged)
+	}
+	if merged == nil {
+		merged = map[string]json.RawMessage{}
+	}
+	for key, value := range next {
+		merged[key] = value
+	}
+	out, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, out)
 }
 
 func normalizeExtraArgs(args []string) []string {

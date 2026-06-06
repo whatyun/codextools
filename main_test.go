@@ -98,22 +98,36 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 	}
 }
 
-func TestRendererInjectionDoesNotPatchPluginAvailability(t *testing.T) {
-	for _, forbidden := range []string{
-		`codexPlusBackendSettings.launchMode === "relay";`,
-		`data-relay-unneeded`,
-		`兼容增强模式下无需开启`,
-		`仅关闭插件入口相关增强`,
+func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
+	for _, required := range []string{
 		`pluginEntryUnlock`,
+		`pluginMarketplaceUnlock`,
 		`forcePluginInstall`,
-		`插件选项解锁`,
-		`特殊插件强制安装`,
-		`强制安装`,
+		`pluginPatchDisabledInRelayMode`,
+		`codexPlusBackendSettings.launchMode === "relay"`,
+		`installPluginMarketplaceRequestPatch`,
+		`enablePluginEntry`,
+		`unblockPluginInstallButtons`,
 		`插件 - 已解锁`,
 		`Plugins - Unlocked`,
+		`强制安装`,
+	} {
+		if !strings.Contains(rendererInjectScript, required) {
+			t.Fatalf("renderer injection should include plugin unlock capability; missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`/ads`,
+		`load_ads`,
+		`RecommendationsScreen`,
+		`codexPlusAds`,
+		`codex-plus-ad`,
+		`赞助商推荐`,
+		`推荐内容`,
+		`请作者喝咖啡`,
 	} {
 		if strings.Contains(rendererInjectScript, forbidden) {
-			t.Fatalf("renderer injection should not patch plugin availability; found %q", forbidden)
+			t.Fatalf("renderer injection should not include ads or recommendations; found %q", forbidden)
 		}
 	}
 }
@@ -212,6 +226,34 @@ func TestLoadSettingsMigratesCurrentOfficialAuthToActiveProfile(t *testing.T) {
 	}
 	if active.ConfigContents == "" {
 		t.Fatal("config contents should be migrated for active profile")
+	}
+}
+
+func TestSaveSettingsPreservesUnknownTopLevelFields(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeTestFile(t, settingsPath(), `{
+  "futureFeature": {"enabled": true, "mode": "next"},
+  "codexAppPath": "",
+  "relayProfiles": [{"id":"default","name":"Default","protocol":"responses","relayMode":"official"}],
+  "activeRelayId": "default"
+}`)
+
+	settings := loadSettings()
+	settings.Language = "en-US"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := readJSON(settingsPath(), &raw); err != nil {
+		t.Fatalf("failed to read saved settings: %v", err)
+	}
+	if string(raw["futureFeature"]) == "" {
+		t.Fatal("unknown top-level field should be preserved")
+	}
+	if !strings.Contains(string(raw["futureFeature"]), `"mode": "next"`) {
+		t.Fatalf("unknown field value changed: %s", string(raw["futureFeature"]))
 	}
 }
 

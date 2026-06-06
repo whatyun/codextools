@@ -292,7 +292,7 @@ func filterCommonConfigForSelection(config string, selection relayContextSelecti
 		if len(parts) == 2 {
 			if ids, ok := selected[parts[0]]; ok {
 				id := unquoteToml(parts[1])
-				if len(ids) > 0 && !ids[id] {
+				if !ids[id] {
 					continue
 				}
 				body := strings.Join(lines[start+1:i], "\n")

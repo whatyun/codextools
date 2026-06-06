@@ -1,0 +1,171 @@
+package main
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestZedRemoteBuildsEncodedSSHURL(t *testing.T) {
+	user, host, port, err := splitSSHAuthority("dev@[2001:db8::1]:2200")
+	if err != nil {
+		t.Fatalf("split SSH authority failed: %v", err)
+	}
+	if user != "dev" || host != "[2001:db8::1]" || port == nil || *port != 2200 {
+		t.Fatalf("unexpected SSH authority parse: user=%q host=%q port=%v", user, host, port)
+	}
+
+	url, err := buildZedRemoteURL(sshTarget{User: user, Host: host, Port: port}, "/workspace/hello world/a#b.go")
+	if err != nil {
+		t.Fatalf("build Zed URL failed: %v", err)
+	}
+	if want := "ssh://dev@[2001:db8::1]:2200/workspace/hello%20world/a%23b.go"; url != want {
+		t.Fatalf("Zed URL mismatch:\n got: %s\nwant: %s", url, want)
+	}
+}
+
+func TestZedRemoteFallbackUsesGlobalStateThreadHints(t *testing.T) {
+	state := map[string]any{
+		"selected-remote-host-id": "host-1",
+		"codex-managed-remote-connections": []any{
+			map[string]any{"hostId": "host-1", "sshHost": "dev@example.com:2222"},
+		},
+		"thread-workspace-root-hints": map[string]any{
+			"local:thread-1": map[string]any{"hostId": "host-1", "remotePath": "/work/project/sub"},
+		},
+		"remote-projects": []any{
+			map[string]any{"id": "project-1", "hostId": "host-1", "remotePath": "/work/project"},
+		},
+	}
+
+	request, err := fallbackOpenRequestFromGlobalStateWithContext(state, "", "thread-1", "", "")
+	if err != nil {
+		t.Fatalf("fallback request failed: %v", err)
+	}
+	ssh, _ := request["ssh"].(map[string]any)
+	if stringFromAny(request["hostId"]) != "host-1" || stringFromAny(request["path"]) != "/work/project/sub" {
+		t.Fatalf("unexpected fallback request: %#v", request)
+	}
+	if stringFromAny(ssh["user"]) != "dev" || stringFromAny(ssh["host"]) != "example.com" {
+		t.Fatalf("unexpected fallback ssh target: %#v", ssh)
+	}
+	port, _ := ssh["port"].(*uint16)
+	if port == nil || *port != 2222 {
+		t.Fatalf("unexpected fallback ssh port: %#v", ssh["port"])
+	}
+}
+
+func TestUpstreamWorktreeParsers(t *testing.T) {
+	if got := defaultRemoteName([]string{"origin", "upstream"}); got != "upstream" {
+		t.Fatalf("default remote should prefer upstream, got %q", got)
+	}
+	if err := validateRemoteName("../origin"); err == nil {
+		t.Fatal("remote validation should reject path-like names")
+	}
+
+	refs := refsFromOutput(strings.Join([]string{
+		"refs/remotes/origin/HEAD",
+		"refs/remotes/origin/main",
+		"refs/remotes/origin/feature/x",
+		"refs/remotes/upstream/ignored",
+	}, "\n"), "origin", "main")
+	labels := []string{stringFromAny(refs[0]["label"]), stringFromAny(refs[1]["label"])}
+	if !reflect.DeepEqual(labels, []string{"origin/feature/x", "origin/main"}) {
+		t.Fatalf("unexpected refs: %#v", refs)
+	}
+
+	root := t.TempDir()
+	other := filepath.Join(t.TempDir(), "feature")
+	branches := worktreeBranchesFromOutput("worktree " + root + "\nbranch refs/heads/main\n\nworktree " + other + "\nbranch refs/heads/feature/x\n\nworktree /detached\nHEAD abc\n\n")
+	if len(branches) != 2 {
+		t.Fatalf("unexpected worktree branch count: %#v", branches)
+	}
+	if stringFromAny(branches[0]["branch"]) != "main" || stringFromAny(branches[1]["branch"]) != "feature/x" {
+		t.Fatalf("unexpected worktree branches: %#v", branches)
+	}
+}
+
+func TestContextConfigSelectionFiltersDisabledAndUnselected(t *testing.T) {
+	config := strings.Join([]string{
+		`model = "gpt-5"`,
+		`[model_providers.local]`,
+		`base_url = "https://example.test/v1"`,
+		`[mcp_servers.context7]`,
+		`command = "npx"`,
+		`[skills.writer]`,
+		`enabled = false`,
+		`path = "/skills/writer"`,
+		`[plugins."github@openai-curated"]`,
+		`enabled = true`,
+	}, "\n")
+
+	common, contextConfig := splitContextConfigSections(config)
+	if strings.Contains(common, "[mcp_servers.context7]") || !strings.Contains(contextConfig, "[mcp_servers.context7]") {
+		t.Fatalf("context split mismatch:\ncommon:\n%s\ncontext:\n%s", common, contextConfig)
+	}
+
+	filtered := filterCommonConfigForSelection(config, relayContextSelection{
+		MCPServers: []string{"context7"},
+		Plugins:    []string{"github@openai-curated"},
+	})
+	for _, expected := range []string{`model = "gpt-5"`, `[model_providers.local]`, `[mcp_servers.context7]`, `[plugins."github@openai-curated"]`} {
+		if !strings.Contains(filtered, expected) {
+			t.Fatalf("filtered config missing %q:\n%s", expected, filtered)
+		}
+	}
+	if strings.Contains(filtered, "[skills.writer]") {
+		t.Fatalf("disabled or unselected skill should be filtered:\n%s", filtered)
+	}
+
+	emptySelection := filterCommonConfigForSelection(config, relayContextSelection{})
+	for _, forbidden := range []string{"[mcp_servers.context7]", "[skills.writer]", `[plugins."github@openai-curated"]`} {
+		if strings.Contains(emptySelection, forbidden) {
+			t.Fatalf("empty selection should omit context table %q:\n%s", forbidden, emptySelection)
+		}
+	}
+}
+
+func TestModelCatalogParsesConfiguredSources(t *testing.T) {
+	models := parseModelPayload(map[string]any{
+		"data": []any{
+			map[string]any{"id": "gpt-5"},
+			map[string]any{"name": "custom-model"},
+			"inline-model",
+		},
+	})
+	if !reflect.DeepEqual(models, []string{"gpt-5", "custom-model", "inline-model"}) {
+		t.Fatalf("unexpected parsed models: %#v", models)
+	}
+	if got := modelsEndpoint("https://api.example.test/openai/v1"); got != "https://api.example.test/openai/v1/models" {
+		t.Fatalf("models endpoint mismatch: %s", got)
+	}
+	if got := safeStatusURL("https://user:secret@example.test/v1?token=hidden#frag"); got != "https://example.test/v1" {
+		t.Fatalf("safe URL should strip credentials/query/fragment, got %s", got)
+	}
+}
+
+func TestBridgeParityRoutesExistAndAdsStayAbsent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	runtime := &launcherRuntime{}
+	for _, route := range []string{
+		"/user-scripts/delete",
+		"/zed-remote/status",
+		"/zed-remote/resolve-host",
+		"/zed-remote/fallback-request",
+		"/upstream-worktree/status",
+		"/upstream-worktree/defaults",
+		"/upstream-worktree/prepare",
+		"/upstream-worktree/create",
+	} {
+		result := runtime.handleBridgeRequest(route, json.RawMessage(`{}`))
+		if stringFromAny(result["message"]) == "Unknown bridge path" || stringFromAny(result["path"]) == route {
+			t.Fatalf("bridge route %s was not registered: %#v", route, result)
+		}
+	}
+	ads := runtime.handleBridgeRequest("/ads", json.RawMessage(`{}`))
+	if stringFromAny(ads["message"]) != "Unknown bridge path" {
+		t.Fatalf("/ads should remain unimplemented, got %#v", ads)
+	}
+}

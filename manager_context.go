@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,23 +211,4 @@ func commonConfigAnchors(config string) configAnchorSet {
 		}
 	}
 	return anchors
-}
-
-func postJSONWithUserAgent(ctx context.Context, rawURL, userAgent string, payload any, out any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("user-agent", firstNonEmpty(userAgent, "CodexTools-GoManager/"+version))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(out)
 }

@@ -1371,6 +1371,17 @@ body {
   margin-top: 12px;
 }
 
+.relay-advanced-toggle {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.relay-advanced-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .protocol-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1493,6 +1504,242 @@ body {
 
 .relay-file-textarea.compact {
   min-height: 190px;
+}
+
+.relay-model-list-tools {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid hsl(var(--border));
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.relay-model-list-textarea {
+  min-height: 120px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.relay-context-selection,
+.relay-context-panel {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid hsl(var(--border));
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.relay-context-panel {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.relay-context-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.relay-context-head > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.relay-context-head span,
+.relay-context-summary,
+.relay-context-row span {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.segmented button,
+.relay-context-row,
+.context-editor,
+.context-selection-column,
+.feature-toggle {
+  border: 1px solid hsl(var(--border));
+  border-radius: 18px;
+  background: hsl(var(--background) / 0.72);
+  color: hsl(var(--foreground));
+}
+
+.segmented button {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: inherit;
+  font-weight: 720;
+}
+
+.segmented button.active {
+  border-color: hsl(var(--ring) / 0.5);
+  background: hsl(var(--accent));
+}
+
+.segmented small {
+  color: hsl(var(--muted-foreground));
+  font-weight: 700;
+}
+
+.relay-context-list {
+  display: grid;
+  gap: 8px;
+}
+
+.relay-context-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+}
+
+.relay-context-row > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.relay-context-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.context-enabled-switch {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.context-switch-track {
+  display: block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  transition: background-color 140ms ease;
+}
+
+.context-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: hsl(var(--foreground));
+  transition: transform 140ms ease;
+}
+
+.context-enabled-switch.active .context-switch-track {
+  background: hsl(var(--primary));
+}
+
+.context-enabled-switch.active .context-switch-thumb {
+  transform: translateX(16px);
+  background: hsl(var(--primary-foreground));
+}
+
+.context-editor {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.context-editor-fields,
+.context-selection-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.context-editor-fields {
+  grid-template-columns: 180px minmax(0, 1fr);
+}
+
+.context-editor-textarea {
+  min-height: 180px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.context-selection-column {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.context-selection-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.relay-common-config {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid hsl(var(--border));
+  margin-top: 4px;
+  padding-top: 12px;
+}
+
+.feature-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.feature-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 82px;
+  padding: 12px;
+}
+
+.feature-toggle.disabled {
+  opacity: 0.56;
+}
+
+.feature-toggle input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+}
+
+.feature-toggle strong,
+.feature-toggle small {
+  display: block;
+}
+
+.feature-toggle small {
+  margin-top: 3px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.45;
 }
 
 .mode-grid {

@@ -23,6 +23,7 @@ import {
   Copy,
   Download,
   Edit3,
+  FileCode2,
   GripVertical,
   Image,
   Info,
@@ -203,11 +204,33 @@ type BackendSettings = {
   codexExtraArgs: string[];
   language: LanguageCode;
   providerSyncEnabled: boolean;
+  providerSyncSavedProviders: string[];
+  providerSyncManualProviders: string[];
+  providerSyncLastSelectedProvider: string;
+  relayProfilesEnabled: boolean;
+  ccsLinkEnabled: boolean;
   enhancementsEnabled: boolean;
+  codexAppPluginEntryUnlock: boolean;
+  codexAppPluginMarketplaceUnlock: boolean;
+  codexAppForcePluginInstall: boolean;
+  codexAppModelWhitelistUnlock: boolean;
+  codexAppSessionDelete: boolean;
+  codexAppMarkdownExport: boolean;
+  codexAppProjectMove: boolean;
+  codexAppConversationTimeline: boolean;
+  codexAppConversationView: boolean;
+  codexAppThreadScrollRestore: boolean;
+  codexAppZedRemoteOpen: boolean;
+  codexAppUpstreamWorktreeCreate: boolean;
+  codexAppNativeMenuPlacement: boolean;
+  codexAppServiceTierControls: boolean;
+  codexGoalsEnabled: boolean;
   launchMode: LaunchMode;
   relayBaseUrl: string;
   relayApiKey: string;
   relayProfiles: RelayProfile[];
+  relayCommonConfigContents: string;
+  relayContextConfigContents: string;
   activeRelayId: string;
   relayTestModel: string;
   cliWrapperEnabled: boolean;
@@ -220,8 +243,11 @@ type LaunchMode = "patch" | "relay";
 
 type RelayProfile = {
   id: string;
+  linkedCcsProviderId: string;
   name: string;
+  model: string;
   baseUrl: string;
+  upstreamBaseUrl: string;
   apiKey: string;
   imageGenerationEnabled: boolean;
   imageGenerationUseSeparateApi: boolean;
@@ -236,6 +262,37 @@ type RelayProfile = {
   testModel: string;
   configContents: string;
   authContents: string;
+  useCommonConfig: boolean;
+  contextSelection: RelayContextSelection;
+  contextSelectionInitialized: boolean;
+  contextWindow: string;
+  autoCompactLimit: string;
+  modelInsertMode: string;
+  modelList: string;
+  userAgent: string;
+};
+
+type RelayContextSelection = {
+  mcpServers: string[];
+  skills: string[];
+  plugins: string[];
+};
+
+type ContextKind = "mcp" | "skill" | "plugin";
+
+type CodexContextEntry = {
+  id: string;
+  kind: ContextKind;
+  title: string;
+  summary: string;
+  tomlBody: string;
+  enabled: boolean;
+};
+
+type CodexContextEntries = {
+  mcpServers: CodexContextEntry[];
+  skills: CodexContextEntry[];
+  plugins: CodexContextEntry[];
 };
 
 type RelayProtocol = "responses" | "chatCompletions";
@@ -246,6 +303,12 @@ const PROJECT_REPOSITORY_URL = "https://github.com/hereww/codextools";
 const PROJECT_RELEASES_URL = "https://github.com/hereww/codextools/releases/latest";
 const PROJECT_ISSUES_URL = "https://github.com/hereww/codextools/issues";
 const TELEGRAM_COMMUNITY_URL = "https://t.me/wanai8";
+
+const emptyContextSelection = (): RelayContextSelection => ({
+  mcpServers: [],
+  skills: [],
+  plugins: [],
+});
 
 type UserScriptInventory = {
   enabled?: boolean;
@@ -314,6 +377,26 @@ type RelayProfileTestResult = CommandResult<{
   httpStatus: number;
   endpoint: string;
   responsePreview: string;
+}>;
+
+type ContextEntriesResult = CommandResult<{
+  settings: BackendSettings;
+  entries: CodexContextEntries;
+}>;
+
+type LiveContextEntriesResult = CommandResult<{
+  entries: CodexContextEntries;
+}>;
+
+type ExtractRelayCommonConfigResult = CommandResult<{
+  commonConfigContents: string;
+  contextConfigContents: string;
+  profileConfigContents: string;
+}>;
+
+type RelayProfileModelsResult = CommandResult<{
+  models: string[];
+  endpoint: string;
 }>;
 
 type CcsProviderImport = {
@@ -476,13 +559,14 @@ function syncMarketInstalledState(current: ScriptMarketResult | null, userScript
   };
 }
 
-type Route = "overview" | "installGuide" | "relay" | "enhance" | "userScripts" | "providerSync" | "maintenance" | "settings" | "logs" | "diagnostics" | "about";
+type Route = "overview" | "installGuide" | "relay" | "context" | "enhance" | "userScripts" | "providerSync" | "maintenance" | "settings" | "logs" | "diagnostics" | "about";
 type Theme = "dark" | "light";
 
 const routes: Array<{ id: Route; label: string; helper: string; group: "main" | "support"; icon: LucideIcon }> = [
   { id: "overview", label: "首页", helper: "启动和检查", group: "main", icon: LayoutDashboard },
   { id: "installGuide", label: "新手引导", helper: "安装和配置", group: "main", icon: Sparkles },
   { id: "relay", label: "连接服务", helper: "账号和 API", group: "main", icon: KeyRound },
+  { id: "context", label: "工具与插件", helper: "MCP / Skills / Plugins", group: "main", icon: FileCode2 },
   { id: "enhance", label: "界面功能", helper: "删除、导出、脚本", group: "main", icon: Hammer },
   { id: "userScripts", label: "脚本中心", helper: "市场和本地脚本", group: "main", icon: ScrollText },
   { id: "maintenance", label: "修复工具", helper: "入口和路径", group: "main", icon: Wrench },
@@ -498,15 +582,38 @@ const defaultSettings: BackendSettings = {
   codexExtraArgs: [],
   language: defaultLanguage,
   providerSyncEnabled: false,
+  providerSyncSavedProviders: [],
+  providerSyncManualProviders: [],
+  providerSyncLastSelectedProvider: "",
+  relayProfilesEnabled: true,
+  ccsLinkEnabled: false,
   enhancementsEnabled: true,
+  codexAppPluginEntryUnlock: true,
+  codexAppPluginMarketplaceUnlock: true,
+  codexAppForcePluginInstall: true,
+  codexAppModelWhitelistUnlock: true,
+  codexAppSessionDelete: true,
+  codexAppMarkdownExport: true,
+  codexAppProjectMove: true,
+  codexAppConversationTimeline: true,
+  codexAppConversationView: false,
+  codexAppThreadScrollRestore: true,
+  codexAppZedRemoteOpen: true,
+  codexAppUpstreamWorktreeCreate: true,
+  codexAppNativeMenuPlacement: true,
+  codexAppServiceTierControls: false,
+  codexGoalsEnabled: false,
   launchMode: "patch",
   relayBaseUrl: "",
   relayApiKey: "",
   relayProfiles: [
     {
       id: "default",
+      linkedCcsProviderId: "",
       name: "默认中转",
+      model: "",
       baseUrl: "",
+      upstreamBaseUrl: "",
       apiKey: "",
       imageGenerationEnabled: false,
       imageGenerationUseSeparateApi: false,
@@ -521,8 +628,18 @@ const defaultSettings: BackendSettings = {
       testModel: "",
       configContents: "",
       authContents: "",
+      useCommonConfig: true,
+      contextSelection: emptyContextSelection(),
+      contextSelectionInitialized: true,
+      contextWindow: "",
+      autoCompactLimit: "",
+      modelInsertMode: "patch",
+      modelList: "",
+      userAgent: "",
     },
   ],
+  relayCommonConfigContents: "",
+  relayContextConfigContents: "",
   activeRelayId: "default",
   relayTestModel: "gpt-5-mini",
   cliWrapperEnabled: false,
@@ -544,6 +661,7 @@ export function App() {
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResult | null>(null);
   const [computerUse, setComputerUse] = useState<ComputerUseStatusResult | null>(null);
   const [skillMcpBackups, setSkillMcpBackups] = useState<SkillMCPBackupsResult | null>(null);
+  const [liveContextEntries, setLiveContextEntries] = useState<CodexContextEntries | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
@@ -694,6 +812,15 @@ export function App() {
     return result;
   };
 
+  const refreshLiveContextEntries = async (silent = false) => {
+    const result = await run(() => call<LiveContextEntriesResult>("read_live_context_entries"));
+    if (result) {
+      setLiveContextEntries(result.entries);
+      if (!silent || !isSuccessStatus(result.status)) showResultNotice("工具与插件", result, { silentSuccess: true });
+    }
+    return result;
+  };
+
   const refreshCcsProviders = async (silent = false) => {
     const result = await run(() => call<CcsProvidersResult>("load_ccs_providers"));
     if (result) {
@@ -819,6 +946,11 @@ export function App() {
       await refreshRelay(true);
       await refreshRelayFiles(true);
       await refreshCcsProviders(true);
+    }
+    if (next === "context") {
+      await refreshSettings(true);
+      await refreshRelayFiles(true);
+      await refreshLiveContextEntries(true);
     }
     if (next === "userScripts") {
       await refreshSettings(true);
@@ -1097,6 +1229,66 @@ export function App() {
     return result;
   };
 
+  const upsertContextEntry = async (next: BackendSettings, kind: ContextKind, id: string, tomlBody: string) => {
+    const result = await run(() =>
+      call<ContextEntriesResult>("upsert_context_entry", {
+        request: { settings: next, kind, id, tomlBody },
+      }),
+    );
+    if (!result) return null;
+    let normalized = normalizeSettings(result.settings);
+    const saveResult = await run(() => call<SettingsResult>("save_settings", { settings: normalized }));
+    if (saveResult) {
+      setSettings(saveResult);
+      normalized = normalizeSettings(saveResult.settings);
+    }
+    setSettingsForm(normalized);
+    if (!isSuccessStatus(result.status)) showResultNotice("工具与插件", result);
+    return normalized;
+  };
+
+  const deleteContextEntry = async (next: BackendSettings, kind: ContextKind, id: string) => {
+    const result = await run(() =>
+      call<ContextEntriesResult>("delete_context_entry", {
+        request: { settings: next, kind, id },
+      }),
+    );
+    if (!result) return null;
+    let normalized = normalizeSettings(result.settings);
+    const saveResult = await run(() => call<SettingsResult>("save_settings", { settings: normalized }));
+    if (saveResult) {
+      setSettings(saveResult);
+      normalized = normalizeSettings(saveResult.settings);
+    }
+    setSettingsForm(normalized);
+    if (!isSuccessStatus(result.status)) showResultNotice("工具与插件", result);
+    return normalized;
+  };
+
+  const syncLiveContextEntries = async (next: BackendSettings, silent = false) => {
+    const result = await run(() =>
+      call<LiveContextEntriesResult>("sync_live_context_entries", {
+        request: { settings: next },
+      }),
+    );
+    if (result) {
+      setLiveContextEntries(result.entries);
+      if (!silent || !isSuccessStatus(result.status)) showResultNotice("工具与插件同步", result, { silentSuccess: true });
+      await refreshRelayFiles(true);
+    }
+    return result;
+  };
+
+  const extractRelayCommonConfig = async (configContents: string) => {
+    const result = await run(() =>
+      call<ExtractRelayCommonConfigResult>("extract_relay_common_config", {
+        request: { configContents },
+      }),
+    );
+    if (result) showResultNotice("通用配置文件", result);
+    return result && isSuccessStatus(result.status) ? result : null;
+  };
+
   const importCurrentRelayFiles = async (profileId: string) => {
     const result = await run(() => call<SettingsResult>("import_current_relay_files", { request: { profileId } }));
     if (result) {
@@ -1158,6 +1350,12 @@ export function App() {
     if (result) showNotice("供应商测试", result.message, result.status);
   };
 
+  const fetchRelayProfileModels = async (profile: RelayProfile) => {
+    const result = await run(() => call<RelayProfileModelsResult>("fetch_relay_profile_models", { profile }));
+    if (result) showNotice("模型列表", result.message, result.status);
+    return result && isSuccessStatus(result.status) ? result.models : null;
+  };
+
   const switchOfficialMode = async () => {
     const switched = await clearRelayInjection(false);
     if (!switched) return;
@@ -1173,6 +1371,15 @@ export function App() {
   };
 
   const switchRelayProfile = async (next: BackendSettings) => {
+    if (!next.relayProfilesEnabled) {
+      const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: next }));
+      if (settingsResult) {
+        setSettings(settingsResult);
+        setSettingsForm(normalizeSettings(settingsResult.settings));
+        showNotice("供应商切换", "供应商配置切换已关闭：已保存设置，但没有写入当前 Codex 配置文件。", settingsResult.status);
+      }
+      return false;
+    }
     const nextWithSnapshot = await snapshotActiveRelayFilesBeforeSwitch(prepareRelaySettingsForSwitch(next));
     if (!nextWithSnapshot) return false;
 
@@ -1381,6 +1588,7 @@ export function App() {
       refreshSettings,
       refreshInstallGuideStatus,
       refreshRelayFiles,
+      refreshLiveContextEntries,
       refreshCcsProviders,
       importCcsProviders,
       refreshScriptMarket,
@@ -1392,6 +1600,10 @@ export function App() {
       applyPureApiInjection,
       clearRelayInjection,
       saveRelayFile,
+      upsertContextEntry,
+      deleteContextEntry,
+      syncLiveContextEntries,
+      extractRelayCommonConfig,
       importCurrentRelayFiles,
       bindOfficialAuth,
       activateOfficialAuth,
@@ -1399,6 +1611,7 @@ export function App() {
       clearCurrentOfficialAuth,
       showNotice,
       testRelayProfile,
+      fetchRelayProfileModels,
       switchRelayProfile,
       switchOfficialMode,
       switchPureApiMode,
@@ -1421,7 +1634,7 @@ export function App() {
       disableWatcher: () => watcherAction("disable_watcher"),
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
     }),
-    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups],
+    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries],
   );
 
   return (
@@ -1516,6 +1729,15 @@ export function App() {
               relayFiles={relayFiles}
               ccsProviders={ccsProviders}
               form={settingsForm}
+              onFormChange={setSettingsForm}
+              actions={actions}
+            />
+          ) : null}
+          {route === "context" ? (
+            <ContextScreen
+              form={settingsForm}
+              liveEntries={liveContextEntries}
+              relayFiles={relayFiles}
               onFormChange={setSettingsForm}
               actions={actions}
             />
@@ -1643,6 +1865,7 @@ type Actions = {
   refreshSettings: () => Promise<SettingsResult | null>;
   refreshInstallGuideStatus: () => Promise<InstallGuideStatusResult | null>;
   refreshRelayFiles: () => Promise<RelayFilesResult | null>;
+  refreshLiveContextEntries: () => Promise<LiveContextEntriesResult | null>;
   refreshCcsProviders: () => Promise<CcsProvidersResult | null>;
   importCcsProviders: () => Promise<void>;
   refreshScriptMarket: () => Promise<void>;
@@ -1656,6 +1879,15 @@ type Actions = {
   applyPureApiInjection: () => Promise<boolean>;
   clearRelayInjection: () => Promise<boolean>;
   saveRelayFile: (kind: "config" | "auth", contents: string, silent?: boolean) => Promise<RelayFilesResult | null>;
+  upsertContextEntry: (
+    settings: BackendSettings,
+    kind: ContextKind,
+    id: string,
+    tomlBody: string,
+  ) => Promise<BackendSettings | null>;
+  deleteContextEntry: (settings: BackendSettings, kind: ContextKind, id: string) => Promise<BackendSettings | null>;
+  syncLiveContextEntries: (settings: BackendSettings, silent?: boolean) => Promise<LiveContextEntriesResult | null>;
+  extractRelayCommonConfig: (configContents: string) => Promise<ExtractRelayCommonConfigResult | null>;
   importCurrentRelayFiles: (profileId: string) => Promise<SettingsResult | null>;
   bindOfficialAuth: (profileId: string) => Promise<SettingsResult | null>;
   activateOfficialAuth: (profileId: string) => Promise<RelayResult | null>;
@@ -1663,6 +1895,7 @@ type Actions = {
   clearCurrentOfficialAuth: () => Promise<RelayResult | null>;
   showNotice: (title: string, message: string, status?: Status) => void;
   testRelayProfile: (profile: RelayProfile) => Promise<void>;
+  fetchRelayProfileModels: (profile: RelayProfile) => Promise<string[] | null>;
   switchRelayProfile: (settings: BackendSettings) => Promise<boolean>;
   switchOfficialMode: () => Promise<void>;
   switchPureApiMode: () => Promise<void>;
@@ -2633,6 +2866,28 @@ function RelayScreen({
       <Panel>
         <CardHead title="供应商列表" detail={`${normalized.relayProfiles.length} 个供应商配置；可拖动排序，点编辑进入详情`} />
         <CardContent>
+          <label className="switch-row relay-master-switch">
+            <input
+              checked={normalized.relayProfilesEnabled}
+              onChange={(event) => saveRelaySettings({ ...normalized, relayProfilesEnabled: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>
+              <strong>启用供应商配置切换</strong>
+              <small>关闭后仍可保存配置，但不会从列表里切换写入当前 Codex 配置。</small>
+            </span>
+          </label>
+          <label className="switch-row relay-link-switch">
+            <input
+              checked={normalized.ccsLinkEnabled}
+              onChange={(event) => saveRelaySettings({ ...normalized, ccsLinkEnabled: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>
+              <strong>联动 CCSwitch</strong>
+              <small>开启后保留导入供应商的 CCSwitch 来源标记；当前 Go 版仍以本地配置保存为主。</small>
+            </span>
+          </label>
           <div className="relay-import-row">
             <div>
               <strong>CCSwitch 配置</strong>
@@ -2698,6 +2953,9 @@ function EnhanceScreen({
   onFormChange: (value: BackendSettings) => void;
   actions: Actions;
 }) {
+  const setEnhanceFlag = (key: keyof BackendSettings, value: boolean) => onFormChange({ ...form, [key]: value });
+  const masterEnabled = form.enhancementsEnabled;
+  const patchMode = form.launchMode === "patch";
   return (
     <>
       <Panel>
@@ -2718,14 +2976,24 @@ function EnhanceScreen({
           {form.launchMode === "relay" ? (
             <div className="hint-line">
               <ShieldCheck className="h-4 w-4" />
-              <span>当前为兼容增强模式：使用更保守的官方/混合登录路径，同时保留删除、导出、项目移动等页面能力。</span>
+              <span>当前为兼容增强模式：插件市场解锁、强制入口解锁和强制插件安装会保持关闭，其它页面功能仍可用。</span>
             </div>
           ) : null}
-          <div className="feature-list">
-            <FeatureItem title="会话删除" detail="在会话列表悬停显示删除按钮，并支持撤销。" enabled={form.enhancementsEnabled} />
-            <FeatureItem title="Markdown 导出" detail="按本地 rollout 导出带时间戳的 Markdown。" enabled={form.enhancementsEnabled} />
-            <FeatureItem title="项目移动" detail="把会话移动到普通对话或其他本地项目。" enabled={form.enhancementsEnabled} />
-            <FeatureItem title="Timeline" detail="在对话右侧显示用户提问时间线。" enabled={form.enhancementsEnabled} />
+          <div className="feature-switch-grid">
+            <FeatureToggle title="插件市场解锁" detail="API Key 模式下扩展插件市场请求，尽量显示完整插件列表。" checked={form.codexAppPluginMarketplaceUnlock} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginMarketplaceUnlock", value)} />
+            <FeatureToggle title="强制解锁入口" detail="强制显示并启用 Codex 插件入口。" checked={form.codexAppPluginEntryUnlock} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginEntryUnlock", value)} />
+            <FeatureToggle title="特殊插件强制安装" detail="解除 App unavailable / 应用不可用导致的前端安装禁用。" checked={form.codexAppForcePluginInstall} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppForcePluginInstall", value)} />
+            <FeatureToggle title="模型白名单解锁" detail="读取本地和上游模型目录，补进 Codex 模型选择列表。" checked={form.codexAppModelWhitelistUnlock} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppModelWhitelistUnlock", value)} />
+            <FeatureToggle title="Fast 按钮" detail="显示服务模式切换入口，控制 Standard / Fast / priority。" checked={form.codexAppServiceTierControls} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppServiceTierControls", value)} />
+            <FeatureToggle title="会话删除" detail="在会话列表悬停显示删除按钮，并支持撤销。" checked={form.codexAppSessionDelete} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppSessionDelete", value)} />
+            <FeatureToggle title="Markdown 导出" detail="导出带时间戳的 Markdown。" checked={form.codexAppMarkdownExport} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppMarkdownExport", value)} />
+            <FeatureToggle title="会话项目移动" detail="把会话移动到普通对话或其他本地项目。" checked={form.codexAppProjectMove} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppProjectMove", value)} />
+            <FeatureToggle title="对话 Timeline" detail="在对话右侧显示用户提问时间线。" checked={form.codexAppConversationTimeline} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppConversationTimeline", value)} />
+            <FeatureToggle title="对话居中宽度" detail="把主对话和输入框限制到固定最大宽度。" checked={form.codexAppConversationView} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppConversationView", value)} />
+            <FeatureToggle title="切换对话保留位置" detail="切换 thread 时恢复上一次浏览位置。" checked={form.codexAppThreadScrollRestore} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppThreadScrollRestore", value)} />
+            <FeatureToggle title="Zed Remote open" detail="远程 SSH 文件引用可直接用 Zed Remote Development 打开。" checked={form.codexAppZedRemoteOpen} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppZedRemoteOpen", value)} />
+            <FeatureToggle title="Upstream worktree" detail="从 upstream 分支创建 Git worktree。" checked={form.codexAppUpstreamWorktreeCreate} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppUpstreamWorktreeCreate", value)} />
+            <FeatureToggle title="原生菜单栏位置" detail="把 Codex++ 菜单插入 Codex 顶部原生菜单栏。" checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
           </div>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>保存增强设置</Button>
@@ -3624,7 +3892,7 @@ function RelayProfileDetail({
           保存
         </Button>
       </Toolbar>
-      <RelayProfileEditor profile={draft} form={form} isNew={isNew} onProfileChange={setDraft} onSwitch={switchDraft} />
+      <RelayProfileEditor profile={draft} form={form} isNew={isNew} onProfileChange={setDraft} onSwitch={switchDraft} actions={actions} />
       <OfficialAuthBindingPanel
         profile={draft}
         isNew={isNew}
@@ -3650,22 +3918,611 @@ function RelayProfileDetail({
   );
 }
 
+function ContextScreen({
+  form,
+  liveEntries,
+  relayFiles,
+  onFormChange,
+  actions,
+}: {
+  form: BackendSettings;
+  liveEntries: CodexContextEntries | null;
+  relayFiles: RelayFilesResult | null;
+  onFormChange: (value: BackendSettings) => void;
+  actions: Actions;
+}) {
+  const normalized = normalizeSettings(form);
+  return (
+    <Panel fill>
+      <CardHead title="Codex 工具与插件" detail="统一管理 Codex MCP、Skills、Plugins；供应商切换时会合并到 config.toml" />
+      <CardContent>
+        <RelayContextManager
+          form={normalized}
+          liveEntries={liveEntries}
+          relayFiles={relayFiles}
+          onFormChange={onFormChange}
+          actions={actions}
+        />
+      </CardContent>
+    </Panel>
+  );
+}
+
+function RelayContextManager({
+  form,
+  liveEntries,
+  relayFiles,
+  onFormChange,
+  actions,
+}: {
+  form: BackendSettings;
+  liveEntries: CodexContextEntries | null;
+  relayFiles: RelayFilesResult | null;
+  onFormChange: (value: BackendSettings) => void;
+  actions: Actions;
+}) {
+  const entries = contextEntriesWithLiveEntries(form, liveEntries);
+  const [activeKind, setActiveKind] = useState<ContextKind>("mcp");
+  const [editor, setEditor] = useState<{ kind: ContextKind; entry?: CodexContextEntry } | null>(null);
+  const visibleEntries = contextEntriesByKind(entries, activeKind);
+  const label = contextKindLabel(activeKind);
+
+  const saveEntry = async (kind: ContextKind, id: string, tomlBody: string) => {
+    const next = await actions.upsertContextEntry(form, kind, id, tomlBody);
+    if (!next) return;
+    onFormChange(next);
+    setEditor(null);
+  };
+
+  const toggleEntry = async (entry: CodexContextEntry) => {
+    const next = await actions.upsertContextEntry(form, entry.kind, entry.id, setContextEntryEnabled(entry.tomlBody, !entry.enabled));
+    if (!next) return;
+    onFormChange(next);
+    await actions.syncLiveContextEntries(next, true);
+  };
+
+  const deleteEntry = async (entry: CodexContextEntry) => {
+    if (!window.confirm(`删除 ${contextKindLabel(entry.kind)}「${entry.id}」？`)) return;
+    const next = await actions.deleteContextEntry(form, entry.kind, entry.id);
+    if (next) onFormChange(next);
+  };
+
+  return (
+    <div className="relay-context-panel">
+      <div className="relay-context-head">
+        <div>
+          <strong>全局 context 配置</strong>
+          <span>{relayFiles?.configPath ?? "读取当前 Codex config.toml 后可同步 live 状态。"}</span>
+        </div>
+        <Toolbar>
+          <Button onClick={() => void actions.refreshLiveContextEntries()} size="sm" variant="outline">
+            <RefreshCw className="h-4 w-4" />
+            读取 live
+          </Button>
+          <Button onClick={() => void actions.syncLiveContextEntries(form)} size="sm" variant="secondary">
+            <Save className="h-4 w-4" />
+            同步到 live
+          </Button>
+          <Button onClick={() => setEditor({ kind: activeKind })} size="sm">
+            <Plus className="h-4 w-4" />
+            新增{label}
+          </Button>
+        </Toolbar>
+      </div>
+      <div className="segmented">
+        {contextKindOptions.map((option) => (
+          <button
+            className={activeKind === option.kind ? "active" : ""}
+            key={option.kind}
+            onClick={() => setActiveKind(option.kind)}
+            type="button"
+          >
+            <span>{option.label}</span>
+            <small>{contextEntriesByKind(entries, option.kind).length}</small>
+          </button>
+        ))}
+      </div>
+      <div className="relay-context-summary">
+        当前共有 {visibleEntries.length} 个{label}；禁用会写入 `enabled = false`，删除会同时从各供应商选择中移除。
+      </div>
+      <div className="relay-context-list">
+        {visibleEntries.length ? (
+          visibleEntries.map((entry) => (
+            <div className="relay-context-row" key={`${entry.kind}-${entry.id}`}>
+              <div>
+                <strong>{entry.title || entry.id}</strong>
+                <span>{entry.summary || "无摘要"}</span>
+              </div>
+              <div className="relay-context-actions">
+                <button
+                  aria-checked={entry.enabled}
+                  className={`context-enabled-switch ${entry.enabled ? "active" : ""}`}
+                  onClick={() => void toggleEntry(entry)}
+                  role="switch"
+                  title={entry.enabled ? "禁用" : "启用"}
+                  type="button"
+                >
+                  <span className="context-switch-track" aria-hidden="true">
+                    <span className="context-switch-thumb" />
+                  </span>
+                </button>
+                <Button onClick={() => setEditor({ kind: entry.kind, entry })} size="icon" title="编辑" variant="ghost">
+                  <Edit3 className="h-4 w-4" />
+                </Button>
+                <Button onClick={() => void deleteEntry(entry)} size="icon" title="删除" variant="ghost">
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="empty">暂无{label}，可以新增或先从 live config 读取。</div>
+        )}
+      </div>
+      <div className="relay-common-config">
+        <Field label="通用配置（非 MCP/Skills/Plugins 表）">
+          <Textarea
+            className="relay-file-textarea compact"
+            value={form.relayCommonConfigContents}
+            onChange={(event) => onFormChange({ ...form, relayCommonConfigContents: event.currentTarget.value })}
+            placeholder={'例如：\nmodel_reasoning_effort = "medium"'}
+            spellCheck={false}
+          />
+        </Field>
+        <Toolbar>
+          <Button onClick={() => void actions.saveSettingsValue(form, false)} size="sm" variant="secondary">
+            保存通用配置
+          </Button>
+          <Button
+            disabled={!relayFiles?.configContents}
+            onClick={async () => {
+              const extracted = await actions.extractRelayCommonConfig(relayFiles?.configContents ?? "");
+              if (!extracted) return;
+              onFormChange({
+                ...form,
+                relayCommonConfigContents: extracted.commonConfigContents,
+                relayContextConfigContents: joinTomlSectionsRootFirst([
+                  form.relayContextConfigContents,
+                  extracted.contextConfigContents,
+                ]),
+              });
+            }}
+            size="sm"
+            variant="outline"
+          >
+            从当前 config 提取
+          </Button>
+        </Toolbar>
+      </div>
+      {editor ? (
+        <ContextEntryEditor
+          entry={editor.entry}
+          kind={editor.kind}
+          onCancel={() => setEditor(null)}
+          onSave={(kind, id, tomlBody) => void saveEntry(kind, id, tomlBody)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ContextEntryEditor({
+  kind,
+  entry,
+  onCancel,
+  onSave,
+}: {
+  kind: ContextKind;
+  entry?: CodexContextEntry;
+  onCancel: () => void;
+  onSave: (kind: ContextKind, id: string, tomlBody: string) => void;
+}) {
+  const [draftKind, setDraftKind] = useState<ContextKind>(entry?.kind ?? kind);
+  const [id, setId] = useState(entry?.id ?? "");
+  const [tomlBody, setTomlBody] = useState(entry?.tomlBody ?? "");
+  const canSave = id.trim().length > 0;
+
+  return (
+    <div className="context-editor">
+      <div className="context-editor-fields">
+        <Field label="类型">
+          <select
+            className="field-select"
+            disabled={!!entry}
+            value={draftKind}
+            onChange={(event) => setDraftKind(event.currentTarget.value as ContextKind)}
+          >
+            {contextKindOptions.map((option) => (
+              <option key={option.kind} value={option.kind}>{option.label}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="ID">
+          <Input
+            disabled={!!entry}
+            value={id}
+            onChange={(event) => setId(event.currentTarget.value.trim())}
+            placeholder="例如 context7"
+          />
+        </Field>
+      </div>
+      <Field label="TOML 配置体">
+        <Textarea
+          className="context-editor-textarea"
+          value={tomlBody}
+          onChange={(event) => setTomlBody(event.currentTarget.value)}
+          placeholder={'只填写表头下面的内容，例如：\ncommand = "npx"\nargs = ["-y", "@upstash/context7-mcp"]'}
+          spellCheck={false}
+        />
+      </Field>
+      <Toolbar>
+        <Button disabled={!canSave} onClick={() => onSave(draftKind, id.trim(), tomlBody)} size="sm">
+          <Save className="h-4 w-4" />
+          保存
+        </Button>
+        <Button onClick={onCancel} size="sm" variant="secondary">取消</Button>
+      </Toolbar>
+    </div>
+  );
+}
+
+function RelayContextSelectionEditor({
+  profile,
+  form,
+  onChange,
+  onUseCommonConfigChange,
+}: {
+  profile: RelayProfile;
+  form: BackendSettings;
+  onChange: (selection: RelayContextSelection) => void;
+  onUseCommonConfigChange: (enabled: boolean) => void;
+}) {
+  const entries = contextEntriesFromSettings(form);
+  const hasEntries = contextKindOptions.some((option) => contextEntriesByKind(entries, option.kind).length > 0);
+  return (
+    <div className="relay-context-selection">
+      <label className="switch-row compact-switch">
+        <input
+          checked={profile.useCommonConfig}
+          onChange={(event) => onUseCommonConfigChange(event.currentTarget.checked)}
+          type="checkbox"
+        />
+        <span>
+          <strong>合并通用配置和工具插件</strong>
+          <small>关闭后此供应商只写入自己的 config.toml 快照。</small>
+        </span>
+      </label>
+      {profile.useCommonConfig && hasEntries ? (
+        <div className="context-selection-grid">
+          {contextKindOptions.map((option) => {
+            const items = contextEntriesByKind(entries, option.kind);
+            if (!items.length) return null;
+            return (
+              <div className="context-selection-column" key={option.kind}>
+                <strong>{option.label}</strong>
+                {items.map((entry) => {
+                  const checked = contextSelectionIds(profile.contextSelection, option.kind).includes(entry.id);
+                  return (
+                    <label className="context-selection-item" key={entry.id}>
+                      <input
+                        checked={checked}
+                        onChange={(event) => onChange(setContextSelectionId(profile.contextSelection, option.kind, entry.id, event.currentTarget.checked))}
+                        type="checkbox"
+                      />
+                      <span>{entry.id}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const contextKindOptions: Array<{ kind: ContextKind; label: string; tableName: string }> = [
+  { kind: "mcp", label: "MCP", tableName: "mcp_servers" },
+  { kind: "skill", label: "Skill", tableName: "skills" },
+  { kind: "plugin", label: "Plugin", tableName: "plugins" },
+];
+
+function contextKindLabel(kind: ContextKind) {
+  return contextKindOptions.find((option) => option.kind === kind)?.label ?? "扩展项";
+}
+
+function contextEntriesFromSettings(settings: BackendSettings): CodexContextEntries {
+  const config = normalizeDuplicateTomlTables(settings.relayContextConfigContents || "");
+  return {
+    mcpServers: parseContextEntries(config, "mcp", "mcp_servers"),
+    skills: parseContextEntries(config, "skill", "skills"),
+    plugins: parseContextEntries(config, "plugin", "plugins"),
+  };
+}
+
+function contextEntriesWithLiveEntries(settings: BackendSettings, liveEntries: CodexContextEntries | null): CodexContextEntries {
+  const commonEntries = contextEntriesFromSettings(settings);
+  if (!liveEntries) return commonEntries;
+  const liveByKind: Record<ContextKind, Map<string, CodexContextEntry>> = {
+    mcp: new Map(liveEntries.mcpServers.map((entry) => [entry.id, entry])),
+    skill: new Map(liveEntries.skills.map((entry) => [entry.id, entry])),
+    plugin: new Map(liveEntries.plugins.map((entry) => [entry.id, entry])),
+  };
+  return {
+    mcpServers: mergeLiveContextEntries(commonEntries.mcpServers, liveByKind.mcp),
+    skills: mergeLiveContextEntries(commonEntries.skills, liveByKind.skill),
+    plugins: mergeLiveContextEntries(commonEntries.plugins, liveByKind.plugin),
+  };
+}
+
+function mergeLiveContextEntries(entries: CodexContextEntry[], liveEntries: Map<string, CodexContextEntry>): CodexContextEntry[] {
+  const uniqueEntries = dedupeContextEntryList(entries);
+  const merged = uniqueEntries.map((entry) => {
+    const live = liveEntries.get(entry.id);
+    return live ? { ...entry, enabled: live.enabled } : entry;
+  });
+  const knownIds = new Set(uniqueEntries.map((entry) => entry.id));
+  for (const liveEntry of liveEntries.values()) {
+    if (!knownIds.has(liveEntry.id)) merged.push(liveEntry);
+  }
+  return merged;
+}
+
+function contextEntriesByKind(entries: CodexContextEntries, kind: ContextKind): CodexContextEntry[] {
+  if (kind === "mcp") return dedupeContextEntryList(entries.mcpServers);
+  if (kind === "skill") return dedupeContextEntryList(entries.skills);
+  return dedupeContextEntryList(entries.plugins);
+}
+
+function parseContextEntries(config: string, kind: ContextKind, tableName: string): CodexContextEntry[] {
+  const entries = new Map<string, CodexContextEntry>();
+  let currentId = "";
+  let body: string[] = [];
+  const flush = () => {
+    if (!currentId) return;
+    const tomlBody = normalizeConfigText(body.join("\n"));
+    entries.set(currentId, {
+      id: currentId,
+      kind,
+      title: currentId,
+      summary: contextEntrySummary(tomlBody),
+      tomlBody,
+      enabled: contextEntryEnabled(tomlBody),
+    });
+  };
+  for (const line of config.split(/\r?\n/)) {
+    const path = tomlTablePathFromLine(line);
+    if (path?.[0] === tableName && path.length >= 2) {
+      if (currentId && currentId === path[1] && path.length > 2) {
+        body.push(`[${path.slice(2).map(tomlKey).join(".")}]`);
+        continue;
+      }
+      flush();
+      currentId = path[1];
+      body = [];
+      continue;
+    }
+    if (currentId && /^\s*\[[^\]]+\]\s*$/.test(line)) {
+      flush();
+      currentId = "";
+      body = [];
+      continue;
+    }
+    if (currentId) body.push(line);
+  }
+  flush();
+  return Array.from(entries.values()).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function tomlTablePathFromLine(line: string): string[] | null {
+  const match = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+  if (!match) return null;
+  return parseTomlDottedPath(match[1].trim());
+}
+
+function parseTomlDottedPath(path: string): string[] | null {
+  const parts: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  for (const char of path) {
+    if (quote) {
+      if (quote === '"' && escaping) {
+        current += char;
+        escaping = false;
+      } else if (quote === '"' && char === "\\") {
+        escaping = true;
+      } else if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ".") {
+      if (!current.trim()) return null;
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (quote || escaping || !current.trim()) return null;
+  parts.push(current.trim());
+  return parts;
+}
+
+function contextEntrySummary(tomlBody: string) {
+  return tomlBody
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#") && !/^enabled\s*=/.test(line))
+    ?.slice(0, 96) ?? "";
+}
+
+function contextEntryEnabled(tomlBody: string) {
+  return !tomlBody.split(/\r?\n/).some((line) => /^\s*enabled\s*=\s*false\s*(#.*)?$/i.test(line));
+}
+
+function setContextEntryEnabled(tomlBody: string, enabled: boolean) {
+  const lines = tomlBody.trimEnd().split(/\r?\n/);
+  const nextValue = `enabled = ${enabled ? "true" : "false"}`;
+  let replaced = false;
+  const next = lines.map((line) => {
+    if (/^\s*enabled\s*=/.test(line)) {
+      replaced = true;
+      return nextValue;
+    }
+    return line;
+  });
+  if (!replaced) next.unshift(nextValue);
+  return normalizeConfigText(next.join("\n"));
+}
+
+function dedupeContextEntryList(entries: CodexContextEntry[]): CodexContextEntry[] {
+  const byId = new Map<string, CodexContextEntry>();
+  for (const entry of entries) byId.set(entry.id, entry);
+  return Array.from(byId.values());
+}
+
+function normalizeContextSelection(selection?: Partial<RelayContextSelection>): RelayContextSelection {
+  return {
+    mcpServers: uniqueStringList(selection?.mcpServers),
+    skills: uniqueStringList(selection?.skills),
+    plugins: uniqueStringList(selection?.plugins),
+  };
+}
+
+function contextSelectionForAllEntries(settings: BackendSettings): RelayContextSelection {
+  const entries = contextEntriesFromSettings(settings);
+  return {
+    mcpServers: entries.mcpServers.map((entry) => entry.id),
+    skills: entries.skills.map((entry) => entry.id),
+    plugins: entries.plugins.map((entry) => entry.id),
+  };
+}
+
+function contextSelectionIds(selection: RelayContextSelection, kind: ContextKind): string[] {
+  if (kind === "mcp") return selection.mcpServers;
+  if (kind === "skill") return selection.skills;
+  return selection.plugins;
+}
+
+function setContextSelectionId(selection: RelayContextSelection, kind: ContextKind, id: string, checked: boolean): RelayContextSelection {
+  const next = {
+    mcpServers: [...selection.mcpServers],
+    skills: [...selection.skills],
+    plugins: [...selection.plugins],
+  };
+  const list = contextSelectionIds(next, kind);
+  const normalizedId = id.trim();
+  const exists = list.includes(normalizedId);
+  if (checked && normalizedId && !exists) list.push(normalizedId);
+  if (!checked && exists) list.splice(list.indexOf(normalizedId), 1);
+  return next;
+}
+
+function uniqueStringList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.map(String).map((value) => value.trim()).filter(Boolean)));
+}
+
+function normalizeConfigText(config: string) {
+  const trimmed = config.replace(/\r\n/g, "\n").trim();
+  return trimmed ? `${trimmed}\n` : "";
+}
+
+function joinTomlSectionsRootFirst(sections: string[]): string {
+  const rootParts: string[] = [];
+  const tableParts: string[] = [];
+  for (const section of sections) {
+    const { root, tables } = splitTomlRootAndTables(section);
+    if (root.trim()) rootParts.push(root.trim());
+    if (tables.trim()) tableParts.push(tables.trim());
+  }
+  return normalizeDuplicateTomlTables(joinTomlSections([...dedupeTomlRootLines(rootParts), ...tableParts]));
+}
+
+function joinTomlSections(sections: string[]): string {
+  return normalizeConfigText(sections.map((section) => section.trim()).filter(Boolean).join("\n\n"));
+}
+
+function normalizeDuplicateTomlTables(contents: string): string {
+  const seenHeaders = new Set<string>();
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of contents.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^\[[^\]]+\]$/.test(trimmed)) {
+      skipping = seenHeaders.has(trimmed);
+      seenHeaders.add(trimmed);
+      if (skipping) continue;
+    }
+    if (!skipping) kept.push(line);
+  }
+  return normalizeConfigText(kept.join("\n"));
+}
+
+function dedupeTomlRootLines(rootParts: string[]): string[] {
+  const rootSeen = new Set<string>();
+  const kept: string[] = [];
+  const lines = rootParts.join("\n").split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    const key = tomlRootKeyFromLine(line.trim());
+    if (key) {
+      if (rootSeen.has(key)) continue;
+      rootSeen.add(key);
+    }
+    kept.push(line);
+  }
+  const normalized = kept.reverse().join("\n").trim();
+  return normalized ? [normalized] : [];
+}
+
+function splitTomlRootAndTables(section: string): { root: string; tables: string } {
+  const lines = section.trim().split(/\r?\n/);
+  const firstTable = lines.findIndex((line) => /^\s*\[[^\]]+\]\s*$/.test(line));
+  if (firstTable < 0) return { root: lines.join("\n"), tables: "" };
+  return { root: lines.slice(0, firstTable).join("\n"), tables: lines.slice(firstTable).join("\n") };
+}
+
+function tomlRootKeyFromLine(line: string): string | null {
+  if (!line || line.startsWith("#")) return null;
+  const index = line.indexOf("=");
+  if (index < 0) return null;
+  return line.slice(0, index).trim() || null;
+}
+
+function tomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${tomlString(key)}"`;
+}
+
 function RelayProfileEditor({
   profile,
   form,
   isNew = false,
   onProfileChange,
   onSwitch,
+  actions,
 }: {
   profile: RelayProfile;
   form: BackendSettings;
   isNew?: boolean;
   onProfileChange: (value: RelayProfile) => void;
   onSwitch: () => void;
+  actions: Actions;
 }) {
   const showApiFields = profile.relayMode !== "official";
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const updateDraft = (patch: Partial<RelayProfile>) => {
     const shouldRegenerateFiles = [
+      "model",
       "baseUrl",
       "apiKey",
       "protocol",
@@ -3675,6 +4532,8 @@ function RelayProfileEditor({
       "imageGenerationUseSeparateApi",
       "imageGenerationBaseUrl",
       "imageGenerationApiKey",
+      "contextWindow",
+      "autoCompactLimit",
     ].some((key) => key in patch);
     const updated = { ...profile, ...patch };
     onProfileChange(shouldRegenerateFiles ? withGeneratedRelayFiles(updated) : updated);
@@ -3719,6 +4578,23 @@ function RelayProfileEditor({
             <option value="pureApi">中转 API</option>
           </select>
         </Field>
+        <Field className="relay-field-config-model" label="配置模型">
+          <Input
+            value={profile.model}
+            onChange={(event) => updateDraft({ model: event.currentTarget.value })}
+            placeholder="写入 config.toml 的 model，例如 gpt-5"
+          />
+        </Field>
+        <Field className="relay-field-model-insert" label="模型写入方式">
+          <select
+            className="field-select"
+            value={profile.modelInsertMode || "patch"}
+            onChange={(event) => updateDraft({ modelInsertMode: event.currentTarget.value })}
+          >
+            <option value="patch">补丁合并</option>
+            <option value="replace">替换列表</option>
+          </select>
+        </Field>
         <Field className="relay-field-test-model" label="测试模型">
           <Input
             value={profile.testModel}
@@ -3726,6 +4602,45 @@ function RelayProfileEditor({
             placeholder={`留空使用默认：${form.relayTestModel || defaultSettings.relayTestModel}`}
           />
         </Field>
+        <div className="relay-advanced-toggle">
+          <Button
+            aria-expanded={showAdvanced}
+            onClick={() => setShowAdvanced((current) => !current)}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <Settings className="h-4 w-4" />
+            更多选项
+          </Button>
+        </div>
+        {showAdvanced ? (
+          <div className="relay-advanced-fields">
+            <Field label="上下文窗口">
+              <Input
+                inputMode="numeric"
+                value={profile.contextWindow}
+                onChange={(event) => updateDraft({ contextWindow: event.currentTarget.value.replace(/[^\d]/g, "") })}
+                placeholder="留空不改写，例如 200000"
+              />
+            </Field>
+            <Field label="自动压缩限制">
+              <Input
+                inputMode="numeric"
+                value={profile.autoCompactLimit}
+                onChange={(event) => updateDraft({ autoCompactLimit: event.currentTarget.value.replace(/[^\d]/g, "") })}
+                placeholder="留空不改写，例如 160000"
+              />
+            </Field>
+            <Field label="User-Agent">
+              <Input
+                value={profile.userAgent}
+                onChange={(event) => updateDraft({ userAgent: event.currentTarget.value })}
+                placeholder="留空使用默认值"
+              />
+            </Field>
+          </div>
+        ) : null}
         {showApiFields ? (
           <>
             <Field className="relay-field-base-url" label="Base URL">
@@ -3764,6 +4679,32 @@ function RelayProfileEditor({
           </>
         ) : null}
       </div>
+      {showApiFields ? (
+        <div className="relay-model-list-tools">
+          <Field label="模型列表">
+            <Textarea
+              className="relay-model-list-textarea"
+              value={profile.modelList}
+              onChange={(event) => updateDraft({ modelList: event.currentTarget.value })}
+              placeholder="每行一个模型，例如 gpt-5-mini"
+              spellCheck={false}
+            />
+          </Field>
+          <Button
+            onClick={async () => {
+              const models = await actions.fetchRelayProfileModels(profile);
+              if (models?.length) updateDraft({ modelList: models.join("\n") });
+            }}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <Download className="h-4 w-4" />
+            从上游获取
+          </Button>
+        </div>
+      ) : null}
+      <RelayContextSelectionEditor profile={profile} form={form} onChange={(contextSelection) => updateDraft({ contextSelection })} onUseCommonConfigChange={(useCommonConfig) => updateDraft({ useCommonConfig })} />
       {showApiFields ? (
         <div className="image-relay-settings">
           <label className="switch-row compact-switch">
@@ -3992,6 +4933,35 @@ function FeatureItem({ title, detail, enabled }: { title: string; detail: string
   );
 }
 
+function FeatureToggle({
+  title,
+  detail,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  title: string;
+  detail: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className={`feature-toggle ${disabled ? "disabled" : ""}`}>
+      <input
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.currentTarget.checked)}
+        type="checkbox"
+      />
+      <span>
+        <strong>{title}</strong>
+        <small>{detail}</small>
+      </span>
+    </label>
+  );
+}
+
 function GuideList({ items }: { items: string[] }) {
   return (
     <div className="guide-list">
@@ -4140,6 +5110,7 @@ function routeSubtitle(route: Route) {
     overview: "启动、连接和修复都从这里开始",
     installGuide: "按新手流程完成安装、导入和模式配置",
     relay: "选择官方登录或 API 服务，不必手动找配置文件",
+    context: "统一管理 Codex MCP、Skills 和 Plugins 配置",
     enhance: "打开会话删除、导出、项目移动和脚本能力",
     userScripts: "管理脚本市场、本地脚本和启停状态",
     providerSync: "切换模式后，让旧对话重新出现在列表里",
@@ -4274,14 +5245,24 @@ function pathStateOrDefault(state: PathState | null | undefined): PathState {
 }
 
 function normalizeSettings(settings: BackendSettings): BackendSettings {
+  const relayCommonConfigContents = normalizeConfigText(settings.relayCommonConfigContents || "");
+  const relayContextConfigContents = normalizeConfigText(settings.relayContextConfigContents || "");
+  const defaultContextSelection = contextSelectionForAllEntries({
+    ...settings,
+    relayCommonConfigContents,
+    relayContextConfigContents,
+  });
   const profiles =
     settings.relayProfiles?.length
-      ? settings.relayProfiles.map(normalizeRelayProfile)
+      ? settings.relayProfiles.map((profile, index) => normalizeRelayProfile(profile, index, defaultContextSelection))
       : [
           {
             id: settings.activeRelayId || "default",
+            linkedCcsProviderId: "",
             name: "默认中转",
+            model: "",
             baseUrl: settings.relayBaseUrl || defaultSettings.relayBaseUrl,
+            upstreamBaseUrl: settings.relayBaseUrl || defaultSettings.relayBaseUrl,
             apiKey: settings.relayApiKey || "",
             imageGenerationEnabled: false,
             imageGenerationUseSeparateApi: false,
@@ -4296,6 +5277,14 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
             testModel: "",
             configContents: "",
             authContents: "",
+            useCommonConfig: true,
+            contextSelection: defaultContextSelection,
+            contextSelectionInitialized: true,
+            contextWindow: "",
+            autoCompactLimit: "",
+            modelInsertMode: "patch",
+            modelList: "",
+            userAgent: "",
           },
         ];
   const activeRelayId = profiles.some((profile) => profile.id === settings.activeRelayId)
@@ -4304,7 +5293,14 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
   return syncLegacyRelayFields({
     ...defaultSettings,
     ...settings,
+    providerSyncSavedProviders: settings.providerSyncSavedProviders ?? [],
+    providerSyncManualProviders: settings.providerSyncManualProviders ?? [],
+    providerSyncLastSelectedProvider: settings.providerSyncLastSelectedProvider || "",
+    relayProfilesEnabled: settings.relayProfilesEnabled !== false,
+    ccsLinkEnabled: settings.ccsLinkEnabled === true,
     language: normalizeLanguage(settings.language),
+    relayCommonConfigContents,
+    relayContextConfigContents,
     relayProfiles: profiles,
     activeRelayId,
   });
@@ -4318,7 +5314,7 @@ function inputToCodexExtraArgs(value: string) {
   return value === "" ? [] : value.split(/\r?\n/);
 }
 
-function normalizeRelayProfile(profile: RelayProfile, index = 0): RelayProfile {
+function normalizeRelayProfile(profile: RelayProfile, index = 0, defaultContextSelection = emptyContextSelection()): RelayProfile {
   const relayMode =
     profile.relayMode === "pureApi"
       ? "pureApi"
@@ -4329,8 +5325,11 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0): RelayProfile {
     ...defaultSettings.relayProfiles[0],
     ...profile,
     id: profile.id || `relay-${index + 1}`,
+    linkedCcsProviderId: profile.linkedCcsProviderId || "",
     name: profile.name || "",
+    model: profile.model || "",
     baseUrl: profile.baseUrl || "",
+    upstreamBaseUrl: profile.upstreamBaseUrl || profile.baseUrl || "",
     apiKey: profile.apiKey || "",
     imageGenerationEnabled: Boolean(profile.imageGenerationEnabled),
     imageGenerationUseSeparateApi: Boolean(profile.imageGenerationUseSeparateApi),
@@ -4345,6 +5344,16 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0): RelayProfile {
     testModel: profile.testModel || "",
     configContents: profile.configContents || "",
     authContents: profile.authContents || "",
+    useCommonConfig: profile.useCommonConfig !== false,
+    contextSelection: profile.contextSelectionInitialized
+      ? normalizeContextSelection(profile.contextSelection)
+      : normalizeContextSelection(defaultContextSelection),
+    contextSelectionInitialized: true,
+    contextWindow: profile.contextWindow || "",
+    autoCompactLimit: profile.autoCompactLimit || "",
+    modelInsertMode: profile.modelInsertMode || "patch",
+    modelList: profile.modelList || "",
+    userAgent: profile.userAgent || "",
   };
   if (!normalized.configContents.trim()) {
     return withGeneratedRelayFiles(normalized);
@@ -4555,12 +5564,15 @@ function withGeneratedRelayFiles(profile: RelayProfile): RelayProfile {
 function buildRelayConfigToml(
   profile: Pick<
     RelayProfile,
+    | "model"
     | "baseUrl"
     | "apiKey"
     | "protocol"
     | "imageGenerationEnabled"
     | "imageGenerationUseSeparateApi"
     | "imageGenerationBaseUrl"
+    | "contextWindow"
+    | "autoCompactLimit"
   >,
 ): string {
   const usesImageProxy =
@@ -4573,6 +5585,9 @@ function buildRelayConfigToml(
       : profile.baseUrl.trim();
   const apiKey = profile.apiKey.trim();
   const lines = [
+    profile.model.trim() ? `model = "${tomlString(profile.model.trim())}"` : "",
+    profile.contextWindow.trim() ? `model_context_window = ${profile.contextWindow.trim()}` : "",
+    profile.autoCompactLimit.trim() ? `model_auto_compact_token_limit = ${profile.autoCompactLimit.trim()}` : "",
     'model_provider = "CodexPlusPlus"',
     "",
     "[model_providers.CodexPlusPlus]",
@@ -4580,7 +5595,7 @@ function buildRelayConfigToml(
     'wire_api = "responses"',
     "requires_openai_auth = true",
     `base_url = "${tomlString(baseUrl)}"`,
-  ];
+  ].filter(Boolean);
   if (profile.protocol === "responses" && !profile.imageGenerationEnabled) {
     lines.push('disabled_tools = ["image_generation"]');
   }
@@ -4666,10 +5681,14 @@ function updateRelayProfile(settings: BackendSettings, id: string, patch: Partia
 
 function createRelayProfile(settings: BackendSettings): RelayProfile {
   const id = `relay-${Date.now().toString(36)}`;
+  const contextSelection = contextSelectionForAllEntries(settings);
   const next = {
     id,
+    linkedCcsProviderId: "",
     name: `供应商 ${settings.relayProfiles.length + 1}`,
+    model: "",
     baseUrl: defaultSettings.relayBaseUrl,
+    upstreamBaseUrl: defaultSettings.relayBaseUrl,
     apiKey: "",
     imageGenerationEnabled: false,
     imageGenerationUseSeparateApi: false,
@@ -4684,6 +5703,14 @@ function createRelayProfile(settings: BackendSettings): RelayProfile {
     testModel: "",
     configContents: "",
     authContents: "",
+    useCommonConfig: true,
+    contextSelection,
+    contextSelectionInitialized: true,
+    contextWindow: "",
+    autoCompactLimit: "",
+    modelInsertMode: "patch",
+    modelList: "",
+    userAgent: "",
   };
   return deriveOfficialAuthFields(withGeneratedRelayFiles(next));
 }
