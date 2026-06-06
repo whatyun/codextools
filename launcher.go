@@ -56,6 +56,20 @@ func runLauncher(args []string) error {
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
 	}
+	instanceLock, acquired, err := acquireLauncherSingleInstanceLock(debugPort)
+	if err != nil {
+		writeLaunchFailureStatus("启动 Codex++ 单实例锁失败："+err.Error(), debugPort, helperPort, &appPath)
+		appendDiagnosticLog("launcher.guard_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
+		return err
+	}
+	if !acquired {
+		appendDiagnosticLog("launcher.already_running", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
+		return nil
+	}
+	defer instanceLock.release()
+	if fallbackLockPath := instanceLock.fallbackPath(); fallbackLockPath != "" {
+		appendDiagnosticLog("launcher.guard_fallback", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "requested_guard_port": launcherGuardPort, "fallback_lock_path": fallbackLockPath})
+	}
 	if runtime.GOOS == "windows" && options.restart && cdpTargetsAvailable(debugPort, 800*time.Millisecond) {
 		appendDiagnosticLog("launcher.restart_running_codex", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
 		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
@@ -70,7 +84,7 @@ func runLauncher(args []string) error {
 			waitForTCPPortFree(localRelayProxyPort, 5*time.Second)
 		}
 	}
-	runtimeState := &launcherRuntime{settings: settings, debugPort: debugPort}
+	runtimeState := &launcherRuntime{settings: settings, debugPort: debugPort, codexAppPath: appPath}
 	if shouldQuitRunningCodexBeforeLaunch(appPath, debugPort, options.restart) {
 		appendDiagnosticLog("launcher.quit_existing_codex", map[string]any{"codex_app": appPath, "debug_port": debugPort, "restart": options.restart})
 		if err := quitMacOSApp(appPath); err != nil {

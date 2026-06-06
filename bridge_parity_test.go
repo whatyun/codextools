@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -168,4 +171,123 @@ func TestBridgeParityRoutesExistAndAdsStayAbsent(t *testing.T) {
 	if stringFromAny(ads["message"]) != "Unknown bridge path" {
 		t.Fatalf("/ads should remain unimplemented, got %#v", ads)
 	}
+}
+
+func TestBridgeSettingsIncludesRuntimeCodexAppVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	runtime := &launcherRuntime{codexAppPath: filepath.Join("C:", "Program Files", "WindowsApps", "OpenAI.Codex_26.601.2237.0_x64__2p2nqsd0c76g0", "app")}
+
+	result := runtime.handleBridgeRequest("/settings/get", json.RawMessage(`{}`))
+
+	if got := stringFromAny(result["codexAppVersion"]); got != "26.601.2237.0" {
+		t.Fatalf("bridge settings should expose runtime Codex app version, got %#v from %#v", got, result)
+	}
+}
+
+func TestResilientLoopbackGuardHoldsLockAndListener(t *testing.T) {
+	port := freeLoopbackPort(t)
+	guard, err := acquireResilientLoopbackPortGuardAt(port, t.TempDir())
+	if err != nil {
+		t.Fatalf("guard acquisition failed: %v", err)
+	}
+	defer guard.release()
+
+	if guard.listener == nil {
+		t.Fatal("guard should hold loopback listener when port is available")
+	}
+	if guard.fallbackPath() != "" {
+		t.Fatalf("available port should not use fallback lock: %s", guard.fallbackPath())
+	}
+}
+
+func TestResilientLoopbackGuardReportsLockConflict(t *testing.T) {
+	port := freeLoopbackPort(t)
+	root := t.TempDir()
+	guard, err := acquireResilientLoopbackPortGuardAt(port, root)
+	if err != nil {
+		t.Fatalf("first guard acquisition failed: %v", err)
+	}
+	defer guard.release()
+
+	second, err := acquireResilientLoopbackPortGuardAt(port, root)
+	if err == nil {
+		if second != nil {
+			second.release()
+		}
+		t.Fatal("second guard acquisition should fail while lock is held")
+	}
+	if !isLoopbackGuardBusyError(err) {
+		t.Fatalf("expected lock busy error, got %T %v", err, err)
+	}
+}
+
+func TestResilientLoopbackGuardReportsConnectablePortConflict(t *testing.T) {
+	errBusy := fmt.Errorf("listen tcp 127.0.0.1:57320: %w", syscall.EADDRINUSE)
+	guard, err := acquireResilientLoopbackPortGuardWith(
+		57320,
+		t.TempDir(),
+		func(uint16) (net.Listener, error) { return nil, errBusy },
+		func(uint16) bool { return true },
+	)
+	if guard != nil {
+		guard.release()
+	}
+	if err == nil || !isAddrInUseError(err) {
+		t.Fatalf("connectable busy port should return addr-in-use error, got %T %v", err, err)
+	}
+}
+
+func TestResilientLoopbackGuardUsesFallbackForStalePort(t *testing.T) {
+	errBusy := fmt.Errorf("listen tcp 127.0.0.1:57320: %w", syscall.EADDRINUSE)
+	root := t.TempDir()
+	guard, err := acquireResilientLoopbackPortGuardWith(
+		57320,
+		root,
+		func(uint16) (net.Listener, error) { return nil, errBusy },
+		func(uint16) bool { return false },
+	)
+	if err != nil {
+		t.Fatalf("stale busy port should use fallback lock: %v", err)
+	}
+	defer guard.release()
+	if guard.listener != nil {
+		t.Fatal("fallback guard should not hold a listener")
+	}
+	if guard.fallbackPath() == "" {
+		t.Fatal("fallback guard should expose fallback lock path")
+	}
+
+	second, err := acquireResilientLoopbackPortGuardWith(
+		57320,
+		root,
+		func(uint16) (net.Listener, error) { return nil, errBusy },
+		func(uint16) bool { return false },
+	)
+	if err == nil {
+		if second != nil {
+			second.release()
+		}
+		t.Fatal("second fallback guard should fail while lock is held")
+	}
+	if !isLoopbackGuardBusyError(err) {
+		t.Fatalf("expected fallback lock busy error, got %T %v", err, err)
+	}
+}
+
+func freeLoopbackPort(t *testing.T) uint16 {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to allocate loopback port: %v", err)
+	}
+	defer listener.Close()
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("failed to split loopback address: %v", err)
+	}
+	var port uint16
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("failed to parse loopback port %q: %v", portText, err)
+	}
+	return port
 }

@@ -24,7 +24,8 @@ func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessa
 	case "/backend/status", "/backend/repair":
 		result = map[string]any{"status": "ok", "message": "后端已连接", "version": version}
 	case "/settings/get":
-		result = bridgeSettingsValue(loadSettings())
+		settings := loadSettings()
+		result = r.bridgeSettingsValue(settings)
 	case "/settings/set":
 		result = r.setBridgeSettings(payloadMap)
 	case "/diagnostics/log":
@@ -122,7 +123,7 @@ func mapKeys(value map[string]any) []string {
 	return keys
 }
 
-func bridgeSettingsValue(settings backendSettings) map[string]any {
+func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[string]any {
 	return map[string]any{
 		"providerSyncEnabled":             settings.ProviderSync,
 		"relayProfilesEnabled":            settings.RelayProfilesEnabled,
@@ -143,9 +144,23 @@ func bridgeSettingsValue(settings backendSettings) map[string]any {
 		"codexAppNativeMenuPlacement":     settings.CodexAppNativeMenuPlacement,
 		"codexAppServiceTierControls":     settings.CodexAppServiceTierControls,
 		"codexGoalsEnabled":               settings.CodexGoalsEnabled,
+		"codexAppVersion":                 r.codexAppVersion(settings),
 		"launchMode":                      settings.LaunchMode,
 		"language":                        settings.Language,
 	}
+}
+
+func (r *launcherRuntime) codexAppVersion(settings backendSettings) string {
+	for _, candidate := range []string{
+		strings.TrimSpace(r.codexAppPath),
+		resolveCodexApp(settings.CodexAppPath),
+		resolveCodexApp(""),
+	} {
+		if value := codexAppVersion(candidate); value != nil && strings.TrimSpace(*value) != "" {
+			return strings.TrimSpace(*value)
+		}
+	}
+	return ""
 }
 
 func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]any {
@@ -184,7 +199,7 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 		return map[string]any{"status": "failed", "message": err.Error()}
 	}
 	r.settings = settings
-	result := bridgeSettingsValue(settings)
+	result := r.bridgeSettingsValue(settings)
 	result["status"] = "ok"
 	return result
 }

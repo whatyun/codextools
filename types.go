@@ -96,12 +96,13 @@ type launchStatus struct {
 }
 
 type launcherRuntime struct {
-	settings  backendSettings
-	debugPort uint16
-	helper    *http.Server
-	relay     *http.Server
-	helperURL string
-	relayURL  string
+	settings     backendSettings
+	debugPort    uint16
+	codexAppPath string
+	helper       *http.Server
+	relay        *http.Server
+	helperURL    string
+	relayURL     string
 }
 
 type cdpTarget struct {
@@ -336,6 +337,7 @@ type launchRequest struct {
 
 type launcherSingleInstanceLock interface {
 	release()
+	fallbackPath() string
 }
 
 type relayRouteDecision struct {

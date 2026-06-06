@@ -13,7 +13,7 @@ const (
 	managerName              = "Codex++ 管理工具"
 	silentBinary             = "codextools-launcher"
 	managerBinary            = "codextools"
-	version                  = "1.1.27"
+	version                  = "1.1.28"
 	stateDirName             = ".codex-session-delete"
 	settingsFileName         = "settings.json"
 	latestStatusFileName     = "latest-status.json"
@@ -40,6 +40,7 @@ const (
 	cdpCommandTimeout        = 5 * time.Second
 	launcherCheckInterval    = 5 * time.Second
 	bridgeBindingName        = "codexSessionDeleteV2"
+	launcherGuardPort        = 57320
 	defaultWatcherDebugPort  = 9229
 	watcherRunName           = "CodexPlusPlusWatcher"
 	watcherRunKey            = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`

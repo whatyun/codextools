@@ -792,7 +792,51 @@
     refreshCodexServiceTierControls();
   }
 
-  let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch" };
+  let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
+  const codexPluginLegacyEntryUnlockBeforeVersion = "26.601.2237";
+
+  function parseCodexVersionParts(version) {
+    const raw = String(version || "").trim();
+    if (!raw) return null;
+    const match = raw.match(/\d+(?:\.\d+)*/);
+    if (!match) return null;
+    const parts = match[0].split(".").map((part) => Number(part));
+    if (!parts.length || parts.some((part) => !Number.isInteger(part) || part < 0)) return null;
+    return parts;
+  }
+
+  function compareCodexVersions(left, right) {
+    const leftParts = parseCodexVersionParts(left);
+    const rightParts = parseCodexVersionParts(right);
+    if (!leftParts || !rightParts) return null;
+    const length = Math.max(leftParts.length, rightParts.length);
+    for (let index = 0; index < length; index += 1) {
+      const leftPart = leftParts[index] || 0;
+      const rightPart = rightParts[index] || 0;
+      if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
+    }
+    return 0;
+  }
+
+  function codexPluginUnlockStrategy() {
+    const appVersion = String(codexPlusBackendSettings.codexAppVersion || "").trim();
+    const comparison = compareCodexVersions(appVersion, codexPluginLegacyEntryUnlockBeforeVersion);
+    if (comparison == null) return "unknown";
+    return comparison < 0 ? "legacy" : "modern";
+  }
+
+  function logCodexPluginUnlockStrategy(strategy) {
+    const codexAppVersion = String(codexPlusBackendSettings.codexAppVersion || "").trim();
+    const signature = `${strategy}:${codexAppVersion || "unknown"}`;
+    if (window.__codexPluginUnlockStrategyLogged === signature) return;
+    window.__codexPluginUnlockStrategyLogged = signature;
+    sendCodexPlusDiagnostic("plugin_unlock_strategy_selected", {
+      strategy,
+      codexAppVersion,
+      cutoff: codexPluginLegacyEntryUnlockBeforeVersion,
+    });
+  }
+
   let codexPlusBackendSettingsLoaded = false;
   const upstreamBranchDefaultsCache = new Map();
   const upstreamBranchDefaultsInflight = new Map();
@@ -6350,9 +6394,16 @@
       clearPluginPatchArtifacts();
       refreshForcePluginInstallUnlockLoop();
     } else {
-      enablePluginEntry();
-      installPluginBuildFlavorFilterPatch();
-      installPluginMarketplaceRequestPatch();
+      const pluginUnlockStrategy = codexPluginUnlockStrategy();
+      const settings = codexPlusSettings();
+      logCodexPluginUnlockStrategy(pluginUnlockStrategy);
+      if ((pluginUnlockStrategy === "legacy" || pluginUnlockStrategy === "unknown") && settings.pluginEntryUnlock) {
+        enablePluginEntry();
+      }
+      if ((pluginUnlockStrategy === "modern" || pluginUnlockStrategy === "unknown") && settings.pluginMarketplaceUnlock) {
+        installPluginBuildFlavorFilterPatch();
+        installPluginMarketplaceRequestPatch();
+      }
       unblockPluginInstallButtons();
       refreshForcePluginInstallUnlockLoop();
     }
