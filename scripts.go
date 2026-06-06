@@ -262,25 +262,32 @@ func (s *server) setUserScriptEnabled(key string, enabled bool) commandResult {
 }
 
 func (s *server) deleteUserScript(key string) commandResult {
+	if err := deleteUserScriptKey(key); err != nil {
+		return failed("脚本删除失败："+err.Error(), settingsPayloadValue(loadSettings()))
+	}
+	return settingsPayload("脚本已删除。")
+}
+
+func deleteUserScriptKey(key string) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return failed("脚本 key 不能为空。", settingsPayloadValue(loadSettings()))
+		return errors.New("脚本 key 不能为空")
 	}
 	fileName, ok := strings.CutPrefix(key, "user:")
 	if !ok || fileName == "" || strings.ContainsAny(fileName, `/\`) || fileName == "." || fileName == ".." {
-		return failed("脚本删除失败：only user scripts can be deleted", settingsPayloadValue(loadSettings()))
+		return errors.New("only user scripts can be deleted")
 	}
 	path := filepath.Join(userScriptsDir(), fileName)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return failed("脚本删除失败："+err.Error(), settingsPayloadValue(loadSettings()))
+		return err
 	}
 	config := loadUserScriptConfig()
 	delete(config.Scripts, key)
 	delete(config.Market, key)
 	if err := saveUserScriptConfig(config); err != nil {
-		return failed("脚本删除失败："+err.Error(), settingsPayloadValue(loadSettings()))
+		return err
 	}
-	return settingsPayload("脚本已删除。")
+	return nil
 }
 
 func marketScriptFilename(id string) string {

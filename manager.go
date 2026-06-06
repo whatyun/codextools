@@ -203,6 +203,18 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.deleteUserScript(stringArg(args, "key"))
 	case "open_external_url":
 		return s.openExternalURL(stringArg(args, "url"))
+	case "read_live_context_entries":
+		return s.readLiveContextEntries()
+	case "sync_live_context_entries":
+		return s.syncLiveContextEntries(args)
+	case "upsert_context_entry":
+		return s.upsertContextEntry(args)
+	case "delete_context_entry":
+		return s.deleteContextEntry(args)
+	case "extract_relay_common_config":
+		return s.extractRelayCommonConfig(args)
+	case "fetch_relay_profile_models":
+		return s.fetchRelayProfileModels(ctx, args)
 	case "install_entrypoints", "repair_shortcuts":
 		return s.installEntrypoints()
 	case "uninstall_entrypoints":

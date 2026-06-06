@@ -122,6 +122,12 @@ func remarshal(in any, out any) error {
 	return json.Unmarshal(data, out)
 }
 
+func valuesJSONEqual(left, right any) bool {
+	leftBytes, leftErr := json.Marshal(left)
+	rightBytes, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftBytes) == string(rightBytes)
+}
+
 func mapArg(args map[string]any, key string) map[string]any {
 	value, _ := args[key].(map[string]any)
 	if value == nil {

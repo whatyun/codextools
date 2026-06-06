@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -303,13 +304,19 @@ func ensureRelaySnapshot(profile relayProfile, currentConfig string, allowLegacy
 	return profile
 }
 
-func writeRelaySnapshot(home string, relay relayProfile, pure bool) (*string, error) {
+func writeRelaySnapshot(home string, settings backendSettings, relay relayProfile, pure bool) (*string, error) {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return nil, err
 	}
-	configContents := relay.ConfigContents
+	configContents, err := relayConfigForWrite(settings, relay)
+	if err != nil {
+		return nil, err
+	}
 	if pure {
 		configContents = ensureConfigBearerToken(configContents, strings.TrimSpace(relay.APIKey))
+	}
+	if err := writeRelayModelCatalog(home, relay); err != nil {
+		return nil, err
 	}
 	backupPath, err := writeCodexConfigWithBackup(filepath.Join(home, "config.toml"), configContents, "relay")
 	if err != nil {
@@ -533,7 +540,7 @@ func persistRelayProfileSnapshot(settings backendSettings, relay relayProfile) e
 		if settings.RelayProfiles[index].ID != relay.ID {
 			continue
 		}
-		if settings.RelayProfiles[index] == relay {
+		if valuesJSONEqual(settings.RelayProfiles[index], relay) {
 			return nil
 		}
 		settings.RelayProfiles[index] = relay
@@ -552,7 +559,7 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
-	backupPath, err := writeRelaySnapshot(home, relay, pure)
+	backupPath, err := writeRelaySnapshot(home, settings, relay, pure)
 	if err != nil {
 		if pure {
 			return failed("写入中转 API 模式失败："+err.Error(), relayStatusFromHome(home))
@@ -612,6 +619,86 @@ func activeRelayProfile(settings backendSettings) relayProfile {
 	return defaultRelayProfile()
 }
 
+func relayConfigForWrite(settings backendSettings, relay relayProfile) (string, error) {
+	configContents := strings.TrimSpace(relay.ConfigContents)
+	if configContents == "" && relay.RelayMode != "official" {
+		configContents = upsertModelProviderConfig("", effectiveBaseURL(relay), strings.TrimSpace(relay.APIKey), relay)
+	}
+	if configContents == "" && relay.RelayMode != "official" {
+		return "", errors.New("config.toml 内容为空")
+	}
+	return relayConfigWithCommonAndLimits(settings, relay, configContents)
+}
+
+func relayConfigWithCommonAndLimits(settings backendSettings, relay relayProfile, configContents string) (string, error) {
+	profileConfig, _ := splitContextConfigSections(configContents)
+	if strings.TrimSpace(relay.ModelList) != "" {
+		profileConfig = upsertRootKey(profileConfig, "model_catalog_json", quoteToml("codex-models.json"))
+	} else {
+		profileConfig = removeRootKey(profileConfig, "model_catalog_json")
+	}
+	if strings.TrimSpace(relay.Model) != "" {
+		profileConfig = upsertRootKey(profileConfig, "model", quoteToml(strings.TrimSpace(relay.Model)))
+	}
+	profileConfig, err := applyContextLimitsToConfig(profileConfig, relay.ContextWindow, relay.AutoCompactLimit)
+	if err != nil {
+		return "", err
+	}
+	if !relay.UseCommonConfig {
+		return normalizeDuplicateTomlTables(profileConfig), nil
+	}
+	commonConfig := joinConfigSectionsRootFirst(
+		settings.RelayCommonConfigContents,
+		filterCommonConfigForSelection(settings.RelayContextConfigContents, relay.ContextSelection),
+	)
+	return joinConfigSectionsRootFirst(profileConfig, commonConfig), nil
+}
+
+func applyContextLimitsToConfig(configContents, contextWindow, autoCompactLimit string) (string, error) {
+	var err error
+	if strings.TrimSpace(contextWindow) != "" {
+		if _, err = parsePositiveUintString(contextWindow, "上下文大小"); err != nil {
+			return "", err
+		}
+		configContents = upsertRootKey(configContents, "model_context_window", strings.TrimSpace(contextWindow))
+	}
+	if strings.TrimSpace(autoCompactLimit) != "" {
+		if _, err = parsePositiveUintString(autoCompactLimit, "自动压缩限制"); err != nil {
+			return "", err
+		}
+		configContents = upsertRootKey(configContents, "model_auto_compact_token_limit", strings.TrimSpace(autoCompactLimit))
+	}
+	return configContents, nil
+}
+
+func parsePositiveUintString(value, label string) (uint64, error) {
+	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed == 0 {
+		return 0, fmt.Errorf("%s必须是正整数", label)
+	}
+	return parsed, nil
+}
+
+func writeRelayModelCatalog(home string, relay relayProfile) error {
+	models := uniqueStrings(append([]string{relay.Model}, splitModelList(relay.ModelList)...))
+	if len(models) == 0 {
+		return nil
+	}
+	items := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		items = append(items, map[string]any{
+			"slug":             model,
+			"supported_in_api": true,
+			"visibility":       "list",
+		})
+	}
+	data, err := json.MarshalIndent(map[string]any{"models": items}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(home, "codex-models.json"), data)
+}
+
 func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 	if !pure && relay.RelayMode == "official" {
 		return errors.New("官方登录模式不需要写入 API 配置")
@@ -636,8 +723,16 @@ func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 	}
 	configPath := filepath.Join(home, "config.toml")
 	existing, _ := os.ReadFile(configPath)
+	settings := loadSettings()
 	updated := upsertModelProviderConfig(string(existing), baseURL, strings.TrimSpace(relay.APIKey), relay)
-	_, err := writeCodexConfigWithBackup(configPath, updated, "relay-apply")
+	updated, err := relayConfigWithCommonAndLimits(settings, relay, updated)
+	if err != nil {
+		return err
+	}
+	if err := writeRelayModelCatalog(home, relay); err != nil {
+		return err
+	}
+	_, err = writeCodexConfigWithBackup(configPath, updated, "relay-apply")
 	return err
 }
 
@@ -661,6 +756,9 @@ func usesSeparateImageGenerationAPI(relay relayProfile) bool {
 
 func upsertModelProviderConfig(contents, baseURL, bearerToken string, relay relayProfile) string {
 	updated := upsertRootKey(contents, "model_provider", quoteToml(relayProvider))
+	if model := strings.TrimSpace(relay.Model); model != "" {
+		updated = upsertRootKey(updated, "model", quoteToml(model))
+	}
 	updated = removeTable(updated, "model_providers."+relayProvider)
 	updated = removeTable(updated, "model_providers."+legacyRelayProvider)
 	lines := splitLines(updated)
@@ -709,7 +807,7 @@ func (s *server) clearRelayInjection() commandResult {
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
-	backupPath, err := writeRelaySnapshot(home, relay, false)
+	backupPath, err := writeRelaySnapshot(home, settings, relay, false)
 	if err != nil {
 		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))
 	}

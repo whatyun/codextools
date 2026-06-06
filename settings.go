@@ -97,23 +97,42 @@ func codexHomeDir() string {
 
 func defaultSettings() backendSettings {
 	return backendSettings{
-		CodexExtraArgs:      []string{},
-		Language:            defaultLanguage,
-		Enhancements:        true,
-		LaunchMode:          "patch",
-		RelayProfiles:       []relayProfile{defaultRelayProfile()},
-		ActiveRelayID:       "default",
-		RelayTestModel:      defaultRelayTestModel,
-		CLIWrapperAPIKeyEnv: defaultAPIKeyEnvironment,
+		CodexExtraArgs:                  []string{},
+		Language:                        defaultLanguage,
+		ProviderSyncSavedProviders:      []string{},
+		ProviderSyncManualProviders:     []string{},
+		RelayProfilesEnabled:            true,
+		Enhancements:                    true,
+		CodexAppPluginEntryUnlock:       true,
+		CodexAppPluginMarketplaceUnlock: true,
+		CodexAppForcePluginInstall:      true,
+		CodexAppModelWhitelistUnlock:    true,
+		CodexAppSessionDelete:           true,
+		CodexAppMarkdownExport:          true,
+		CodexAppProjectMove:             true,
+		CodexAppConversationTimeline:    true,
+		CodexAppThreadScrollRestore:     true,
+		CodexAppZedRemoteOpen:           true,
+		CodexAppUpstreamWorktreeCreate:  true,
+		CodexAppNativeMenuPlacement:     true,
+		LaunchMode:                      "patch",
+		RelayProfiles:                   []relayProfile{defaultRelayProfile()},
+		ActiveRelayID:                   "default",
+		RelayTestModel:                  defaultRelayTestModel,
+		CLIWrapperAPIKeyEnv:             defaultAPIKeyEnvironment,
 	}
 }
 
 func defaultRelayProfile() relayProfile {
 	return relayProfile{
-		ID:        "default",
-		Name:      "默认中转",
-		Protocol:  "responses",
-		RelayMode: "official",
+		ID:                          "default",
+		Name:                        "默认中转",
+		Protocol:                    "responses",
+		RelayMode:                   "official",
+		UseCommonConfig:             true,
+		ContextSelection:            relayContextSelection{},
+		ContextSelectionInitialized: true,
+		ModelInsertMode:             "patch",
 	}
 }
 
@@ -138,7 +157,17 @@ func normalizeSettings(settings backendSettings) backendSettings {
 	if settings.CodexExtraArgs == nil {
 		settings.CodexExtraArgs = []string{}
 	}
+	if settings.ProviderSyncSavedProviders == nil {
+		settings.ProviderSyncSavedProviders = []string{}
+	}
+	if settings.ProviderSyncManualProviders == nil {
+		settings.ProviderSyncManualProviders = []string{}
+	}
 	settings.Language = normalizeLanguage(settings.Language)
+	settings = normalizeDefaultEnabledSettings(settings)
+	common, extractedContext := splitContextConfigSections(settings.RelayCommonConfigContents)
+	settings.RelayCommonConfigContents = normalizeConfigText(common)
+	settings.RelayContextConfigContents = normalizeConfigText(joinConfigSections(settings.RelayContextConfigContents, extractedContext))
 	if settings.LaunchMode != "patch" && settings.LaunchMode != "relay" {
 		settings.LaunchMode = "patch"
 	}
@@ -152,6 +181,20 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		if settings.RelayProfiles[index].Protocol == "" {
 			settings.RelayProfiles[index].Protocol = "responses"
 		}
+		if settings.RelayProfiles[index].Name == "" {
+			settings.RelayProfiles[index].Name = settings.RelayProfiles[index].ID
+		}
+		if settings.RelayProfiles[index].UpstreamBaseURL == "" {
+			settings.RelayProfiles[index].UpstreamBaseURL = settings.RelayProfiles[index].BaseURL
+		}
+		if settings.RelayProfiles[index].ModelInsertMode == "" {
+			settings.RelayProfiles[index].ModelInsertMode = "patch"
+		}
+		if !settings.RelayProfiles[index].ContextSelectionInitialized {
+			settings.RelayProfiles[index].ContextSelection = contextSelectionForAllEntries(settings.RelayContextConfigContents)
+			settings.RelayProfiles[index].ContextSelectionInitialized = true
+		}
+		settings.RelayProfiles[index].ContextSelection = normalizeContextSelection(settings.RelayProfiles[index].ContextSelection)
 		switch settings.RelayProfiles[index].RelayMode {
 		case "mixedApi":
 			settings.RelayProfiles[index].OfficialMixAPIKey = true
@@ -189,6 +232,84 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		settings.CLIWrapperAPIKeyEnv = defaultAPIKeyEnvironment
 	}
 	return settings
+}
+
+func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {
+	defaults := defaultEnabledSettingsFromRaw()
+	if !settings.RelayProfilesEnabled && !defaults["relayProfilesEnabled"] {
+		settings.RelayProfilesEnabled = true
+	}
+	if !settings.Enhancements && !defaults["enhancementsEnabled"] {
+		settings.Enhancements = true
+	}
+	if !settings.CodexAppPluginEntryUnlock && !defaults["codexAppPluginEntryUnlock"] {
+		settings.CodexAppPluginEntryUnlock = true
+	}
+	if !settings.CodexAppPluginMarketplaceUnlock && !defaults["codexAppPluginMarketplaceUnlock"] {
+		settings.CodexAppPluginMarketplaceUnlock = true
+	}
+	if !settings.CodexAppForcePluginInstall && !defaults["codexAppForcePluginInstall"] {
+		settings.CodexAppForcePluginInstall = true
+	}
+	if !settings.CodexAppModelWhitelistUnlock && !defaults["codexAppModelWhitelistUnlock"] {
+		settings.CodexAppModelWhitelistUnlock = true
+	}
+	if !settings.CodexAppSessionDelete && !defaults["codexAppSessionDelete"] {
+		settings.CodexAppSessionDelete = true
+	}
+	if !settings.CodexAppMarkdownExport && !defaults["codexAppMarkdownExport"] {
+		settings.CodexAppMarkdownExport = true
+	}
+	if !settings.CodexAppProjectMove && !defaults["codexAppProjectMove"] {
+		settings.CodexAppProjectMove = true
+	}
+	if !settings.CodexAppConversationTimeline && !defaults["codexAppConversationTimeline"] {
+		settings.CodexAppConversationTimeline = true
+	}
+	if !settings.CodexAppThreadScrollRestore && !defaults["codexAppThreadScrollRestore"] {
+		settings.CodexAppThreadScrollRestore = true
+	}
+	if !settings.CodexAppZedRemoteOpen && !defaults["codexAppZedRemoteOpen"] {
+		settings.CodexAppZedRemoteOpen = true
+	}
+	if !settings.CodexAppUpstreamWorktreeCreate && !defaults["codexAppUpstreamWorktreeCreate"] {
+		settings.CodexAppUpstreamWorktreeCreate = true
+	}
+	if !settings.CodexAppNativeMenuPlacement && !defaults["codexAppNativeMenuPlacement"] {
+		settings.CodexAppNativeMenuPlacement = true
+	}
+	return settings
+}
+
+func defaultEnabledSettingsFromRaw() map[string]bool {
+	data, err := os.ReadFile(settingsPath())
+	if err != nil {
+		return map[string]bool{}
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return map[string]bool{}
+	}
+	out := map[string]bool{}
+	for _, key := range []string{
+		"relayProfilesEnabled",
+		"enhancementsEnabled",
+		"codexAppPluginEntryUnlock",
+		"codexAppPluginMarketplaceUnlock",
+		"codexAppForcePluginInstall",
+		"codexAppModelWhitelistUnlock",
+		"codexAppSessionDelete",
+		"codexAppMarkdownExport",
+		"codexAppProjectMove",
+		"codexAppConversationTimeline",
+		"codexAppThreadScrollRestore",
+		"codexAppZedRemoteOpen",
+		"codexAppUpstreamWorktreeCreate",
+		"codexAppNativeMenuPlacement",
+	} {
+		_, out[key] = raw[key]
+	}
+	return out
 }
 
 func migrateOfficialAuthBinding(settings backendSettings) (backendSettings, bool) {

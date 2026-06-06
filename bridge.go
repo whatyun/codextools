@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -63,6 +62,17 @@ func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessa
 			}
 		}
 		result = userScriptInventoryValue()
+	case "/user-scripts/delete":
+		key := strings.TrimSpace(stringFromAny(payloadMap["key"]))
+		if err := deleteUserScriptKey(key); err != nil {
+			result = userScriptInventoryValue()
+			result["status"] = "failed"
+			result["message"] = "脚本删除失败：" + err.Error()
+		} else {
+			result = userScriptInventoryValue()
+			result["status"] = "ok"
+			result["message"] = "脚本已删除"
+		}
 	case "/devtools/open":
 		result = r.openDevTools()
 	case "/manager/open":
@@ -75,8 +85,20 @@ func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessa
 		result = codexModelCatalogValue()
 	case "/zed-remote/status":
 		result = zedRemoteStatusValue()
-	case "/zed-remote/resolve-host", "/zed-remote/fallback-request", "/zed-remote/open":
-		result = map[string]any{"status": "failed", "message": "Go 管理器暂未实现 Zed Remote 桥接"}
+	case "/zed-remote/resolve-host":
+		result = resolveSSHTargetResponse(payloadMap)
+	case "/zed-remote/fallback-request":
+		result = zedFallbackRequestResponse(payloadMap)
+	case "/zed-remote/open":
+		result = zedOpenRemote(payloadMap)
+	case "/upstream-worktree/status":
+		result = upstreamWorktreeStatusValue()
+	case "/upstream-worktree/defaults":
+		result = upstreamWorktreeDefaultsValue(payloadMap)
+	case "/upstream-worktree/prepare":
+		result = upstreamWorktreePrepareValue(payloadMap)
+	case "/upstream-worktree/create":
+		result = upstreamWorktreeCreateValue(payloadMap)
 	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
 		result = handleSessionDataRoute(path, payloadMap)
 	default:
@@ -102,21 +124,56 @@ func mapKeys(value map[string]any) []string {
 
 func bridgeSettingsValue(settings backendSettings) map[string]any {
 	return map[string]any{
-		"providerSyncEnabled": settings.ProviderSync,
-		"enhancementsEnabled": settings.Enhancements,
-		"launchMode":          settings.LaunchMode,
-		"language":            settings.Language,
+		"providerSyncEnabled":             settings.ProviderSync,
+		"relayProfilesEnabled":            settings.RelayProfilesEnabled,
+		"ccsLinkEnabled":                  settings.CCSLinkEnabled,
+		"enhancementsEnabled":             settings.Enhancements,
+		"codexAppPluginEntryUnlock":       settings.CodexAppPluginEntryUnlock,
+		"codexAppPluginMarketplaceUnlock": settings.CodexAppPluginMarketplaceUnlock,
+		"codexAppForcePluginInstall":      settings.CodexAppForcePluginInstall,
+		"codexAppModelWhitelistUnlock":    settings.CodexAppModelWhitelistUnlock,
+		"codexAppSessionDelete":           settings.CodexAppSessionDelete,
+		"codexAppMarkdownExport":          settings.CodexAppMarkdownExport,
+		"codexAppProjectMove":             settings.CodexAppProjectMove,
+		"codexAppConversationTimeline":    settings.CodexAppConversationTimeline,
+		"codexAppConversationView":        settings.CodexAppConversationView,
+		"codexAppThreadScrollRestore":     settings.CodexAppThreadScrollRestore,
+		"codexAppZedRemoteOpen":           settings.CodexAppZedRemoteOpen,
+		"codexAppUpstreamWorktreeCreate":  settings.CodexAppUpstreamWorktreeCreate,
+		"codexAppNativeMenuPlacement":     settings.CodexAppNativeMenuPlacement,
+		"codexAppServiceTierControls":     settings.CodexAppServiceTierControls,
+		"codexGoalsEnabled":               settings.CodexGoalsEnabled,
+		"launchMode":                      settings.LaunchMode,
+		"language":                        settings.Language,
 	}
 }
 
 func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]any {
 	settings := loadSettings()
-	if _, ok := payload["providerSyncEnabled"]; ok {
-		settings.ProviderSync = boolFromAny(payload["providerSyncEnabled"])
+	applyBool := func(key string, target *bool) {
+		if _, ok := payload[key]; ok {
+			*target = boolFromAny(payload[key])
+		}
 	}
-	if _, ok := payload["enhancementsEnabled"]; ok {
-		settings.Enhancements = boolFromAny(payload["enhancementsEnabled"])
-	}
+	applyBool("providerSyncEnabled", &settings.ProviderSync)
+	applyBool("relayProfilesEnabled", &settings.RelayProfilesEnabled)
+	applyBool("ccsLinkEnabled", &settings.CCSLinkEnabled)
+	applyBool("enhancementsEnabled", &settings.Enhancements)
+	applyBool("codexAppPluginEntryUnlock", &settings.CodexAppPluginEntryUnlock)
+	applyBool("codexAppPluginMarketplaceUnlock", &settings.CodexAppPluginMarketplaceUnlock)
+	applyBool("codexAppForcePluginInstall", &settings.CodexAppForcePluginInstall)
+	applyBool("codexAppModelWhitelistUnlock", &settings.CodexAppModelWhitelistUnlock)
+	applyBool("codexAppSessionDelete", &settings.CodexAppSessionDelete)
+	applyBool("codexAppMarkdownExport", &settings.CodexAppMarkdownExport)
+	applyBool("codexAppProjectMove", &settings.CodexAppProjectMove)
+	applyBool("codexAppConversationTimeline", &settings.CodexAppConversationTimeline)
+	applyBool("codexAppConversationView", &settings.CodexAppConversationView)
+	applyBool("codexAppThreadScrollRestore", &settings.CodexAppThreadScrollRestore)
+	applyBool("codexAppZedRemoteOpen", &settings.CodexAppZedRemoteOpen)
+	applyBool("codexAppUpstreamWorktreeCreate", &settings.CodexAppUpstreamWorktreeCreate)
+	applyBool("codexAppNativeMenuPlacement", &settings.CodexAppNativeMenuPlacement)
+	applyBool("codexAppServiceTierControls", &settings.CodexAppServiceTierControls)
+	applyBool("codexGoalsEnabled", &settings.CodexGoalsEnabled)
 	if value := strings.TrimSpace(stringFromAny(payload["launchMode"])); value == "patch" || value == "relay" {
 		settings.LaunchMode = value
 	}
@@ -172,15 +229,6 @@ func unsupportedBridgeDataRoute(path string, payload map[string]any) map[string]
 	return map[string]any{"status": "failed", "session_id": sessionID, "message": "Go 管理器暂未实现该页面数据操作：" + path}
 }
 
-func zedRemoteStatusValue() map[string]any {
-	return map[string]any{
-		"status":            "ok",
-		"platformSupported": runtime.GOOS == "darwin",
-		"zedAppFound":       fileExists("/Applications/Zed.app"),
-		"zedCliFound":       executableInPath("zed") != "",
-	}
-}
-
 func executableInPath(name string) string {
 	for _, dir := range filepath.SplitList(os.Getenv("PATH") + string(os.PathListSeparator) + defaultGUIPath) {
 		if candidate := filepath.Join(dir, name); fileExists(candidate) {
@@ -188,37 +236,6 @@ func executableInPath(name string) string {
 		}
 	}
 	return ""
-}
-
-func codexModelCatalogValue() map[string]any {
-	configPath := filepath.Join(codexHomeDir(), "config.toml")
-	data, _ := os.ReadFile(configPath)
-	contents := string(data)
-	modelProvider := rootKeyString(contents, "model_provider")
-	model := rootKeyString(contents, "model")
-	defaultModel := rootKeyString(contents, "default_model")
-	providerValues := tableValues(contents, "model_providers."+modelProvider)
-	providerName := unquoteToml(providerValues["name"])
-	if providerName == "" {
-		providerName = modelProvider
-	}
-	models := uniqueStrings([]string{model, defaultModel, defaultRelayTestModel})
-	if len(models) == 0 {
-		models = []string{defaultRelayTestModel}
-	}
-	if defaultModel == "" {
-		defaultModel = firstNonEmpty(model, models[0])
-	}
-	return map[string]any{
-		"status":         "ok",
-		"model":          model,
-		"default_model":  defaultModel,
-		"model_provider": modelProvider,
-		"provider_name":  providerName,
-		"models":         models,
-		"sources":        []any{},
-		"responses_api":  map[string]any{"status": "unknown", "endpoint": "", "message": ""},
-	}
 }
 
 func uniqueStrings(values []string) []string {
