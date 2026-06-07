@@ -170,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.28-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.28-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.28-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.28-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.28-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.28-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.28-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.28-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.29-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -193,20 +193,20 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.28-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.28-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.28-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.28-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.28-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.28-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.28-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.28-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.29-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -214,25 +214,21 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.28</strong>
+          <strong>Version 1.1.29</strong>
           <ul>
-            <li>Consolidates the recent Codex++ 1.2.2 parity work across context config, model catalog, relay/profile flags, goals, service tier, native menu placement, Zed Remote, and upstream worktree creation.</li>
-            <li>Adds Codex app version-aware plugin unlock behavior, using legacy entry unlocks before 26.601.2237 and marketplace request patching for modern builds.</li>
-            <li>Replaces the platform-specific launcher mutex with a resilient loopback/file-lock guard to prevent duplicate launcher instances across platforms.</li>
-            <li>Exposes the runtime Codex app version through the bridge settings payload and expands parity tests for bridge settings and launcher guard behavior.</li>
-            <li>Rebuilds the macOS pkg staging flow so both apps are installed into `/Applications` without relocatable bundle metadata or extended attributes.</li>
-            <li>Normalizes live context entry payloads so empty MCP server, skill, and plugin lists stay as arrays instead of `null`.</li>
+            <li>Separates macOS and Windows install/repair guidance so each platform shows the right Codex app selection and recovery actions.</li>
+            <li>Adds macOS Codex.app manual selection and repair guidance for installations that are present but not auto-detected.</li>
+            <li>Enables native macOS edit menu shortcuts in the desktop manager window, including undo, redo, cut, copy, paste, paste and match style, and select all.</li>
+            <li>Adds an i18n audit script plus runtime localization coverage for confirmation dialogs, file picker labels, and dynamically inserted UI text.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.28</strong>
+          <strong>版本 1.1.29</strong>
           <ul>
-            <li>合并近期 Codex++ 1.2.2 对齐内容：context config、模型目录、relay/profile 开关、goals、service tier、原生菜单位置、Zed Remote 和 upstream worktree 创建。</li>
-            <li>新增按 Codex app 版本选择插件解锁策略：26.601.2237 之前使用 legacy entry unlock，现代版本使用 marketplace request patch。</li>
-            <li>用更稳健的 loopback/file-lock 守卫替代平台专用 launcher mutex，避免跨平台重复启动器实例。</li>
-            <li>bridge settings 会暴露运行中的 Codex app 版本，并补充 bridge settings 与 launcher guard 行为测试。</li>
-            <li>重建 macOS pkg 打包流程，确保两个 app 安装到 `/Applications`，并去掉可迁移 bundle 元数据和扩展属性。</li>
-            <li>规范 live context entries 返回值，空的 MCP server、skill、plugin 列表保持为数组而不是 `null`。</li>
+            <li>按 macOS 和 Windows 分离安装/修复引导，让不同平台显示正确的 Codex 应用选择与恢复操作。</li>
+            <li>新增 macOS 手动选择 Codex.app 与修复引导，用于已安装但自动检测不到的场景。</li>
+            <li>macOS 桌面管理窗口启用原生编辑菜单快捷键，包括撤销、重做、剪切、复制、粘贴、粘贴并匹配样式和全选。</li>
+            <li>新增 i18n 审计脚本，并补齐确认弹窗、文件选择器标签和动态插入 UI 文案的运行时本地化。</li>
           </ul>
         </div>
       </section>
@@ -259,7 +255,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS installer packages install `Codex++ 管理工具.app` and `Codex++.app` into `/Applications`.</li>
             <li>The macOS pkg installers and zip app bundles are unsigned community builds; use the first launch note above if Gatekeeper blocks them.</li>
             <li>Windows x64 is for traditional Intel/AMD PCs. Windows arm64 is for Windows on ARM devices.</li>
-            <li>This rebuild keeps the 1.1.28 version while refreshing the macOS pkg packaging flow and live context entry handling.</li>
+            <li>This release focuses on platform-specific install flows, macOS desktop editing shortcuts, and broader localization coverage.</li>
           </ul>
         </div>
         <div data-lang="zh">
@@ -268,7 +264,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS 安装包会把 `Codex++ 管理工具.app` 和 `Codex++.app` 安装到 `/Applications`。</li>
             <li>macOS pkg 安装包和 zip app 包都是未签名社区构建；如果被 Gatekeeper 阻止，请使用上方首次启动提醒。</li>
             <li>Windows x64 适合传统 Intel/AMD 电脑；Windows arm64 适合 Windows ARM 设备。</li>
-            <li>这次重建保持 1.1.28 版本号，同时刷新 macOS pkg 打包流程和 live context entries 处理。</li>
+            <li>这个版本重点改进平台专属安装流程、macOS 桌面编辑快捷键和更完整的本地化覆盖。</li>
           </ul>
         </div>
       </section>
