@@ -2274,7 +2274,7 @@ function InstallGuideScreen({
                 status={status}
                 installed={codexInstalled}
                 onInstall={openInstall}
-                onChoosePath={() => void actions.chooseCodexAppPath("file")}
+                onChoosePath={() => void actions.chooseCodexAppPath(status?.platform === "darwin" ? "folder" : "file")}
                 onRepair={() => void actions.repairCodexApp()}
                 onRefresh={() => void actions.refreshInstallGuideStatus()}
                 onNext={() => setStep("ccs")}
@@ -2378,6 +2378,7 @@ function GuideCodexStep({
   const download = status?.codexLatestDownload;
   const installLabel = status?.platform === "darwin" ? "打开官方安装页" : "获取最新版安装包";
   const isWindows = status?.platform === "windows";
+  const isMac = status?.platform === "darwin";
   const launchStatus = status?.codexLaunch;
   const detectionMessage = status?.codexDetection?.message || (installed ? "已检测到 Codex 应用。" : "自动检测暂未找到 Codex。");
   const detectionHints = status?.codexDetection?.candidates ?? [];
@@ -2397,6 +2398,12 @@ function GuideCodexStep({
         <div className="platform-note limited">
           <Info className="h-4 w-4" />
           <span>Windows 的 Microsoft Store / MSIX 安装目录可能限制读取权限。已安装但未识别时，直接选择 Codex.exe、app 目录或安装解包目录即可。</span>
+        </div>
+      ) : null}
+      {!installed && isMac ? (
+        <div className="platform-note limited">
+          <Info className="h-4 w-4" />
+          <span>macOS 已安装但未识别时，选择 /Applications/Codex.app 或实际放置 Codex.app 的应用目录即可。</span>
         </div>
       ) : null}
       <div className="install-card">
@@ -2425,13 +2432,13 @@ function GuideCodexStep({
         </div>
       ) : null}
       <Toolbar>
-        {isWindows ? (
+        {isWindows || isMac ? (
           <Button onClick={onChoosePath} variant="secondary">
             <ExternalLink className="h-4 w-4" />
-            手动选择 Codex.exe
+            {isWindows ? "手动选择 Codex.exe" : "选择 Codex.app"}
           </Button>
         ) : null}
-        {isWindows ? (
+        {isWindows || isMac ? (
           <Button onClick={onRepair} variant="secondary">
             <Wrench className="h-4 w-4" />
             修复 Codex 程序
@@ -3078,6 +3085,14 @@ function ProviderSyncScreen({
   actions: Actions;
 }) {
   const backups = skillMcpBackups?.backups ?? [];
+  const isWindows = computerUse?.platform === "windows";
+  const guideItems = [
+    "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属、补回插件配置并重读插件市场。",
+    "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置，并执行 marketplace 刷新/重读。",
+    ...(isWindows ? ["Computer Use 修复会写入本地兼容插件和用户环境变量，修复后需要重启 Codex。"] : []),
+    "Skill/MCP 恢复前会自动备份当前状态，并只替换 config.toml 里的 MCP、插件、市场和 features 表。",
+    "切回官方时历史会话会整理为 openai；切到 API 时会整理为 CodexPlusPlus。",
+  ];
   return (
     <>
       <Panel>
@@ -3116,41 +3131,43 @@ function ProviderSyncScreen({
           </Toolbar>
         </CardContent>
       </Panel>
-      <Panel>
-        <CardHead title="Computer Use 修复" detail="Windows 本地修复 Computer Use 插件、marketplace、环境变量和 config.toml" />
-        <CardContent>
-          <div className="relay-grid compact">
-            <Metric label="平台" value={platformLabel(computerUse?.platform ?? "unknown")} />
-            <Metric label="总状态" value={computerUse?.allReady ? "可用" : computerUse?.supported === false ? "不支持" : "待修复"} />
-            <Metric label="环境变量" value={computerUse?.envEnabled ? "已开启" : "未开启"} />
-            <Metric label="插件缓存" value={computerUse?.cacheLatest ? "已写入" : "缺失"} />
-            <Metric label="Marketplace" value={computerUse?.marketplaceManifest && computerUse?.marketplacePlugin ? "完整" : "待修复"} />
-            <Metric label="Config 表" value={computerUse?.configReady ? "完整" : "待修复"} />
-          </div>
-          <div className="status-table">
-            <StatusRow title="环境变量" status={computerUse?.envEnabled ? "ok" : "missing"} path={"User=" + (computerUse?.userEnv || "-") + " Process=" + (computerUse?.processEnv || "-")} />
-            <StatusRow title="Codex home" status={computerUse?.codexHome ? "ok" : "missing"} path={computerUse?.codexHome ?? null} />
-            <StatusRow title="Marketplace 根目录" status={computerUse?.marketplaceReady ? "ok" : "missing"} path={computerUse?.marketplaceRoot ?? null} />
-            <StatusRow title="Marketplace manifest" status={computerUse?.marketplaceManifest ? "ok" : "missing"} path={computerUse?.marketplaceManifestPath ?? null} />
-            <StatusRow title="Marketplace 插件" status={computerUse?.marketplacePlugin ? "ok" : "missing"} path={computerUse?.marketplacePluginPath ?? null} />
-            <StatusRow title="插件缓存" status={computerUse?.cacheLatest ? "ok" : "missing"} path={computerUse?.cacheLatestPath ?? (computerUse?.cacheVersion ? "computer-use/" + computerUse.cacheVersion : null)} />
-            <StatusRow title="Helper transport" status={computerUse?.helperTransport ? "ok" : "missing"} path={computerUse?.helperTransportPath ?? null} />
-            <StatusRow title="config.toml" status={computerUse?.configReady ? "ok" : "missing"} path={computerUse?.configPath ?? null} />
-          </div>
-          {computerUse?.backupPath ? <div className="path-line compact-path">本次配置备份：{computerUse.backupPath}</div> : null}
-          <div className="path-line compact-path">修复后请关闭所有 Codex 窗口，再从 Codex++ 入口重新启动；增强菜单应显示 Codex++ 1.1.24。</div>
-          <Toolbar>
-            <Button onClick={() => void actions.refreshComputerUse()} variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              刷新状态
-            </Button>
-            <Button disabled={computerUse?.supported === false} onClick={() => void actions.repairComputerUse()} variant="secondary">
-              <Wrench className="h-4 w-4" />
-              一键修复 Computer Use
-            </Button>
-          </Toolbar>
-        </CardContent>
-      </Panel>
+      {isWindows ? (
+        <Panel>
+          <CardHead title="Computer Use 修复" detail="Windows 本地修复 Computer Use 插件、marketplace、环境变量和 config.toml" />
+          <CardContent>
+            <div className="relay-grid compact">
+              <Metric label="平台" value={platformLabel(computerUse?.platform ?? "unknown")} />
+              <Metric label="总状态" value={computerUse?.allReady ? "可用" : "待修复"} />
+              <Metric label="环境变量" value={computerUse?.envEnabled ? "已开启" : "未开启"} />
+              <Metric label="插件缓存" value={computerUse?.cacheLatest ? "已写入" : "缺失"} />
+              <Metric label="Marketplace" value={computerUse?.marketplaceManifest && computerUse?.marketplacePlugin ? "完整" : "待修复"} />
+              <Metric label="Config 表" value={computerUse?.configReady ? "完整" : "待修复"} />
+            </div>
+            <div className="status-table">
+              <StatusRow title="环境变量" status={computerUse?.envEnabled ? "ok" : "missing"} path={"User=" + (computerUse?.userEnv || "-") + " Process=" + (computerUse?.processEnv || "-")} />
+              <StatusRow title="Codex home" status={computerUse?.codexHome ? "ok" : "missing"} path={computerUse?.codexHome ?? null} />
+              <StatusRow title="Marketplace 根目录" status={computerUse?.marketplaceReady ? "ok" : "missing"} path={computerUse?.marketplaceRoot ?? null} />
+              <StatusRow title="Marketplace manifest" status={computerUse?.marketplaceManifest ? "ok" : "missing"} path={computerUse?.marketplaceManifestPath ?? null} />
+              <StatusRow title="Marketplace 插件" status={computerUse?.marketplacePlugin ? "ok" : "missing"} path={computerUse?.marketplacePluginPath ?? null} />
+              <StatusRow title="插件缓存" status={computerUse?.cacheLatest ? "ok" : "missing"} path={computerUse?.cacheLatestPath ?? (computerUse?.cacheVersion ? "computer-use/" + computerUse.cacheVersion : null)} />
+              <StatusRow title="Helper transport" status={computerUse?.helperTransport ? "ok" : "missing"} path={computerUse?.helperTransportPath ?? null} />
+              <StatusRow title="config.toml" status={computerUse?.configReady ? "ok" : "missing"} path={computerUse?.configPath ?? null} />
+            </div>
+            {computerUse?.backupPath ? <div className="path-line compact-path">本次配置备份：{computerUse.backupPath}</div> : null}
+            <div className="path-line compact-path">修复后请关闭所有 Codex 窗口，再从 Codex++ 入口重新启动。</div>
+            <Toolbar>
+              <Button onClick={() => void actions.refreshComputerUse()} variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                刷新状态
+              </Button>
+              <Button onClick={() => void actions.repairComputerUse()} variant="secondary">
+                <Wrench className="h-4 w-4" />
+                一键修复 Computer Use
+              </Button>
+            </Toolbar>
+          </CardContent>
+        </Panel>
+      ) : null}
       <Panel>
         <CardHead title="Skill/MCP 备份" detail={skillMcpBackups?.backupRoot ?? "快照保存在 ~/.codex/backups_state/skill-mcp"} />
         <CardContent>
@@ -3202,17 +3219,9 @@ function ProviderSyncScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="说明" detail="会话、插件、Computer Use 和 Skill/MCP 快照都可以在这里整理" />
+        <CardHead title="说明" detail={isWindows ? "会话、插件、Computer Use 和 Skill/MCP 快照都可以在这里整理" : "会话、插件和 Skill/MCP 快照都可以在这里整理"} />
         <CardContent>
-          <GuideList
-            items={[
-              "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属、补回插件配置并重读插件市场。",
-              "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置，并执行 marketplace 刷新/重读。",
-              "Computer Use 修复只针对 Windows，会写入本地兼容插件和用户环境变量，修复后需要重启 Codex。",
-              "Skill/MCP 恢复前会自动备份当前状态，并只替换 config.toml 里的 MCP、插件、市场、features、windows 表。",
-              "切回官方时历史会话会整理为 openai；切到 API 时会整理为 CodexPlusPlus。",
-            ]}
-          />
+          <GuideList items={guideItems} />
         </CardContent>
       </Panel>
     </>
@@ -3240,22 +3249,24 @@ function MaintenanceScreen({
 }) {
   const savedCodexAppPath = settings?.settings.codexAppPath ?? "";
   const watcherPlatform = watcher?.platform ?? "unknown";
-  const watcherInstallSupported = watcher?.install_supported === true;
-  const watcherInstallStatus = watcherInstallSupported ? (watcher?.run_value_installed ? "installed" : "not_checked") : "unsupported";
-  const watcherDetail = watcherInstallSupported
-    ? "Windows 使用当前用户 Run 注册表项保持 Codex++ 静默接管，并会清理旧版本启动目录快捷方式以避免重复启动。"
-    : "当前平台不支持安装常驻 watcher；macOS 请通过 Codex++ 入口启动，启用/禁用只切换本地 watcher.disabled 标志。";
+  const isWindows = watcherPlatform === "windows";
+  const isMac = watcherPlatform === "darwin";
+  const appPathPlaceholder = isWindows
+    ? "选择 Codex.exe、app 目录或安装解包目录"
+    : isMac
+      ? "选择 Codex.app 或所在应用目录"
+      : "选择 Codex 应用路径";
+  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "例如 C:\\Program Files\\WindowsApps\\OpenAI.Codex...\\app" : "/Applications/Codex.app");
   return (
     <>
       <Panel>
-        <CardHead title="检查与修复" detail="检查入口、Codex 应用和 Watcher 状态" />
+        <CardHead title="检查与修复" detail={isWindows ? "检查入口、Codex 应用和 Watcher 状态" : "检查入口和 Codex 应用状态"} />
         <CardContent>
           <div className="status-table">
             <StatusRow title="Codex 应用" status={overview?.codex_app.status} path={overview?.codex_app.path} />
             <StatusRow title="静默启动入口" status={overview?.silent_shortcut.status} path={overview?.silent_shortcut.path} />
             <StatusRow title="管理控制台入口" status={overview?.management_shortcut.status} path={overview?.management_shortcut.path} />
-            <StatusRow title="Watcher 自动接管" status={watcher?.enabled ? "ok" : "disabled"} path={watcher?.disabled_flag} />
-            <StatusRow title="Watcher 安装支持" status={watcherInstallStatus} path={`平台：${platformLabel(watcherPlatform)}`} />
+            {isWindows ? <StatusRow title="Watcher 自动接管" status={watcher?.enabled ? "ok" : "disabled"} path={watcher?.disabled_flag} /> : null}
           </div>
           <Toolbar>
             <Button onClick={() => void actions.checkHealth()}>检查</Button>
@@ -3269,7 +3280,7 @@ function MaintenanceScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="入口管理" detail="快捷方式写入系统实际桌面位置，不使用写死桌面路径" />
+        <CardHead title="入口管理" detail={isWindows ? "快捷方式写入系统实际桌面位置，不使用写死桌面路径" : "在 /Applications 写入 Codex++ 应用入口"} />
         <CardContent>
           <label className="check-row">
             <input checked={removeOwnedData} onChange={(event) => onRemoveOwnedDataChange(event.currentTarget.checked)} type="checkbox" />
@@ -3288,34 +3299,30 @@ function MaintenanceScreen({
           </Toolbar>
         </CardContent>
       </Panel>
-      <Panel>
-        <CardHead title="自动接管" detail={watcherInstallSupported ? "Windows watcher 用于保持 Codex++ 接管状态" : "macOS 当前仅支持手动入口和本地启用状态"} />
-        <CardContent>
-          <div className={`platform-note ${watcherInstallSupported ? "" : "limited"}`}>
-            <ShieldCheck className="h-4 w-4" />
-            <span>{watcherDetail}</span>
-          </div>
-          {watcherInstallSupported ? (
+      {isWindows ? (
+        <Panel>
+          <CardHead title="自动接管" detail="Windows watcher 用于保持 Codex++ 接管状态" />
+          <CardContent>
+            <div className="platform-note">
+              <ShieldCheck className="h-4 w-4" />
+              <span>Windows 使用当前用户 Run 注册表项保持 Codex++ 静默接管，并会清理旧版本启动目录快捷方式以避免重复启动。</span>
+            </div>
             <div className="status-table compact-path">
               <StatusRow title="Run 项名称" status={watcher?.run_value_installed ? "installed" : "not_checked"} path={watcher?.run_value_name || "CodexPlusPlusWatcher"} />
               <StatusRow title="旧启动快捷方式" status={watcher?.startup_shortcut_installed ? "found" : "ok"} path={watcher?.startup_shortcut || null} />
               <StatusRow title="启动器命令" status={watcher?.launcher_path ? "found" : "not_checked"} path={`${watcher?.launcher_path || ""} ${watcher?.launcher_arguments || ""}`.trim() || null} />
             </div>
-          ) : null}
-          <Toolbar>
-            {watcherInstallSupported ? (
-              <>
-                <Button variant="secondary" onClick={() => void actions.installWatcher()}>安装 watcher</Button>
-                <Button variant="secondary" onClick={() => void actions.uninstallWatcher()}>移除 watcher</Button>
-              </>
-            ) : null}
-            <Button variant="secondary" onClick={() => void actions.enableWatcher()}>启用</Button>
-            <Button variant="secondary" onClick={() => void actions.disableWatcher()}>禁用</Button>
-          </Toolbar>
-        </CardContent>
-      </Panel>
+            <Toolbar>
+              <Button variant="secondary" onClick={() => void actions.installWatcher()}>安装 watcher</Button>
+              <Button variant="secondary" onClick={() => void actions.uninstallWatcher()}>移除 watcher</Button>
+              <Button variant="secondary" onClick={() => void actions.enableWatcher()}>启用</Button>
+              <Button variant="secondary" onClick={() => void actions.disableWatcher()}>禁用</Button>
+            </Toolbar>
+          </CardContent>
+        </Panel>
+      ) : null}
       <Panel>
-        <CardHead title="Codex 应用路径" detail="免安装版或解包版只需要选择一次，之后静默启动会自动复用" />
+        <CardHead title="Codex 应用路径" detail={isWindows ? "免安装版或解包版只需要选择一次，之后静默启动会自动复用" : "选择 Codex.app 后，之后静默启动会自动复用"} />
         <CardContent>
           <div className="status-table">
             <StatusRow title="保存路径" status={savedCodexAppPath ? "ok" : "not_checked"} path={savedCodexAppPath || null} />
@@ -3324,7 +3331,7 @@ function MaintenanceScreen({
           <Field label="保存的应用路径">
             <Input
               value={settings?.settings.codexAppPath ?? ""}
-              placeholder="选择 Codex.exe、Codex.app、app 目录或解包目录"
+              placeholder={appPathPlaceholder}
               readOnly
             />
           </Field>
@@ -3333,8 +3340,8 @@ function MaintenanceScreen({
               <Wrench className="h-4 w-4" />
               修复 Codex 程序
             </Button>
-            <Button onClick={() => void actions.chooseCodexAppPath("folder")}>选择应用目录</Button>
-            <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 Codex.exe</Button>
+            <Button onClick={() => void actions.chooseCodexAppPath("folder")}>{isWindows ? "选择应用目录" : "选择 Codex.app"}</Button>
+            {isWindows ? <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 Codex.exe</Button> : null}
             <Button variant="secondary" onClick={() => void actions.clearCodexAppPath()}>清除保存路径</Button>
           </Toolbar>
         </CardContent>
@@ -3346,7 +3353,7 @@ function MaintenanceScreen({
             <Input
               value={launchForm.appPath}
               onChange={(event) => onLaunchFormChange({ ...launchForm, appPath: event.currentTarget.value })}
-              placeholder={savedCodexAppPath || "例如 C:\\Program Files\\WindowsApps\\OpenAI.Codex...\\app"}
+              placeholder={manualLaunchPlaceholder}
             />
           </Field>
           <div className="form-row">
