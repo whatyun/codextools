@@ -51,7 +51,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { Component, useEffect, useMemo, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { backendInvoke, openFileDialog } from "@/backend";
@@ -60,7 +60,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { defaultLanguage, languageOptions, localizeDocument, normalizeLanguage, type LanguageCode } from "@/i18n";
+import { defaultLanguage, languageOptions, localizeDocument, normalizeLanguage, translateText, watchDocumentLocalization, type LanguageCode } from "@/i18n";
 
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
@@ -674,6 +674,10 @@ export function App() {
   const [settingsForm, setSettingsForm] = useState<BackendSettings>({ ...defaultSettings });
   const [removeOwnedData, setRemoveOwnedData] = useState(false);
   const currentLanguage = normalizeLanguage(settingsForm.language);
+  const languageRef = useRef(currentLanguage);
+  languageRef.current = currentLanguage;
+  const tr = (value: string) => translateText(value, languageRef.current);
+  const confirmMessage = (message: string) => window.confirm(tr(message));
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => backendInvoke<T>(command, args);
 
@@ -785,7 +789,7 @@ export function App() {
   const deleteUserScript = async (key: string) => {
     const script = settings?.user_scripts?.scripts?.find((item) => item.key === key);
     const name = script?.name || key;
-    if (!window.confirm(`删除脚本“${name}”？此操作会移除本地脚本文件。`)) return;
+    if (!confirmMessage(`删除脚本“${name}”？此操作会移除本地脚本文件。`)) return;
     const result = await run(() => call<SettingsResult>("delete_user_script", { key }));
     if (result) {
       setSettings(result);
@@ -866,7 +870,7 @@ export function App() {
   };
 
   const restoreSkillMcpBackup = async (id: string) => {
-    if (!window.confirm(`恢复 Skill/MCP 备份“${id}”？恢复前会先备份当前状态。`)) return;
+    if (!confirmMessage(`恢复 Skill/MCP 备份“${id}”？恢复前会先备份当前状态。`)) return;
     const result = await run(() => call<SkillMCPBackupsResult>("restore_skill_mcp_backup", { request: { id } }));
     if (result) {
       setSkillMcpBackups(result);
@@ -877,7 +881,7 @@ export function App() {
   };
 
   const deleteSkillMcpBackup = async (id: string) => {
-    if (!window.confirm(`删除 Skill/MCP 备份“${id}”？此操作不可撤销。`)) return;
+    if (!confirmMessage(`删除 Skill/MCP 备份“${id}”？此操作不可撤销。`)) return;
     const result = await run(() => call<SkillMCPBackupsResult>("delete_skill_mcp_backup", { request: { id } }));
     if (result) {
       setSkillMcpBackups(result);
@@ -1046,7 +1050,7 @@ export function App() {
   };
 
   const uninstallCodexTools = async () => {
-    if (!window.confirm("将启动 Windows 卸载程序，并先移除 Codex++ 入口和 watcher。继续？")) return;
+    if (!confirmMessage("将启动 Windows 卸载程序，并先移除 Codex++ 入口和 watcher。继续？")) return;
     const result = await run(() =>
       call<CommandResult<Record<string, unknown>>>("uninstall_codextools", {
         options: { removeOwnedData },
@@ -1499,7 +1503,9 @@ export function App() {
   useEffect(() => {
     document.documentElement.lang = currentLanguage;
     requestAnimationFrame(() => localizeDocument(document, currentLanguage));
-  });
+  }, [currentLanguage]);
+
+  useEffect(() => watchDocumentLocalization(document, () => languageRef.current), []);
 
   const saveCodexAppPath = async (appPath: string) => {
     const next = { ...settingsForm, codexAppPath: appPath };
@@ -1532,12 +1538,12 @@ export function App() {
       chooseCodexAppPath: async (mode: "folder" | "file") => {
         const selected = await openFileDialog(
           mode === "folder"
-            ? { directory: true, multiple: false, title: "选择 Codex 应用目录" }
+            ? { directory: true, multiple: false, title: tr("选择 Codex 应用目录") }
             : {
                 directory: false,
                 multiple: false,
-                title: "选择 Codex.exe 或 Codex.app",
-                filters: [{ name: "Codex 应用", extensions: ["exe", "app"] }],
+                title: tr("选择 Codex.exe 或 Codex.app"),
+                filters: [{ name: tr("Codex 应用"), extensions: ["exe", "app"] }],
               },
         );
         if (typeof selected === "string" && selected.trim()) {
@@ -1633,6 +1639,7 @@ export function App() {
       enableWatcher: () => watcherAction("enable_watcher"),
       disableWatcher: () => watcherAction("disable_watcher"),
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
+      confirm: confirmMessage,
     }),
     [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries],
   );
@@ -1913,6 +1920,7 @@ type Actions = {
   disableWatcher: () => Promise<void>;
   toggleTheme: () => void;
   checkHealth: () => Promise<void>;
+  confirm: (message: string) => boolean;
 };
 
 function OverviewScreen({
@@ -3989,7 +3997,7 @@ function RelayContextManager({
   };
 
   const deleteEntry = async (entry: CodexContextEntry) => {
-    if (!window.confirm(`删除 ${contextKindLabel(entry.kind)}「${entry.id}」？`)) return;
+    if (!actions.confirm(`删除 ${contextKindLabel(entry.kind)}「${entry.id}」？`)) return;
     const next = await actions.deleteContextEntry(form, entry.kind, entry.id);
     if (next) onFormChange(next);
   };

@@ -19,12 +19,48 @@ package main
 
 static ManagerWindowDelegate *managerWindowDelegate;
 
+static NSMenuItem *addMenuItem(NSMenu *menu, NSString *title, SEL action, NSString *keyEquivalent, NSEventModifierFlags modifiers) {
+	NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:keyEquivalent];
+	[item setKeyEquivalentModifierMask:modifiers];
+	[menu addItem:item];
+	return item;
+}
+
+static void installManagerMenu(NSString *appTitle) {
+	NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
+
+	NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+	[mainMenu addItem:appMenuItem];
+	NSMenu *appMenu = [[NSMenu alloc] initWithTitle:appTitle];
+	[appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", appTitle]
+		action:@selector(terminate:)
+		keyEquivalent:@"q"];
+	[appMenuItem setSubmenu:appMenu];
+
+	NSMenuItem *editMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+	[mainMenu addItem:editMenuItem];
+	NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+	addMenuItem(editMenu, @"Undo", @selector(undo:), @"z", NSEventModifierFlagCommand);
+	addMenuItem(editMenu, @"Redo", @selector(redo:), @"z", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+	[editMenu addItem:[NSMenuItem separatorItem]];
+	addMenuItem(editMenu, @"Cut", @selector(cut:), @"x", NSEventModifierFlagCommand);
+	addMenuItem(editMenu, @"Copy", @selector(copy:), @"c", NSEventModifierFlagCommand);
+	addMenuItem(editMenu, @"Paste", @selector(paste:), @"v", NSEventModifierFlagCommand);
+	addMenuItem(editMenu, @"Paste and Match Style", @selector(pasteAsPlainText:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagShift);
+	[editMenu addItem:[NSMenuItem separatorItem]];
+	addMenuItem(editMenu, @"Select All", @selector(selectAll:), @"a", NSEventModifierFlagCommand);
+	[editMenuItem setSubmenu:editMenu];
+
+	[NSApp setMainMenu:mainMenu];
+}
+
 static void runManagerWindow(const char *titleChars, const char *urlChars) {
 	@autoreleasepool {
 		NSString *title = [NSString stringWithUTF8String:titleChars];
 		NSString *urlString = [NSString stringWithUTF8String:urlChars];
 		NSApplication *app = [NSApplication sharedApplication];
 		[app setActivationPolicy:NSApplicationActivationPolicyRegular];
+		installManagerMenu(title);
 
 		NSRect frame = NSMakeRect(0, 0, 1180, 780);
 		NSWindowStyleMask style = NSWindowStyleMaskTitled |
@@ -48,6 +84,7 @@ static void runManagerWindow(const char *titleChars, const char *urlChars) {
 		[webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:urlString]]];
 
 		[window makeKeyAndOrderFront:nil];
+		[window makeFirstResponder:webView];
 		[app activateIgnoringOtherApps:YES];
 		[app run];
 	}
