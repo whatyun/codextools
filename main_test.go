@@ -1115,6 +1115,21 @@ func TestCodexCLIExecutableReturnsEmptyWhenOnlyWindowsAppsAliasExists(t *testing
 	}
 }
 
+func TestIsWindowsAppsPathRecognizesPathSegments(t *testing.T) {
+	for _, path := range []string{
+		`C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe`,
+		`C:\Users\A\AppData\Local\Microsoft\WindowsApps\codex.exe`,
+		filepath.Join(t.TempDir(), "WindowsApps", "OpenAI.Codex", "codex.exe"),
+	} {
+		if !isWindowsAppsPath(path) {
+			t.Fatalf("path should be recognized as WindowsApps alias: %q", path)
+		}
+	}
+	if isWindowsAppsPath(filepath.Join(t.TempDir(), "OpenAI", "Codex", "bin", "codex.exe")) {
+		t.Fatal("runtime codex path should not be treated as WindowsApps alias")
+	}
+}
+
 func TestRepairCodexConfigRefreshFailureKeepsRestoredPluginTables(t *testing.T) {
 	home := t.TempDir()
 	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")

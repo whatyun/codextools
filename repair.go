@@ -387,10 +387,14 @@ func usableCodexCLIPath(path string) bool {
 }
 
 func isWindowsAppsPath(path string) bool {
-	normalized := strings.ToLower(filepath.Clean(path))
-	return strings.Contains(normalized, strings.ToLower(`\Program Files\WindowsApps\`)) ||
-		strings.Contains(normalized, strings.ToLower(`/Program Files/WindowsApps/`)) ||
-		strings.Contains(normalized, strings.ToLower(`\WindowsApps\`))
+	normalized := strings.ReplaceAll(filepath.Clean(path), `\`, `/`)
+	normalized = strings.ToLower(filepath.ToSlash(normalized))
+	for _, part := range strings.Split(normalized, "/") {
+		if part == "windowsapps" {
+			return true
+		}
+	}
+	return false
 }
 
 func outputPreview(output string) string {
