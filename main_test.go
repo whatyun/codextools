@@ -1072,6 +1072,49 @@ func TestRefreshCodexMarketplacesRereadsLocalMarketplaceWithoutGitSource(t *test
 	}
 }
 
+func TestCodexCLIExecutablePrefersLocalRuntimeAndSkipsWindowsApps(t *testing.T) {
+	localAppData := t.TempDir()
+	userProfile := t.TempDir()
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("USERPROFILE", userProfile)
+	t.Setenv("CODEX_CLI_PATH", filepath.Join(t.TempDir(), "Program Files", "WindowsApps", "OpenAI.Codex", "app", "resources", "codex.exe"))
+	writeTestFile(t, os.Getenv("CODEX_CLI_PATH"), "blocked")
+	runtimeCLI := filepath.Join(localAppData, "OpenAI", "Codex", "bin", "fb2111b91430cb17", "codex.exe")
+	writeTestFile(t, runtimeCLI, "runtime")
+	olderCLI := filepath.Join(localAppData, "OpenAI", "Codex", "bin", "0000000000000000", "codex.exe")
+	writeTestFile(t, olderCLI, "older")
+
+	originalGOOS := currentRuntimeGOOS
+	currentRuntimeGOOS = func() string { return "windows" }
+	t.Cleanup(func() {
+		currentRuntimeGOOS = originalGOOS
+	})
+
+	if got := codexCLIExecutable(); got != runtimeCLI {
+		t.Fatalf("codex CLI should prefer user-local runtime and skip WindowsApps alias:\n got: %q\nwant: %q", got, runtimeCLI)
+	}
+}
+
+func TestCodexCLIExecutableReturnsEmptyWhenOnlyWindowsAppsAliasExists(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	windowsAppsDir := filepath.Join(t.TempDir(), "WindowsApps")
+	t.Setenv("PATH", windowsAppsDir)
+	t.Setenv("CODEX_CLI_PATH", filepath.Join(windowsAppsDir, "OpenAI.Codex", "app", "resources", "codex.exe"))
+	writeTestFile(t, os.Getenv("CODEX_CLI_PATH"), "blocked")
+	writeTestFile(t, filepath.Join(windowsAppsDir, "codex.exe"), "blocked")
+
+	originalGOOS := currentRuntimeGOOS
+	currentRuntimeGOOS = func() string { return "windows" }
+	t.Cleanup(func() {
+		currentRuntimeGOOS = originalGOOS
+	})
+
+	if got := codexCLIExecutable(); got != "" {
+		t.Fatalf("codex CLI should not fall back to an unusable WindowsApps alias, got %q", got)
+	}
+}
+
 func TestRepairCodexConfigRefreshFailureKeepsRestoredPluginTables(t *testing.T) {
 	home := t.TempDir()
 	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")

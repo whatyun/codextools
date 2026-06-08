@@ -27,6 +27,7 @@ type codexCommandOutput struct {
 }
 
 var runCodexPluginCommand = defaultRunCodexPluginCommand
+var currentRuntimeGOOS = func() string { return runtime.GOOS }
 
 func (s *server) syncProvidersNow() commandResult {
 	result := runProviderSync(codexHomeDir())
@@ -288,6 +289,10 @@ func hasRefreshableCodexMarketplaces(home string) bool {
 
 func defaultRunCodexPluginCommand(home string, args ...string) codexCommandOutput {
 	command := codexCLIExecutable()
+	label := "codex " + strings.Join(args, " ")
+	if strings.TrimSpace(command) == "" {
+		return codexCommandOutput{Command: label, Err: fmt.Errorf("未找到可用的 Codex CLI（已跳过 WindowsApps alias）")}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -297,22 +302,95 @@ func defaultRunCodexPluginCommand(home string, args ...string) codexCommandOutpu
 	if ctx.Err() == context.DeadlineExceeded {
 		err = ctx.Err()
 	}
-	return codexCommandOutput{Command: "codex " + strings.Join(args, " "), Output: string(out), Err: err}
+	return codexCommandOutput{Command: label, Output: string(out), Err: err}
 }
 
 func codexCLIExecutable() string {
-	resourcesDir := codexResourcesDir()
-	candidate := filepath.Join(resourcesDir, "codex")
-	if runtime.GOOS == "windows" {
-		candidate += ".exe"
-	}
-	if fileExists(candidate) {
-		return candidate
-	}
-	if path, err := exec.LookPath("codex"); err == nil {
+	if path := usableCodexCLIExecutable(); path != "" {
 		return path
 	}
-	return "codex"
+	if path := bundledCodexCLIExecutable(); path != "" {
+		return path
+	}
+	if path, err := exec.LookPath("codex"); err == nil {
+		if usableCodexCLIPath(path) {
+			return path
+		}
+	}
+	if currentRuntimeGOOS() != "windows" {
+		return "codex"
+	}
+	return ""
+}
+
+func bundledCodexCLIExecutable() string {
+	resourcesDir := codexResourcesDir()
+	candidate := filepath.Join(resourcesDir, "codex")
+	if currentRuntimeGOOS() == "windows" {
+		candidate += ".exe"
+	}
+	if usableCodexCLIPath(candidate) {
+		return candidate
+	}
+	return ""
+}
+
+func usableCodexCLIExecutable() string {
+	if explicit := strings.TrimSpace(os.Getenv("CODEX_CLI_PATH")); usableCodexCLIPath(explicit) {
+		return explicit
+	}
+	if currentRuntimeGOOS() != "windows" {
+		return ""
+	}
+	for _, candidate := range discoverWindowsCodexRuntimeCLIs() {
+		if usableCodexCLIPath(candidate) {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath("codex.exe"); err == nil && usableCodexCLIPath(path) {
+		return path
+	}
+	return ""
+}
+
+func discoverWindowsCodexRuntimeCLIs() []string {
+	var candidates []string
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			candidates = append(candidates, path)
+		}
+	}
+	for _, root := range []string{os.Getenv("LOCALAPPDATA"), filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")} {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		binRoot := filepath.Join(root, "OpenAI", "Codex", "bin")
+		matches, _ := filepath.Glob(filepath.Join(binRoot, "*", "codex.exe"))
+		sort.Strings(matches)
+		for i := len(matches) - 1; i >= 0; i-- {
+			add(matches[i])
+		}
+		add(filepath.Join(binRoot, "codex.exe"))
+	}
+	return candidates
+}
+
+func usableCodexCLIPath(path string) bool {
+	if strings.TrimSpace(path) == "" || !fileExists(path) {
+		return false
+	}
+	if currentRuntimeGOOS() == "windows" && isWindowsAppsPath(path) {
+		return false
+	}
+	return true
+}
+
+func isWindowsAppsPath(path string) bool {
+	normalized := strings.ToLower(filepath.Clean(path))
+	return strings.Contains(normalized, strings.ToLower(`\Program Files\WindowsApps\`)) ||
+		strings.Contains(normalized, strings.ToLower(`/Program Files/WindowsApps/`)) ||
+		strings.Contains(normalized, strings.ToLower(`\WindowsApps\`))
 }
 
 func outputPreview(output string) string {
@@ -468,7 +546,6 @@ func repairNodeReplMCPConfig(home, contents string) (string, int) {
 	resourcesDir := codexResourcesDir()
 	nodeReplPath := filepath.Join(resourcesDir, "node_repl")
 	nodePath := filepath.Join(resourcesDir, "node")
-	codexCLIPath := filepath.Join(resourcesDir, "codex")
 	if !fileExists(nodeReplPath) || !fileExists(nodePath) {
 		return contents, 0
 	}
@@ -482,11 +559,13 @@ func repairNodeReplMCPConfig(home, contents string) (string, int) {
 		"[mcp_servers.node_repl.env]",
 		`BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"`,
 		`BROWSER_USE_MARKETPLACE_NAME = "openai-bundled"`,
-		"CODEX_CLI_PATH = " + quoteToml(codexCLIPath),
 		"CODEX_HOME = " + quoteToml(home),
 		`NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"`,
 		`NODE_REPL_NODE_MODULE_DIRS = ""`,
 		"NODE_REPL_NODE_PATH = " + quoteToml(nodePath),
+	}
+	if codexCLIPath := codexCLIExecutable(); codexCLIPath != "" && fileExists(codexCLIPath) {
+		lines = append(lines[:8], append([]string{"CODEX_CLI_PATH = " + quoteToml(codexCLIPath)}, lines[8:]...)...)
 	}
 	if hashes := trustedBrowserClientHashes(home); len(hashes) > 0 {
 		lines = append(lines, "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "+quoteToml(strings.Join(hashes, ",")))
