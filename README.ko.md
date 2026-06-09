@@ -59,16 +59,19 @@ git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
 
 ### macOS에서 열 수 없거나 손상되었다고 표시됩니다
 
-패키지가 서명 또는 공증되지 않은 경우 macOS Gatekeeper가 차단하며 앱이 손상되었다고 표시할 수 있습니다.
+패키지가 서명 또는 공증되지 않은 경우 macOS Gatekeeper가 `.pkg` 설치 파일이나 설치된 App을 차단하며 손상되었다고 표시할 수 있습니다.
+
+![Codex++ 관리 도구가 손상되었다고 표시하는 macOS 경고](./docs/assets/macos-damaged-warning.png)
 
 터미널에서 아래 명령으로 격리 속성을 제거하세요.
 
 ```bash
+sudo xattr -rd com.apple.quarantine ~/Downloads/CodexTools-*-macos-*.pkg
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++ 管理工具.app"
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++.app"
 ```
 
-실행 후 `Codex++` 또는 `Codex++ 管理工具`를 다시 열면 됩니다.
+설치 단계에서 차단되면 다운로드한 `.pkg`에 첫 번째 명령을 실행한 뒤 다시 설치하세요. 설치 후 실행 단계에서 차단되면 `/Applications`의 두 App에 나머지 두 명령을 실행한 뒤 `Codex++` 또는 `Codex++ 管理工具`를 다시 열면 됩니다.
 
 ### macOS Intel에서도 사용할 수 있나요
 

@@ -59,16 +59,19 @@ git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
 
 ### macOS で開けない、または壊れていると表示される
 
-パッケージが未署名または未公証の場合、macOS Gatekeeper がブロックし、アプリが壊れていると表示することがあります。
+パッケージが未署名または未公証の場合、macOS Gatekeeper が `.pkg` インストーラーまたはインストール後の App をブロックし、壊れていると表示することがあります。
+
+![Codex++ 管理ツールが壊れていると表示する macOS 警告](./docs/assets/macos-damaged-warning.png)
 
 次のコマンドで隔離属性を削除してください。
 
 ```bash
+sudo xattr -rd com.apple.quarantine ~/Downloads/CodexTools-*-macos-*.pkg
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++ 管理工具.app"
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++.app"
 ```
 
-実行後、`Codex++` または `Codex++ 管理工具` を再度開いてください。
+インストール時にブロックされる場合は、ダウンロードした `.pkg` に対して最初のコマンドを実行してから再インストールしてください。インストール後の起動時にブロックされる場合は、`/Applications` 内の 2 つの App に対して後半 2 つのコマンドを実行し、`Codex++` または `Codex++ 管理工具` を再度開いてください。
 
 ### macOS Intel でも使えますか
 

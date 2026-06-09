@@ -60,16 +60,19 @@ This makes the new worktree start from the latest remote-tracking branch instead
 
 ### macOS Says the App Cannot Be Opened or Is Damaged
 
-Unsigned or non-notarized packages may be blocked by macOS Gatekeeper and shown as damaged.
+Unsigned or non-notarized builds may be blocked by macOS Gatekeeper, either at the `.pkg` installer stage or after the apps are installed.
+
+![macOS warning that Codex++ Manager is damaged](./docs/assets/macos-damaged-warning.png)
 
 Run these commands in Terminal to remove the quarantine attribute:
 
 ```bash
+sudo xattr -rd com.apple.quarantine ~/Downloads/CodexTools-*-macos-*.pkg
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++ 管理工具.app"
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++.app"
 ```
 
-Then reopen `Codex++` or `Codex++ 管理工具`.
+If the installer is blocked, run the first command on the downloaded `.pkg` and install again. If launch is blocked after installation, run the two `/Applications` commands, then reopen `Codex++` or `Codex++ 管理工具`.
 
 ### Can macOS Intel Use It?
 

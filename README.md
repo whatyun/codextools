@@ -118,16 +118,19 @@ git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
 
 ### macOS 提示无法打开或已损坏
 
-当前安装包未签名/未公证时，macOS Gatekeeper 可能拦截，出现“已损坏，无法打开”的提示。
+当前安装包未签名/未公证时，macOS Gatekeeper 可能拦截 `.pkg` 安装包或安装后的 App，出现“已损坏，无法打开”的提示。
+
+![macOS 提示 Codex++ 管理工具已损坏](./docs/assets/macos-damaged-warning.png)
 
 如果遇到该提示，可以在终端执行下面两条命令，解除苹果系统的安全隔离限制：
 
 ```bash
+sudo xattr -rd com.apple.quarantine ~/Downloads/CodexTools-*-macos-*.pkg
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++ 管理工具.app"
 sudo xattr -rd com.apple.quarantine "/Applications/Codex++.app"
 ```
 
-执行后重新打开 `Codex++` 或 `Codex++ 管理工具` 即可。
+如果拦截发生在安装阶段，先对下载的 `.pkg` 执行第一条命令后重新安装；如果拦截发生在启动阶段，再对 `/Applications` 里的两个 App 执行后两条命令。执行后重新打开 `Codex++` 或 `Codex++ 管理工具` 即可。
 
 ### macOS Intel 能用吗
 
