@@ -1,41 +1,44 @@
 # CodexTools
 
-[![README in Chinese](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-0f766e)](./README.zh-CN.md)
+![中文](https://img.shields.io/badge/%F0%9F%87%A8%F0%9F%87%B3-%E4%B8%AD%E6%96%87-0f766e)
+[![English](https://img.shields.io/badge/%F0%9F%87%BA%F0%9F%87%B8-English-2563eb)](./README.en.md)
+[![日本語](https://img.shields.io/badge/%F0%9F%87%AF%F0%9F%87%B5-%E6%97%A5%E6%9C%AC%E8%AA%9E-d97706)](./README.ja.md)
+[![한국어](https://img.shields.io/badge/%F0%9F%87%B0%F0%9F%87%B7-%ED%95%9C%EA%B5%AD%EC%96%B4-7c3aed)](./README.ko.md)
 
-CodexTools is a standalone Go + React desktop manager for Codex setup, launch, connection modes, UI enhancements, scripts, diagnostics, and repair workflows.
-It keeps the task-oriented manager UI, relay and provider tooling, script management, local repair actions, packaged downloads, and support diagnostics in one repo that can be built and published independently.
+CodexTools 是一个独立 Go + React 桌面管理器，用来集中处理 Codex 安装配置、启动、连接模式、界面增强、脚本、诊断和修复流程。
+它把任务式管理界面、Relay 和 Provider 配置、脚本管理、本地修复、桌面下载包和支持诊断放到一个可以单独构建和发布的项目里。
 
-## What it includes
+## 包含内容
 
-- A Go backend that serves the web UI and keeps the command contract stable.
-- A Gemini-inspired manager UI redesigned for non-technical users.
-- Guided first-run setup, launch status, connection mode selection, relay profile management, provider sync, script market integration, logs, diagnostics, and repair tools.
-- macOS and Windows desktop packages published from this repository.
-- A self-contained repository layout so the manager can be built without the original monorepo.
+- Go 后端：负责本地命令分发、静态资源服务和桌面式启动体验。
+- React 管理器界面：面向非技术用户，入口清晰、操作集中。
+- 新手引导、启动状态、连接模式选择、Relay 配置、历史对话修复、脚本中心、运行日志、诊断报告、修复工具。
+- 从当前仓库发布 macOS 和 Windows 桌面下载包。
+- 独立仓库结构：不再依赖原始单体仓库路径。
 
-## Repository layout
+## 目录结构
 
-- `main.go`: binary entry point, build-time role switch, embedded assets, and shared constants.
-- `manager.go`: local HTTP manager, static UI serving, command dispatch, Codex app discovery, and CCS provider import.
-- `launcher.go`: silent launcher flow, Codex process startup, restart handling, and launch status updates.
-- `helper.go`: helper HTTP server, local relay proxy, CORS responses, and image/text relay routing.
-- `bridge.go`: Chrome DevTools Protocol integration, renderer bridge injection, and bridge request handling.
-- `settings.go`: settings defaults, persistence, repository root detection, and embedded/web dist lookup.
-- `relay.go`: relay profile application, auth/config status, relay file editing, and relay profile tests.
-- `repair.go`: Codex config repair, plugin recovery, provider sync, SQLite/global-state maintenance, and TOML table repair helpers.
-- `scripts.go`: script market loading, script install/delete, and user script inventory.
-- `entrypoints.go`: desktop entry/app bundle/shortcut installation and Windows watcher support.
-- `diagnostics.go`: diagnostic log writing, log tailing, and support report generation.
-- `toml.go`: focused TOML string helpers used by relay and repair flows.
-- `util.go`: small shared HTTP, JSON, path, argument, and type-conversion helpers.
-- `types.go`: shared backend data structures.
-- `desktop_darwin.go`, `desktop_other.go`: platform-specific manager window hooks.
-- `web/`: React + Vite manager UI.
-- `docs/`: GitHub Pages project introduction, download page, and public assets.
+- `main.go`：二进制入口、构建时角色切换、内嵌资源和共享常量。
+- `manager.go`：本地 HTTP 管理器、静态前端服务、命令分发、Codex App 发现和 CCS 供应商导入。
+- `launcher.go`：静默启动器流程、Codex 进程启动、重启处理和启动状态写入。
+- `helper.go`：helper HTTP 服务、本地中转代理、CORS 响应和图片/文本中转路由。
+- `bridge.go`：Chrome DevTools Protocol 集成、渲染进程桥接注入和桥接请求处理。
+- `settings.go`：设置默认值、持久化、仓库根目录发现和前端构建产物查找。
+- `relay.go`：中转配置应用、登录/配置状态、配置文件编辑和中转连通性测试。
+- `repair.go`：Codex 配置修复、插件恢复、Provider 同步、SQLite/global-state 维护和 TOML 表修复辅助。
+- `scripts.go`：脚本市场加载、脚本安装/删除和用户脚本清单。
+- `entrypoints.go`：桌面入口、App Bundle、快捷方式安装和 Windows watcher 支持。
+- `diagnostics.go`：诊断日志写入、日志截取和支持报告生成。
+- `toml.go`：Relay 与修复流程共用的 TOML 字符串工具。
+- `util.go`：通用 HTTP、JSON、路径、参数和类型转换辅助函数。
+- `types.go`：后端共享数据结构。
+- `desktop_darwin.go`、`desktop_other.go`：平台相关的管理器窗口挂钩。
+- `web/`：React + Vite 前端。
+- `docs/`：GitHub Pages 下载页和公开展示资源。
 
-The Go backend is still one `package main` so release scripts can keep using `-ldflags "-X main.binaryRole=..."`, but the implementation is split by responsibility to reduce merge conflicts and make ownership clearer.
+Go 后端仍然保持在同一个 `package main` 中，这样发布脚本可以继续使用 `-ldflags "-X main.binaryRole=..."`；具体实现按职责拆分，减少多人开发时的冲突，也让模块归属更清楚。
 
-## Run locally
+## 本地运行
 
 ```bash
 npm --prefix web install
@@ -43,7 +46,7 @@ npm --prefix web run vite:build
 go run .
 ```
 
-## Build
+## 构建
 
 ```bash
 npm --prefix web run check
@@ -51,92 +54,119 @@ npm --prefix web run vite:build
 go build -o codextools .
 ```
 
-## Feature overview
+## 功能说明
 
-1. Simple launch surface
-   The home screen exposes only the actions a normal user needs first: launch, connect service, inspect status, and repair paths.
-2. Relay and API management
-   Profiles support official login, compatible API mode, protocol switching, relay testing, and injection helpers.
-3. UI enhancement controls
-   The manager keeps feature toggles, launch mode selection, and script-related tooling in one place.
-4. Script center
-   Users can install, enable, disable, update, and remove user scripts without editing config files manually.
-5. Recovery and diagnostics
-   Built-in logs, diagnostics output, path repair, and shortcut repair reduce support friction.
-6. Legacy conversation repair
-   Provider sync tools help recover visibility for older local conversations.
+1. 首页启动区
+   把启动、连接服务、状态检查和修复入口集中到首页，减少非技术用户的判断成本。
+2. 中转与 API 管理
+   支持官方登录、兼容 API、协议切换、中转测试和注入辅助。
+3. 界面增强控制
+   管理增强功能、启动模式以及相关辅助能力。
+4. 脚本中心
+   支持脚本市场安装、本地启用禁用、更新和卸载。
+5. 修复与诊断
+   集成日志、诊断报告、路径修复和快捷方式修复。
+6. 历史对话修复
+   提供旧会话提供商归属修复能力，减少“记录看不见”的问题。
 
-## Screenshots
+## 界面截图
 
-The project introduction page now includes real manager screenshots with feature descriptions:
+### 首页仪表盘
 
-### Home dashboard
+![CodexTools 首页仪表盘，展示启动状态、连接模式、界面增强模式和修复入口](./docs/assets/screenshot-home.png)
 
-![CodexTools home dashboard showing launch status, connection mode, UI enhancement mode, and repair entry points](./docs/assets/screenshot-home.png)
+首页直接显示本地环境是否就绪，提供主要启动按钮，并把连接服务、界面功能、入口修复和关键状态集中到一个页面。
 
-The first screen shows whether the local setup is ready, exposes the primary launch button, and keeps connection, UI features, and repair entry points close together.
+### 新手安装引导
 
-### Beginner guide
+![CodexTools 新手引导，展示系统识别、Codex 安装状态、CCSwitch 导入、模式选择和启动步骤](./docs/assets/screenshot-onboarding.png)
 
-![CodexTools beginner guide showing system detection, Codex install status, CCSwitch import, mode selection, and launch steps](./docs/assets/screenshot-onboarding.png)
+新手流程按顺序完成系统识别、Codex 安装检查、CCSwitch 导入、连接模式选择和启动，降低第一次配置成本。
 
-The guided flow checks platform and architecture, confirms Codex installation, imports CCSwitch providers, selects the connection mode, and ends at launch.
+- 首页仪表盘：展示启动状态、当前连接、界面增强模式、入口路径和关键状态。
+- 新手安装引导：按系统识别、Codex 安装、CCSwitch 导入、模式选择、启动 Codex++ 的顺序完成首次配置。
+- 连接服务：集中管理官方登录、官方混合 API、中转 API、供应商列表、CCSwitch 导入和连通性测试。
+- 界面功能：管理会话删除、Markdown 导出、项目移动、Timeline 和用户脚本。
 
-- Home dashboard: launch status, active connection, UI enhancement mode, entry paths, and key health checks.
-- Beginner guide: system detection, Codex install check, CCSwitch import, mode selection, and Codex++ launch flow.
-- Connection service: official login, mixed API mode, relay/API providers, CCSwitch import, and connectivity testing.
-- UI features: session delete, Markdown export, project move, Timeline, and user script controls.
+## 常见问题
 
-Screenshot assets live in `docs/assets/` and are referenced directly by the public project page.
+以下内容来自 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 的常见问题，并按 CodexTools 当前项目语境整理。
 
-## Telegram community
+### CodexTools 菜单没出现
 
-Telegram: `https://t.me/wanai8`
+确认是从 `Codex++` 入口启动，而不是原版 Codex。也可以打开管理工具的“诊断”和“日志”页面查看注入状态。
 
-## Community links
+### 插件内显示后端连不上
 
-This open-source project is linked with and recognized by the LINUX DO community:
+先在浏览器或 PowerShell 里测试：
 
-- LINUX DO: <https://linux.do/>
-
-## Project philosophy
-
-CodexTools is rebuilt so more people can actually use the manager. The original project created a useful foundation, but as the code, product direction, and community expectations evolved, there were differences in direction and practical reasons to explore a separate branch.
-
-This project is that branch. It is built from my own thinking about the manager experience while keeping the open-source spirit that made the work possible. The goal is not to reject the original project, but to keep another path open for users who need a simpler, more accessible, and more actively shaped tool.
-
-CodexTools does not accept sponsorships or donations. It is maintained as an open, community-oriented open-source project, with the code and direction kept public for anyone who wants to study, use, discuss, or fork it.
-
-## Project origin and thanks
-
-CodexTools is a standalone Go refactor and manager UI project based on the earlier Codex++ work.
-Thanks to the original Codex++ project for the foundation, workflow ideas, and user-facing tool direction.
-
-- Original project: <https://github.com/BigPizzaV3/CodexPlusPlus>
-- Refactor source: <https://github.com/hereww/CodexPlusPlus>
-- Standalone project: <https://github.com/hereww/codextools>
-
-## Downloads
-
-- GitHub Pages download page: [docs/downloads.html](./docs/downloads.html)
-- Windows is published as setup installers for traditional Intel/AMD PCs (`windows-x64`) and Windows on ARM devices (`windows-arm64`). Portable zip builds are also attached for both architectures.
-- macOS is published as installer packages for Apple Silicon (`macos-arm64`) and Intel Macs (`macos-x64`). Portable zip builds remain available as secondary artifacts.
-- If macOS blocks the unsigned apps after installation, run:
-
-```bash
-xattr -cr "/Applications/Codex++ 管理工具.app"
-xattr -cr "/Applications/Codex++.app"
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:57321/backend/status -Body "{}" -ContentType "application/json"
 ```
 
-## Project introduction page
+如果接口正常，但插件仍显示超时，通常是 Codex 页面里的 CDP bridge 或脚本缓存问题。重启 CodexTools 托管的 Codex，或在管理工具里查看日志中的 `renderer.script_loaded`、`bridge.request`、`bridge.response`。
 
-The repository includes an English-first project page with a Chinese switch button:
+### Upstream worktree 和 Codex 原生创建有什么区别
 
-- [Open project intro](./docs/index.html)
+CodexTools 的 Upstream worktree 功能等价于先更新远端分支，再执行：
 
-GitHub Pages can publish the `docs/` folder automatically through the included workflow after the repository is pushed.
+```bash
+git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
+```
 
-## Notes
+这样新 worktree 从最新的远端跟踪分支开始，而不是从当前会话所在的本地 HEAD 开始。如果 CodexTools 无法安全识别当前 Codex 版本的原生 worktree 创建表单，请从 CodexTools 菜单中手动填写仓库路径、分支名、worktree 路径、remote 和 base branch。
 
-- The backend still targets the Codex/Codex++ local workflow and keeps compatibility-oriented command names where that reduces migration risk.
-- Watcher install and removal are implemented for Windows. macOS shows an explicit platform limitation and keeps only the local enable/disable flag controls.
+### macOS 提示无法打开或已损坏
+
+当前安装包未签名/未公证时，macOS Gatekeeper 可能拦截，出现“已损坏，无法打开”的提示。
+
+如果遇到该提示，可以在终端执行下面两条命令，解除苹果系统的安全隔离限制：
+
+```bash
+sudo xattr -rd com.apple.quarantine "/Applications/Codex++ 管理工具.app"
+sudo xattr -rd com.apple.quarantine "/Applications/Codex++.app"
+```
+
+执行后重新打开 `Codex++` 或 `Codex++ 管理工具` 即可。
+
+### macOS Intel 能用吗
+
+可以。Release 会分别提供 `macos-x64` 和 `macos-arm64` 包。Intel Mac 下载 x64 包，Apple Silicon 下载 arm64 包。
+
+## 下载
+
+- GitHub Pages 下载页：[docs/downloads.html](./docs/downloads.html)
+- Windows 同时发布传统 Intel/AMD 电脑使用的安装包（`windows-x64`）和 Windows ARM 设备使用的安装包（`windows-arm64`），并保留两个架构的便携 zip。
+- macOS 同时发布 Apple Silicon 安装包（`macos-arm64`）和 Intel Mac 安装包（`macos-x64`），并保留两个架构的便携 zip。
+
+## 电报群
+
+地址：`https://t.me/wanai8`
+
+## 社区链接
+
+我的开源项目已链接认可 LINUX DO 社区：
+
+- LINUX DO：<https://linux.do/>
+
+## 项目理念
+
+重构这个项目的第一个原因，是希望让更多人真正用得上。原项目提供了有价值的基础，但随着代码、产品方向和社区需求变化，项目路线中也出现了一些分歧，以及一些现实层面的原因，所以我希望基于自己的想法继续重构，并发展出一个独立分支。
+
+CodexTools 就是这个分支。它延续开源开放的精神，不是为了否定原项目，而是为了保留另一条可以继续探索的路径：让工具更容易安装、更容易理解，也更适合普通用户长期使用。
+
+本项目不接受任何赞助，也不接受捐助。它会以开放式开源项目的方式维护，代码和方向保持公开，欢迎使用、学习、讨论和继续分支发展。
+
+## 项目来源与鸣谢
+
+CodexTools 是基于早期 Codex++ 工作继续拆分出的独立 Go 重构和管理器界面项目。
+感谢原 Codex++ 项目提供的基础能力、工作流思路和面向用户的工具方向。
+
+- 原始项目：<https://github.com/BigPizzaV3/CodexPlusPlus>
+- 重构来源：<https://github.com/hereww/CodexPlusPlus>
+- 独立项目：<https://github.com/hereww/codextools>
+
+## 说明
+
+- 当前 Go 后端为了兼容已有工作流，仍保留部分面向 Codex/Codex++ 的命令命名。
+- Watcher 安装与移除已补齐 Windows 流程；macOS 会明确显示平台限制，只保留本地启用/禁用标志控制。
