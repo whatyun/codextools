@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,6 +93,12 @@ func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessa
 		result = zedFallbackRequestResponse(payloadMap)
 	case "/zed-remote/open":
 		result = zedOpenRemote(payloadMap)
+	case "/zed-remote/projects":
+		result = zedRemoteProjectsResponse(payloadMap)
+	case "/zed-remote/remember-project":
+		result = zedRememberRemoteProjectResponse(payloadMap)
+	case "/zed-remote/forget-project":
+		result = zedForgetRemoteProjectResponse(payloadMap)
 	case "/upstream-worktree/status":
 		result = upstreamWorktreeStatusValue()
 	case "/upstream-worktree/defaults":
@@ -143,6 +150,13 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"codexAppUpstreamWorktreeCreate":  settings.CodexAppUpstreamWorktreeCreate,
 		"codexAppNativeMenuPlacement":     settings.CodexAppNativeMenuPlacement,
 		"codexAppServiceTierControls":     settings.CodexAppServiceTierControls,
+		"computerUseGuardEnabled":         settings.ComputerUseGuardEnabled,
+		"zedRemoteOpenStrategy":           settings.ZedRemoteOpenStrategy,
+		"zedRemoteProjectRegistryEnabled": settings.ZedRemoteProjectRegistryEnabled,
+		"zedRemoteSyncToZedSettings":      settings.ZedRemoteSyncToZedSettings,
+		"codexAppImageOverlayEnabled":     settings.CodexAppImageOverlayEnabled,
+		"codexAppImageOverlayPath":        settings.CodexAppImageOverlayPath,
+		"codexAppImageOverlayOpacity":     settings.CodexAppImageOverlayOpacity,
 		"codexGoalsEnabled":               settings.CodexGoalsEnabled,
 		"codexAppVersion":                 r.codexAppVersion(settings),
 		"launchMode":                      settings.LaunchMode,
@@ -188,7 +202,20 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	applyBool("codexAppUpstreamWorktreeCreate", &settings.CodexAppUpstreamWorktreeCreate)
 	applyBool("codexAppNativeMenuPlacement", &settings.CodexAppNativeMenuPlacement)
 	applyBool("codexAppServiceTierControls", &settings.CodexAppServiceTierControls)
+	applyBool("computerUseGuardEnabled", &settings.ComputerUseGuardEnabled)
+	applyBool("zedRemoteProjectRegistryEnabled", &settings.ZedRemoteProjectRegistryEnabled)
+	applyBool("zedRemoteSyncToZedSettings", &settings.ZedRemoteSyncToZedSettings)
+	applyBool("codexAppImageOverlayEnabled", &settings.CodexAppImageOverlayEnabled)
 	applyBool("codexGoalsEnabled", &settings.CodexGoalsEnabled)
+	if _, ok := payload["zedRemoteOpenStrategy"]; ok {
+		settings.ZedRemoteOpenStrategy = normalizeZedOpenStrategy(stringFromAny(payload["zedRemoteOpenStrategy"]))
+	}
+	if _, ok := payload["codexAppImageOverlayPath"]; ok {
+		settings.CodexAppImageOverlayPath = strings.TrimSpace(stringFromAny(payload["codexAppImageOverlayPath"]))
+	}
+	if _, ok := payload["codexAppImageOverlayOpacity"]; ok {
+		settings.CodexAppImageOverlayOpacity = intArg(payload, "codexAppImageOverlayOpacity", settings.CodexAppImageOverlayOpacity)
+	}
 	if value := strings.TrimSpace(stringFromAny(payload["launchMode"])); value == "patch" || value == "relay" {
 		settings.LaunchMode = value
 	}
@@ -460,7 +487,7 @@ func (r *launcherRuntime) installBridge(ctx context.Context, websocketURL string
 		_ = conn.Close()
 		return err
 	}
-	scripts := []string{injectionScript(helperPort)}
+	scripts := []string{injectionScript(helperPort, r.settings)}
 	if bundle := enabledUserScriptBundle(); strings.TrimSpace(bundle) != "" {
 		scripts = append(scripts, bundle)
 	}
@@ -481,12 +508,65 @@ func runtimeEvaluateParams(script string, awaitPromise bool) map[string]any {
 	return map[string]any{"expression": script, "awaitPromise": awaitPromise, "allowUnsafeEvalBlockedByCSP": true}
 }
 
-func injectionScript(helperPort uint16) string {
+func injectionScript(helperPort uint16, settings backendSettings) string {
 	helperURL := fmt.Sprintf("http://127.0.0.1:%d", helperPort)
 	helperJSON, _ := json.Marshal(helperURL)
 	versionJSON, _ := json.Marshal(version)
 	buildJSON, _ := json.Marshal("go-20260524-1")
-	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\n%s", helperJSON, versionJSON, buildJSON, rendererInjectScript)
+	imageOverlayJSON, _ := json.Marshal(imageOverlayConfig(helperPort, settings))
+	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, rendererInjectScript)
+}
+
+func imageOverlayConfig(helperPort uint16, settings backendSettings) map[string]any {
+	imagePath := strings.TrimSpace(settings.CodexAppImageOverlayPath)
+	contentType := overlayImageContentType(imagePath)
+	enabled := settings.CodexAppImageOverlayEnabled && imagePath != "" && contentType != ""
+	dataURL := ""
+	if enabled {
+		if bytes, err := os.ReadFile(imagePath); err == nil {
+			dataURL = fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(bytes))
+		}
+	}
+	if dataURL == "" {
+		enabled = false
+	}
+	opacity := settings.CodexAppImageOverlayOpacity
+	if opacity <= 0 {
+		opacity = 35
+	}
+	if opacity < 1 {
+		opacity = 1
+	}
+	if opacity > 100 {
+		opacity = 100
+	}
+	imageURL := ""
+	if settings.CodexAppImageOverlayEnabled && imagePath != "" && contentType != "" {
+		imageURL = fmt.Sprintf("http://127.0.0.1:%d/overlay/image", helperPort)
+	}
+	return map[string]any{
+		"enabled":  enabled,
+		"opacity":  float64(opacity) / 100.0,
+		"dataUrl":  dataURL,
+		"imageUrl": imageURL,
+	}
+}
+
+func overlayImageContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(path))) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".bmp":
+		return "image/bmp"
+	default:
+		return ""
+	}
 }
 
 func bridgeScript(bindingName string) string {

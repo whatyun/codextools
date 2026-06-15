@@ -67,6 +67,7 @@
   const codexServiceTierRequestOverrideVersion = "2";
   const codexPluginMarketplaceUnlockVersion = "10";
   const codexForcePluginInstallRefreshIntervalMs = 1000;
+  const codexPlusImageOverlayId = "codex-plus-image-overlay";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -2472,10 +2473,53 @@
     }).catch(() => {});
   }
 
+  function installCodexPlusImageOverlay() {
+    const config = window.__CODEX_PLUS_IMAGE_OVERLAY__ || {};
+    const existing = document.getElementById(codexPlusImageOverlayId);
+    const source = config.dataUrl || config.imageUrl || "";
+    if (!config.enabled || !source) {
+      if (existing) existing.remove();
+      return;
+    }
+    const opacity = Math.min(1, Math.max(0.01, Number(config.opacity) || 0.35));
+    const image = existing || document.createElement("img");
+    image.id = codexPlusImageOverlayId;
+    image.src = source;
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    Object.assign(image.style, {
+      position: "fixed",
+      inset: "0",
+      width: "100vw",
+      height: "100vh",
+      objectFit: "contain",
+      objectPosition: "center center",
+      opacity: String(opacity),
+      pointerEvents: "none",
+      zIndex: "2147483646",
+      userSelect: "none",
+    });
+    if (!existing) document.documentElement.appendChild(image);
+    sendCodexPlusDiagnostic("image_overlay_installed", {
+      opacity,
+      sourceKind: source.startsWith("data:") ? "data-uri" : "helper-url",
+    });
+  }
+
+  function scheduleCodexPlusImageOverlay() {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", installCodexPlusImageOverlay, { once: true });
+      return;
+    }
+    installCodexPlusImageOverlay();
+    setTimeout(installCodexPlusImageOverlay, 250);
+  }
+
   sendCodexPlusDiagnostic("script_loaded", {
     version: codexPlusVersion,
     build: codexPlusBuild,
   });
+  scheduleCodexPlusImageOverlay();
 
   function locationThreadId() {
     const source = `${window.location.pathname}${window.location.search}${window.location.hash}`;

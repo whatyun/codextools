@@ -33,7 +33,17 @@ type backendSettings struct {
 	CodexAppUpstreamWorktreeCreate   bool           `json:"codexAppUpstreamWorktreeCreate"`
 	CodexAppNativeMenuPlacement      bool           `json:"codexAppNativeMenuPlacement"`
 	CodexAppServiceTierControls      bool           `json:"codexAppServiceTierControls"`
+	ComputerUseGuardEnabled          bool           `json:"computerUseGuardEnabled"`
+	ZedRemoteOpenStrategy            string         `json:"zedRemoteOpenStrategy"`
+	ZedRemoteProjectRegistryEnabled  bool           `json:"zedRemoteProjectRegistryEnabled"`
+	ZedRemoteSyncToZedSettings       bool           `json:"zedRemoteSyncToZedSettings"`
+	CodexAppImageOverlayEnabled      bool           `json:"codexAppImageOverlayEnabled"`
+	CodexAppImageOverlayPath         string         `json:"codexAppImageOverlayPath"`
+	CodexAppImageOverlayOpacity      int            `json:"codexAppImageOverlayOpacity"`
 	CodexGoalsEnabled                bool           `json:"codexGoalsEnabled"`
+	OnboardingCompleted              bool           `json:"onboardingCompleted"`
+	OnboardingCompletedAt            string         `json:"onboardingCompletedAt"`
+	OnboardingCompletedPlatform      string         `json:"onboardingCompletedPlatform"`
 	LaunchMode                       string         `json:"launchMode"`
 	RelayBaseURL                     string         `json:"relayBaseUrl"`
 	RelayAPIKey                      string         `json:"relayApiKey"`

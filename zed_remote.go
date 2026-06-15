@@ -4,13 +4,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type zedRemoteError struct {
@@ -25,6 +28,22 @@ type sshTarget struct {
 	User string
 	Host string
 	Port *uint16
+}
+
+type zedRemoteProject struct {
+	ID             string    `json:"id"`
+	Label          string    `json:"label"`
+	HostID         string    `json:"hostId"`
+	SSH            sshTarget `json:"ssh"`
+	Path           string    `json:"path"`
+	URL            string    `json:"url"`
+	Source         string    `json:"source"`
+	LastOpenedAtMS *int64    `json:"lastOpenedAtMs,omitempty"`
+	IsCurrent      bool      `json:"isCurrent"`
+}
+
+type zedRemoteProjectRegistry struct {
+	Projects []zedRemoteProject `json:"projects"`
 }
 
 func zedRemoteStatusValue() map[string]any {
@@ -237,7 +256,30 @@ func percentEncodeSegment(segment string) string {
 	return out.String()
 }
 
+func zedCLIArgsForStrategy(strategy, rawURL string) []string {
+	args := []string{}
+	switch normalizeZedOpenStrategy(strategy) {
+	case "addToFocusedWorkspace":
+		args = append(args, "-a")
+	case "reuseWindow":
+		args = append(args, "-r")
+	case "newWindow":
+		args = append(args, "-n")
+	case "default":
+	}
+	return append(args, rawURL)
+}
+
 func launchZedURL(rawURL string) error {
+	return launchZedURLWithStrategy(rawURL, "default")
+}
+
+func launchZedURLWithStrategy(rawURL, strategy string) error {
+	if cliPath := executableInPath("zed"); cliPath != "" {
+		cmd := exec.Command(cliPath, zedCLIArgsForStrategy(strategy, rawURL)...)
+		hideSubprocessWindow(cmd)
+		return cmd.Start()
+	}
 	if runtime.GOOS == "darwin" {
 		if appPath := findZedAppPath(); appPath != "" {
 			cmd := exec.Command("open", "-a", appPath, rawURL)
@@ -245,12 +287,7 @@ func launchZedURL(rawURL string) error {
 			return cmd.Start()
 		}
 	}
-	if cliPath := executableInPath("zed"); cliPath != "" {
-		cmd := exec.Command(cliPath, rawURL)
-		hideSubprocessWindow(cmd)
-		return cmd.Start()
-	}
-	return zedRemoteError{"Zed is not installed or not available on PATH"}
+	return zedRemoteError{"Zed CLI is not installed or not available on PATH"}
 }
 
 func targetFromManagedRemoteConnection(connection map[string]any) (sshTarget, error) {
@@ -327,13 +364,94 @@ func zedOpenRemote(payload map[string]any) map[string]any {
 		var url string
 		url, err = buildZedRemoteURL(target, stringFromAny(payload["path"]))
 		if err == nil {
-			err = launchZedURL(url)
+			strategy := normalizeZedOpenStrategy(firstString(payload["strategy"], loadSettings().ZedRemoteOpenStrategy))
+			err = launchZedURLWithStrategy(url, strategy)
 			if err == nil {
-				return map[string]any{"status": "ok", "url": url}
+				settings := loadSettings()
+				if settings.ZedRemoteProjectRegistryEnabled && payload["remember"] != false {
+					if _, rememberErr := rememberZedRemoteProject(payload, &target, url); rememberErr != nil {
+						appendDiagnosticLog("zed_remote.remember_failed", map[string]any{"error": rememberErr.Error()})
+					}
+				}
+				return map[string]any{"status": "ok", "url": url, "strategy": strategy}
 			}
 		}
 	}
 	return map[string]any{"status": "failed", "message": err.Error()}
+}
+
+func zedRemoteProjectsResponse(payload map[string]any) map[string]any {
+	settings := loadSettings()
+	if !settings.ZedRemoteProjectRegistryEnabled {
+		return map[string]any{"status": "ok", "projects": []zedRemoteProject{}, "message": "Zed 项目记录已关闭"}
+	}
+	projects, err := listZedRemoteProjects(payload, zedRegistryPath(), filepath.Join(codexHomeDir(), "state_5.sqlite"))
+	if err != nil {
+		return map[string]any{"status": "failed", "message": err.Error()}
+	}
+	return map[string]any{"status": "ok", "projects": projects}
+}
+
+func zedRememberRemoteProjectResponse(payload map[string]any) map[string]any {
+	project, err := rememberZedRemoteProject(payload, nil, "")
+	if err != nil {
+		return map[string]any{"status": "failed", "message": err.Error()}
+	}
+	return map[string]any{"status": "ok", "project": project}
+}
+
+func zedForgetRemoteProjectResponse(payload map[string]any) map[string]any {
+	removed, err := forgetZedRemoteProject(payload)
+	if err != nil {
+		return map[string]any{"status": "failed", "message": err.Error()}
+	}
+	return map[string]any{"status": "ok", "removed": removed}
+}
+
+func (s *server) zedRemoteProjects(args map[string]any) commandResult {
+	result := zedRemoteProjectsResponse(mapArgOrSelf(args))
+	status := stringFromAny(result["status"])
+	if status == "ok" {
+		result["message"] = "Zed 远程项目已读取。"
+		return commandResult(result)
+	}
+	if result["message"] == nil {
+		result["message"] = "读取 Zed 远程项目失败。"
+	}
+	return commandResult(result)
+}
+
+func (s *server) zedRemoteOpen(args map[string]any) commandResult {
+	result := zedOpenRemote(mapArgOrSelf(args))
+	if stringFromAny(result["status"]) == "ok" {
+		result["message"] = "已请求 Zed 打开远程项目。"
+		return commandResult(result)
+	}
+	if result["message"] == nil {
+		result["message"] = "打开 Zed 远程项目失败。"
+	}
+	return commandResult(result)
+}
+
+func (s *server) zedRemoteForgetProject(args map[string]any) commandResult {
+	result := zedForgetRemoteProjectResponse(mapArgOrSelf(args))
+	if stringFromAny(result["status"]) == "ok" {
+		projects := zedRemoteProjectsResponse(map[string]any{})
+		projects["removed"] = result["removed"]
+		projects["message"] = "Zed 最近项目记录已移除。"
+		return commandResult(projects)
+	}
+	if result["message"] == nil {
+		result["message"] = "移除 Zed 最近项目失败。"
+	}
+	return commandResult(result)
+}
+
+func mapArgOrSelf(args map[string]any) map[string]any {
+	if request := mapArg(args, "request"); len(request) > 0 {
+		return request
+	}
+	return args
 }
 
 func zedFallbackRequestResponse(payload map[string]any) map[string]any {
@@ -522,6 +640,378 @@ func openRequestForRemotePath(state map[string]any, hostID, remotePath string) (
 		},
 		"path": remotePath,
 	}, nil
+}
+
+func zedRegistryPath() string {
+	return filepath.Join(stateDir(), "zed_remote_projects.json")
+}
+
+func listZedRemoteProjects(payload map[string]any, registryPath, sqlitePath string) ([]zedRemoteProject, error) {
+	var projects []zedRemoteProject
+	state, stateErr := readCodexGlobalStateMap()
+	if stateErr == nil {
+		collectCurrentZedProject(state, payload, &projects)
+		collectCodexRemoteProjects(state, &projects)
+		collectThreadWorkspaceHintProjects(state, &projects)
+		collectSQLiteThreadCWDProjects(state, sqlitePath, &projects)
+	} else if !os.IsNotExist(stateErr) {
+		return nil, stateErr
+	}
+	recent, err := readZedRegistryProjects(registryPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, project := range recent {
+		project.Source = "recent"
+		project.IsCurrent = false
+		pushZedProject(&projects, project)
+	}
+	sort.SliceStable(projects, func(i, j int) bool {
+		if projects[i].IsCurrent != projects[j].IsCurrent {
+			return projects[i].IsCurrent
+		}
+		pi, pj := zedProjectSourcePriority(projects[i].Source), zedProjectSourcePriority(projects[j].Source)
+		if pi != pj {
+			return pi < pj
+		}
+		li, lj := int64(0), int64(0)
+		if projects[i].LastOpenedAtMS != nil {
+			li = *projects[i].LastOpenedAtMS
+		}
+		if projects[j].LastOpenedAtMS != nil {
+			lj = *projects[j].LastOpenedAtMS
+		}
+		if li != lj {
+			return li > lj
+		}
+		return projects[i].Label < projects[j].Label
+	})
+	return projects, nil
+}
+
+func readCodexGlobalStateMap() (map[string]any, error) {
+	data, err := os.ReadFile(codexGlobalStatePath(codexHomeDir()))
+	if err != nil {
+		return nil, err
+	}
+	var state map[string]any
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("Cannot parse Codex remote connection state: %w", err)
+	}
+	return state, nil
+}
+
+func collectCurrentZedProject(state map[string]any, payload map[string]any, projects *[]zedRemoteProject) {
+	hostID := stringFromAny(payload["hostId"])
+	threadID := firstString(payload["threadId"], payload["sessionId"], payload["session_id"])
+	workspaceRoot := firstString(payload["remoteWorkspaceRoot"], payload["workspaceRoot"], payload["cwd"], payload["path"])
+	remoteProjectID := firstString(payload["remoteProjectId"], payload["projectId"])
+	if hostID == "" && threadID == "" && workspaceRoot == "" && remoteProjectID == "" && stringFromAny(state["selected-remote-host-id"]) == "" {
+		return
+	}
+	request, err := fallbackOpenRequestFromGlobalStateWithContext(state, hostID, threadID, workspaceRoot, remoteProjectID)
+	if err != nil {
+		return
+	}
+	project, err := zedProjectFromPayload(request, "currentThread", true, nil)
+	if err == nil {
+		pushZedProject(projects, project)
+	}
+}
+
+func collectCodexRemoteProjects(state map[string]any, projects *[]zedRemoteProject) {
+	for _, item := range orderedRemoteProjectsFromGlobalState(state) {
+		hostID := stringFromAny(item["hostId"])
+		remotePath := stringFromAny(item["remotePath"])
+		if hostID == "" || !strings.HasPrefix(remotePath, "/") {
+			continue
+		}
+		target, err := resolveSSHTargetFromGlobalState(state, hostID)
+		if err != nil {
+			continue
+		}
+		url, err := buildZedRemoteURL(target, remotePath)
+		if err != nil {
+			continue
+		}
+		project := zedProjectFromParts(hostID, target, remotePath, url, firstString(item["label"], item["name"]), "codexRemoteProject", nil, false)
+		pushZedProject(projects, project)
+	}
+}
+
+func collectThreadWorkspaceHintProjects(state map[string]any, projects *[]zedRemoteProject) {
+	hints, _ := state["thread-workspace-root-hints"].(map[string]any)
+	for _, hint := range hints {
+		remotePath := workspacePathFromHint(hint)
+		if !strings.HasPrefix(remotePath, "/") {
+			continue
+		}
+		hostID := hostIDForRemotePath(state, hostIDFromHint(hint), remotePath)
+		if hostID == "" {
+			continue
+		}
+		target, err := resolveSSHTargetFromGlobalState(state, hostID)
+		if err != nil {
+			continue
+		}
+		url, err := buildZedRemoteURL(target, remotePath)
+		if err != nil {
+			continue
+		}
+		project := zedProjectFromParts(hostID, target, remotePath, url, "", "threadWorkspaceHint", nil, false)
+		pushZedProject(projects, project)
+	}
+}
+
+func collectSQLiteThreadCWDProjects(state map[string]any, sqlitePath string, projects *[]zedRemoteProject) {
+	for _, cwd := range sqliteThreadCWDs(sqlitePath) {
+		if !strings.HasPrefix(cwd, "/") {
+			continue
+		}
+		hostID := hostIDForRemotePath(state, "", cwd)
+		if hostID == "" {
+			continue
+		}
+		target, err := resolveSSHTargetFromGlobalState(state, hostID)
+		if err != nil {
+			continue
+		}
+		url, err := buildZedRemoteURL(target, cwd)
+		if err != nil {
+			continue
+		}
+		project := zedProjectFromParts(hostID, target, cwd, url, "", "sqliteThreadCwd", nil, false)
+		pushZedProject(projects, project)
+	}
+}
+
+func sqliteThreadCWDs(path string) []string {
+	if path == "" || !fileExists(path) {
+		return nil
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT DISTINCT cwd FROM threads WHERE cwd IS NOT NULL AND cwd != '' LIMIT 80")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var cwd string
+		if rows.Scan(&cwd) == nil && strings.TrimSpace(cwd) != "" {
+			out = append(out, strings.TrimSpace(cwd))
+		}
+	}
+	return out
+}
+
+func zedProjectFromPayload(payload map[string]any, source string, current bool, lastOpenedAtMS *int64) (zedRemoteProject, error) {
+	target, err := sshTargetFromPayload(payload)
+	if err != nil {
+		return zedRemoteProject{}, err
+	}
+	path := stringFromAny(payload["path"])
+	url := stringFromAny(payload["url"])
+	if url == "" {
+		url, err = buildZedRemoteURL(target, path)
+		if err != nil {
+			return zedRemoteProject{}, err
+		}
+	}
+	return zedProjectFromParts(stringFromAny(payload["hostId"]), target, path, url, stringFromAny(payload["label"]), source, lastOpenedAtMS, current), nil
+}
+
+func zedProjectFromParts(hostID string, target sshTarget, path, url, label, source string, lastOpenedAtMS *int64, current bool) zedRemoteProject {
+	path = strings.TrimSpace(path)
+	if strings.TrimSpace(label) == "" {
+		label = zedLabelFromPath(path)
+	}
+	return zedRemoteProject{
+		ID:             zedProjectID(target, path),
+		Label:          strings.TrimSpace(label),
+		HostID:         strings.TrimSpace(hostID),
+		SSH:            target,
+		Path:           path,
+		URL:            url,
+		Source:         source,
+		LastOpenedAtMS: lastOpenedAtMS,
+		IsCurrent:      current,
+	}
+}
+
+func rememberZedRemoteProject(payload map[string]any, resolvedTarget *sshTarget, resolvedURL string) (zedRemoteProject, error) {
+	target := sshTarget{}
+	var err error
+	if resolvedTarget != nil {
+		target = *resolvedTarget
+	} else {
+		target, err = sshTargetFromPayload(payload)
+		if err != nil {
+			return zedRemoteProject{}, err
+		}
+	}
+	path := stringFromAny(payload["path"])
+	url := resolvedURL
+	if url == "" {
+		url, err = buildZedRemoteURL(target, path)
+		if err != nil {
+			return zedRemoteProject{}, err
+		}
+	}
+	now := time.Now().UnixMilli()
+	project := zedProjectFromParts(stringFromAny(payload["hostId"]), target, path, url, stringFromAny(payload["label"]), "recent", &now, false)
+	registryPath := zedRegistryPath()
+	projects, err := readZedRegistryProjects(registryPath)
+	if err != nil {
+		return zedRemoteProject{}, err
+	}
+	pushZedProject(&projects, project)
+	sort.SliceStable(projects, func(i, j int) bool {
+		li, lj := int64(0), int64(0)
+		if projects[i].LastOpenedAtMS != nil {
+			li = *projects[i].LastOpenedAtMS
+		}
+		if projects[j].LastOpenedAtMS != nil {
+			lj = *projects[j].LastOpenedAtMS
+		}
+		return li > lj
+	})
+	if len(projects) > 100 {
+		projects = projects[:100]
+	}
+	if err := writeZedRegistryProjects(registryPath, projects); err != nil {
+		return zedRemoteProject{}, err
+	}
+	return project, nil
+}
+
+func forgetZedRemoteProject(payload map[string]any) (int, error) {
+	id := stringFromAny(payload["id"])
+	if id == "" {
+		target, err := sshTargetFromPayload(payload)
+		if err != nil {
+			return 0, err
+		}
+		id = zedProjectID(target, stringFromAny(payload["path"]))
+	}
+	path := zedRegistryPath()
+	projects, err := readZedRegistryProjects(path)
+	if err != nil {
+		return 0, err
+	}
+	before := len(projects)
+	filtered := projects[:0]
+	for _, project := range projects {
+		if project.ID != id {
+			filtered = append(filtered, project)
+		}
+	}
+	if err := writeZedRegistryProjects(path, filtered); err != nil {
+		return 0, err
+	}
+	return before - len(filtered), nil
+}
+
+func readZedRegistryProjects(path string) ([]zedRemoteProject, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("Cannot read Codex++ Zed remote project registry: %w", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return nil, nil
+	}
+	var registry zedRemoteProjectRegistry
+	if err := json.Unmarshal(data, &registry); err == nil {
+		return registry.Projects, nil
+	}
+	var projects []zedRemoteProject
+	if err := json.Unmarshal(data, &projects); err != nil {
+		return nil, fmt.Errorf("Cannot parse Codex++ Zed remote project registry: %w", err)
+	}
+	return projects, nil
+}
+
+func writeZedRegistryProjects(path string, projects []zedRemoteProject) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("Cannot write Codex++ Zed remote project registry: %w", err)
+	}
+	data, err := json.MarshalIndent(zedRemoteProjectRegistry{Projects: projects}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("Cannot write Codex++ Zed remote project registry: %w", err)
+	}
+	if err := atomicWrite(path, data); err != nil {
+		return fmt.Errorf("Cannot write Codex++ Zed remote project registry: %w", err)
+	}
+	return nil
+}
+
+func pushZedProject(projects *[]zedRemoteProject, project zedRemoteProject) {
+	if project.ID == "" || project.Path == "" || project.URL == "" {
+		return
+	}
+	for index := range *projects {
+		existing := &(*projects)[index]
+		if existing.ID != project.ID {
+			continue
+		}
+		if zedProjectSourcePriority(project.Source) < zedProjectSourcePriority(existing.Source) {
+			existing.Source = project.Source
+			existing.Label = project.Label
+			existing.HostID = project.HostID
+		}
+		if existing.LastOpenedAtMS == nil || (project.LastOpenedAtMS != nil && *project.LastOpenedAtMS > *existing.LastOpenedAtMS) {
+			existing.LastOpenedAtMS = project.LastOpenedAtMS
+		}
+		existing.IsCurrent = existing.IsCurrent || project.IsCurrent
+		return
+	}
+	*projects = append(*projects, project)
+}
+
+func zedProjectSourcePriority(source string) int {
+	switch source {
+	case "currentThread":
+		return 0
+	case "codexRemoteProject":
+		return 1
+	case "threadWorkspaceHint":
+		return 2
+	case "sqliteThreadCwd":
+		return 3
+	case "recent":
+		return 4
+	default:
+		return 9
+	}
+}
+
+func zedProjectID(target sshTarget, path string) string {
+	port := ""
+	if target.Port != nil {
+		port = strconv.Itoa(int(*target.Port))
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(strings.TrimSpace(target.User) + "|" + strings.TrimSpace(target.Host) + "|" + port + "|" + strings.TrimSpace(path)))
+	return fmt.Sprintf("zed-remote-project:%016x", hash.Sum64())
+}
+
+func zedLabelFromPath(path string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return path
+	}
+	base := filepath.Base(trimmed)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return trimmed
+	}
+	return base
 }
 
 func allASCII(value string, pred func(byte) bool) bool {

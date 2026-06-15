@@ -115,6 +115,9 @@ func defaultSettings() backendSettings {
 		CodexAppZedRemoteOpen:           true,
 		CodexAppUpstreamWorktreeCreate:  true,
 		CodexAppNativeMenuPlacement:     true,
+		ZedRemoteOpenStrategy:           "addToFocusedWorkspace",
+		ZedRemoteProjectRegistryEnabled: true,
+		CodexAppImageOverlayOpacity:     35,
 		LaunchMode:                      "patch",
 		RelayProfiles:                   []relayProfile{defaultRelayProfile()},
 		ActiveRelayID:                   "default",
@@ -165,6 +168,17 @@ func normalizeSettings(settings backendSettings) backendSettings {
 	}
 	settings.Language = normalizeLanguage(settings.Language)
 	settings = normalizeDefaultEnabledSettings(settings)
+	settings.ZedRemoteOpenStrategy = normalizeZedOpenStrategy(settings.ZedRemoteOpenStrategy)
+	if settings.CodexAppImageOverlayOpacity <= 0 {
+		settings.CodexAppImageOverlayOpacity = 35
+	}
+	if settings.CodexAppImageOverlayOpacity > 100 {
+		settings.CodexAppImageOverlayOpacity = 100
+	}
+	if settings.CodexAppImageOverlayOpacity < 1 {
+		settings.CodexAppImageOverlayOpacity = 1
+	}
+	settings.CodexAppImageOverlayPath = strings.TrimSpace(settings.CodexAppImageOverlayPath)
 	common, extractedContext := splitContextConfigSections(settings.RelayCommonConfigContents)
 	settings.RelayCommonConfigContents = normalizeConfigText(common)
 	settings.RelayContextConfigContents = normalizeConfigText(joinConfigSections(settings.RelayContextConfigContents, extractedContext))
@@ -231,6 +245,12 @@ func normalizeSettings(settings backendSettings) backendSettings {
 	if settings.CLIWrapperAPIKeyEnv == "" {
 		settings.CLIWrapperAPIKeyEnv = defaultAPIKeyEnvironment
 	}
+	if !settings.OnboardingCompleted {
+		settings.OnboardingCompletedAt = ""
+		settings.OnboardingCompletedPlatform = ""
+	} else if settings.OnboardingCompletedPlatform == "" {
+		settings.OnboardingCompletedPlatform = runtime.GOOS
+	}
 	return settings
 }
 
@@ -278,7 +298,19 @@ func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {
 	if !settings.CodexAppNativeMenuPlacement && !defaults["codexAppNativeMenuPlacement"] {
 		settings.CodexAppNativeMenuPlacement = true
 	}
+	if !settings.ZedRemoteProjectRegistryEnabled && !defaults["zedRemoteProjectRegistryEnabled"] {
+		settings.ZedRemoteProjectRegistryEnabled = true
+	}
 	return settings
+}
+
+func normalizeZedOpenStrategy(value string) string {
+	switch strings.TrimSpace(value) {
+	case "reuseWindow", "newWindow", "default", "addToFocusedWorkspace":
+		return strings.TrimSpace(value)
+	default:
+		return "addToFocusedWorkspace"
+	}
 }
 
 func defaultEnabledSettingsFromRaw() map[string]bool {
@@ -306,6 +338,7 @@ func defaultEnabledSettingsFromRaw() map[string]bool {
 		"codexAppZedRemoteOpen",
 		"codexAppUpstreamWorktreeCreate",
 		"codexAppNativeMenuPlacement",
+		"zedRemoteProjectRegistryEnabled",
 	} {
 		_, out[key] = raw[key]
 	}

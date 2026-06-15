@@ -86,6 +86,29 @@ type CodexLaunchStatus = {
   message: string;
 };
 
+type PlatformGuide = {
+  platform: string;
+  platformLabel: string;
+  title: string;
+  systemDescription: string;
+  desktopRuntime: string;
+  desktopRuntimeDescription: string;
+  installTitle: string;
+  installActionLabel: string;
+  installSourceLabel: string;
+  installDescription: string;
+  manualPrimaryLabel: string;
+  manualPrimaryMode: "folder" | "file";
+  manualSecondaryLabel?: string;
+  manualSecondaryMode?: "folder" | "file" | "";
+  detectionNote: string;
+  pathHint: string;
+  launchMethodLabel: string;
+  launchTargetLabel: string;
+  completionLabel: string;
+  unsupported: boolean;
+};
+
 type InstallGuideConnectionStatus = {
   ready: boolean;
   mode: RelayMode;
@@ -145,6 +168,10 @@ type UpdateResult = CommandResult<{
   fallbackError?: string;
   size?: number;
   contentType?: string;
+  assetKind?: "pkg" | "dmg" | "installer" | "portable" | "archive" | string;
+  installTarget?: string;
+  installerDefault?: boolean;
+  portable?: boolean;
 }>;
 
 type CodexLatestDownload = {
@@ -169,6 +196,12 @@ type InstallGuideStatusResult = CommandResult<{
   archLabel?: string;
   desktopRuntime?: string;
   desktopRuntimeStatus?: "desktop" | "browser" | string;
+  platformGuide?: PlatformGuide;
+  onboardingCompleted?: boolean;
+  onboardingCompletedAt?: string;
+  onboardingCompletedPlatform?: string;
+  onboardingCompletedForCurrentPlatform?: boolean;
+  onboardingPlatformMismatch?: boolean;
   codexApp: PathState;
   codexVersion: string | null;
   codexDetection?: {
@@ -224,7 +257,17 @@ type BackendSettings = {
   codexAppUpstreamWorktreeCreate: boolean;
   codexAppNativeMenuPlacement: boolean;
   codexAppServiceTierControls: boolean;
+  computerUseGuardEnabled: boolean;
+  zedRemoteOpenStrategy: ZedOpenStrategy;
+  zedRemoteProjectRegistryEnabled: boolean;
+  zedRemoteSyncToZedSettings: boolean;
+  codexAppImageOverlayEnabled: boolean;
+  codexAppImageOverlayPath: string;
+  codexAppImageOverlayOpacity: number;
   codexGoalsEnabled: boolean;
+  onboardingCompleted: boolean;
+  onboardingCompletedAt: string;
+  onboardingCompletedPlatform: string;
   launchMode: LaunchMode;
   relayBaseUrl: string;
   relayApiKey: string;
@@ -297,6 +340,77 @@ type CodexContextEntries = {
 
 type RelayProtocol = "responses" | "chatCompletions";
 type RelayMode = "official" | "mixedApi" | "pureApi";
+type ZedOpenStrategy = "addToFocusedWorkspace" | "reuseWindow" | "newWindow" | "default";
+type ZedRemoteProject = {
+  id: string;
+  label: string;
+  hostId: string;
+  ssh: { user: string; host: string; port?: number | null };
+  path: string;
+  url: string;
+  source: "currentThread" | "codexRemoteProject" | "threadWorkspaceHint" | "sqliteThreadCwd" | "recent" | string;
+  lastOpenedAtMs?: number | null;
+  isCurrent: boolean;
+};
+type ZedRemoteProjectsResult = CommandResult<{
+  projects: ZedRemoteProject[];
+  removed?: number;
+}>;
+type ProviderPreset = {
+  id: string;
+  name: string;
+  category: "official" | "aggregator" | "cn_official" | "third_party";
+  baseUrl: string;
+  upstreamBaseUrl?: string;
+  protocol: RelayProtocol;
+  model: string;
+  testModel?: string;
+  modelList?: string[];
+  websiteUrl?: string;
+};
+const providerPresets: ProviderPreset[] = [
+  {
+    id: "openai-official",
+    name: "OpenAI 官方登录",
+    category: "official",
+    baseUrl: "",
+    protocol: "responses",
+    model: "gpt-5",
+    modelList: ["gpt-5", "gpt-5-mini", "gpt-5-codex"],
+  },
+  {
+    id: "openai-compatible",
+    name: "OpenAI Compatible",
+    category: "third_party",
+    baseUrl: "https://api.openai.com/v1",
+    protocol: "responses",
+    model: "gpt-5-mini",
+    testModel: "gpt-5-mini",
+    modelList: ["gpt-5", "gpt-5-mini", "gpt-5-codex"],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    category: "aggregator",
+    baseUrl: "https://openrouter.ai/api/v1",
+    protocol: "chatCompletions",
+    model: "openai/gpt-5-mini",
+    testModel: "openai/gpt-5-mini",
+    modelList: ["openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-codex"],
+    websiteUrl: "https://openrouter.ai",
+  },
+  {
+    id: "dashscope-compatible",
+    name: "DashScope Compatible",
+    category: "cn_official",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    protocol: "chatCompletions",
+    model: "qwen-plus",
+    testModel: "qwen-plus",
+    modelList: ["qwen-plus", "qwen-max", "qwen3-coder-plus"],
+    websiteUrl: "https://dashscope.aliyun.com",
+  },
+];
 const PROTOCOL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
 const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/BigPizzaV3/CodexPlusPlusScriptMarket";
 const PROJECT_REPOSITORY_URL = "https://github.com/hereww/codextools";
@@ -602,7 +716,17 @@ const defaultSettings: BackendSettings = {
   codexAppUpstreamWorktreeCreate: true,
   codexAppNativeMenuPlacement: true,
   codexAppServiceTierControls: false,
+  computerUseGuardEnabled: false,
+  zedRemoteOpenStrategy: "addToFocusedWorkspace",
+  zedRemoteProjectRegistryEnabled: true,
+  zedRemoteSyncToZedSettings: false,
+  codexAppImageOverlayEnabled: false,
+  codexAppImageOverlayPath: "",
+  codexAppImageOverlayOpacity: 35,
   codexGoalsEnabled: false,
+  onboardingCompleted: false,
+  onboardingCompletedAt: "",
+  onboardingCompletedPlatform: "",
   launchMode: "patch",
   relayBaseUrl: "",
   relayApiKey: "",
@@ -660,6 +784,7 @@ export function App() {
   const [relayFiles, setRelayFiles] = useState<RelayFilesResult | null>(null);
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResult | null>(null);
   const [computerUse, setComputerUse] = useState<ComputerUseStatusResult | null>(null);
+  const [zedRemoteProjects, setZedRemoteProjects] = useState<ZedRemoteProjectsResult | null>(null);
   const [skillMcpBackups, setSkillMcpBackups] = useState<SkillMCPBackupsResult | null>(null);
   const [liveContextEntries, setLiveContextEntries] = useState<CodexContextEntries | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
@@ -852,6 +977,75 @@ export function App() {
     }
   };
 
+  const refreshZedRemoteProjects = async (silent = false) => {
+    const result = await run(() => call<ZedRemoteProjectsResult>("zed_remote_projects"));
+    if (result) {
+      setZedRemoteProjects(result);
+      if (!silent || !isSuccessStatus(result.status)) showResultNotice("Zed Remote", result, { silentSuccess: true });
+    }
+    return result;
+  };
+
+  const openZedRemoteProject = async (project: ZedRemoteProject, strategy?: ZedOpenStrategy) => {
+    const result = await run(() =>
+      call<CommandResult<Record<string, unknown>>>("zed_remote_open", {
+        ...project,
+        ssh: project.ssh,
+        path: project.path,
+        hostId: project.hostId,
+        label: project.label,
+        strategy: strategy || settingsForm.zedRemoteOpenStrategy,
+        remember: settingsForm.zedRemoteProjectRegistryEnabled !== false,
+      }),
+    );
+    if (result) {
+      showNotice("Zed Remote", result.message, result.status);
+      await refreshZedRemoteProjects(true);
+    }
+  };
+
+  const forgetZedRemoteProject = async (project: ZedRemoteProject) => {
+    const result = await run(() => call<ZedRemoteProjectsResult>("zed_remote_forget_project", { id: project.id }));
+    if (result) {
+      setZedRemoteProjects(result);
+      showResultNotice("Zed Remote", result);
+      await refreshZedRemoteProjects(true);
+    }
+  };
+
+  const chooseImageOverlayPath = async () => {
+    const selected = await openFileDialog({
+      directory: false,
+      multiple: false,
+      title: tr("选择覆盖图片"),
+      filters: [{ name: tr("图片"), extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+    });
+    if (typeof selected !== "string" || !selected.trim()) {
+      showNotice("图片覆盖层", "未选择图片。", "not_checked");
+      return;
+    }
+    const next = {
+      ...settingsForm,
+      codexAppImageOverlayEnabled: true,
+      codexAppImageOverlayPath: selected.trim(),
+    };
+    setSettingsForm(next);
+    const result = await saveSettingsValue(next, true);
+    if (result) showNotice("图片覆盖层", "图片路径已保存，重启或刷新 Codex 注入后生效。", result.status);
+  };
+
+  const resetImageOverlaySettings = async () => {
+    const next = {
+      ...settingsForm,
+      codexAppImageOverlayEnabled: false,
+      codexAppImageOverlayPath: "",
+      codexAppImageOverlayOpacity: 35,
+    };
+    setSettingsForm(next);
+    const result = await saveSettingsValue(next, true);
+    if (result) showNotice("图片覆盖层", "图片覆盖设置已重置。", result.status);
+  };
+
   const refreshSkillMcpBackups = async (silent = false) => {
     const result = await run(() => call<SkillMCPBackupsResult>("list_skill_mcp_backups"));
     if (result) {
@@ -965,6 +1159,10 @@ export function App() {
       await refreshSettings(true);
       await refreshComputerUse(true);
       await refreshSkillMcpBackups(true);
+    }
+    if (next === "enhance") {
+      await refreshSettings(true);
+      await refreshZedRemoteProjects(true);
     }
     if (next === "logs") await refreshLogs(true);
     if (next === "diagnostics") await refreshDiagnostics(true);
@@ -1583,6 +1781,11 @@ export function App() {
       repairCodexGoals,
       refreshComputerUse,
       repairComputerUse,
+      refreshZedRemoteProjects,
+      openZedRemoteProject,
+      forgetZedRemoteProject,
+      chooseImageOverlayPath,
+      resetImageOverlaySettings,
       refreshSkillMcpBackups,
       createSkillMcpBackup,
       restoreSkillMcpBackup,
@@ -1625,6 +1828,7 @@ export function App() {
       refreshDiagnostics,
       copyLogs: () => copyText(logs?.text ?? "", "日志已复制。"),
       copyDiagnostics: () => copyText(diagnostics?.report ?? "", "诊断报告已复制。"),
+      goInstallGuide: () => navigate("installGuide"),
       goRelay: () => navigate("relay"),
       goMaintenance: () => navigate("maintenance"),
       goEnhance: () => navigate("enhance"),
@@ -1641,7 +1845,7 @@ export function App() {
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
       confirm: confirmMessage,
     }),
-    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries],
+    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects],
   );
 
   return (
@@ -1715,6 +1919,7 @@ export function App() {
               overview={overview}
               updateInfo={updateInfo}
               settings={settings}
+              installGuideStatus={installGuideStatus}
               relay={relay}
               actions={actions}
             />
@@ -1750,7 +1955,7 @@ export function App() {
             />
           ) : null}
           {route === "enhance" ? (
-            <EnhanceScreen form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
+            <EnhanceScreen form={settingsForm} onFormChange={setSettingsForm} zedRemoteProjects={zedRemoteProjects} actions={actions} />
           ) : null}
           {route === "userScripts" ? <UserScriptsScreen settings={settings} market={scriptMarket} actions={actions} /> : null}
           {route === "providerSync" ? (
@@ -1863,6 +2068,11 @@ type Actions = {
   repairCodexGoals: () => Promise<void>;
   refreshComputerUse: () => Promise<ComputerUseStatusResult | null>;
   repairComputerUse: () => Promise<void>;
+  refreshZedRemoteProjects: () => Promise<ZedRemoteProjectsResult | null>;
+  openZedRemoteProject: (project: ZedRemoteProject, strategy?: ZedOpenStrategy) => Promise<void>;
+  forgetZedRemoteProject: (project: ZedRemoteProject) => Promise<void>;
+  chooseImageOverlayPath: () => Promise<void>;
+  resetImageOverlaySettings: () => Promise<void>;
   refreshSkillMcpBackups: () => Promise<SkillMCPBackupsResult | null>;
   createSkillMcpBackup: () => Promise<void>;
   restoreSkillMcpBackup: (id: string) => Promise<void>;
@@ -1910,6 +2120,7 @@ type Actions = {
   refreshDiagnostics: () => Promise<void>;
   copyLogs: () => Promise<void>;
   copyDiagnostics: () => Promise<void>;
+  goInstallGuide: () => Promise<void>;
   goRelay: () => Promise<void>;
   goMaintenance: () => Promise<void>;
   goEnhance: () => Promise<void>;
@@ -1927,12 +2138,14 @@ function OverviewScreen({
   overview,
   updateInfo,
   settings,
+  installGuideStatus,
   relay,
   actions,
 }: {
   overview: OverviewResult | null;
   updateInfo: UpdateResult | null;
   settings: SettingsResult | null;
+  installGuideStatus: InstallGuideStatusResult | null;
   relay: RelayResult | null;
   actions: Actions;
 }) {
@@ -1945,6 +2158,9 @@ function OverviewScreen({
   const readyCount = health.filter((item) => item.ok).length;
   const allReady = health.every((item) => item.ok);
   const primaryIssue = health.find((item) => !item.ok);
+  const guidePlatform = installGuideStatus?.platformLabel || platformLabel(settings?.settings.onboardingCompletedPlatform || installGuideStatus?.platform || "unknown");
+  const guideCompleted = installGuideCompletedForCurrentPlatform(installGuideStatus, settings?.settings ?? defaultSettings);
+  const guideMismatch = installGuideStatus?.onboardingPlatformMismatch === true;
   return (
     <>
       <section className="home-hero" aria-label="快速启动">
@@ -1957,18 +2173,33 @@ function OverviewScreen({
           <div className="home-command">
             <div>
               <span>推荐操作</span>
-              <strong>{allReady ? "打开 Codex++" : primaryIssue?.title ?? "检查状态"}</strong>
-              <small>{allReady ? "使用当前设置启动 Codex。" : primaryIssue?.detail ?? "刷新状态并查看需要处理的项目。"}</small>
+              <strong>{guideCompleted ? allReady ? "打开 Codex++" : primaryIssue?.title ?? "检查状态" : "完成新手引导"}</strong>
+              <small>
+                {guideCompleted
+                  ? allReady
+                    ? "使用当前设置启动 Codex。"
+                    : primaryIssue?.detail ?? "刷新状态并查看需要处理的项目。"
+                  : guideMismatch
+                    ? `当前设置曾在 ${platformLabel(settings?.settings.onboardingCompletedPlatform || "unknown")} 完成，请重新检查 ${guidePlatform}。`
+                    : `按 ${guidePlatform} 流程完成安装、路径和连接配置。`}
+              </small>
             </div>
-            <Button onClick={() => void actions.launch()} size="lg" className="home-primary-button">
-              <Rocket className="h-4 w-4" />
-              立即启动
+            <Button
+              onClick={() => void (guideCompleted ? actions.launch() : actions.goInstallGuide())}
+              size="lg"
+              className="home-primary-button"
+            >
+              {guideCompleted ? <Rocket className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+              {guideCompleted ? "立即启动" : "打开引导"}
             </Button>
           </div>
           <div className="hero-actions">
             <Button onClick={() => void actions.checkHealth()} variant="secondary">
               <RefreshCw className="h-4 w-4" />
               检查状态
+            </Button>
+            <Button onClick={() => void actions.goInstallGuide()} variant="ghost">
+              {guideCompleted ? `新手引导 · 已完成 ${guidePlatform}` : "新手引导"}
             </Button>
             <Button onClick={() => void actions.goRelay()} variant="ghost">
               连接服务
@@ -1994,6 +2225,15 @@ function OverviewScreen({
       <UpdateBanner update={update} currentVersion={overview?.current_version ?? "-"} actions={actions} />
 
       <div className="quick-grid">
+        <HomeActionCard
+          title="新手引导"
+          value={guideCompleted ? `已完成 · ${guidePlatform}` : guideMismatch ? "需重新检查" : "待完成"}
+          detail={guideCompleted ? "已完成当前系统的安装、路径和连接配置；可随时重新打开。" : `按 ${guidePlatform} 自动分支完成首次配置。`}
+          tone={guideCompleted ? "good" : "warn"}
+          icon={Sparkles}
+          actionLabel={guideCompleted ? "重新打开" : "开始引导"}
+          onAction={() => void actions.goInstallGuide()}
+        />
         <HomeActionCard
           title="连接方式"
           value={apiMode}
@@ -2029,7 +2269,7 @@ function OverviewScreen({
           <CardContent>
             <GuideList
               items={[
-                "点击“立即启动”，用当前设置打开 Codex。",
+                guideCompleted ? "点击“立即启动”，用当前设置打开 Codex。" : `先进入“新手引导”，按 ${guidePlatform} 流程完成首次配置。`,
                 "如果要使用 API，进入“连接服务”选择官方登录、官方混合 API 或中转 API。",
                 "如果桌面入口、路径或启动异常，进入“修复工具”检查。",
               ]}
@@ -2146,7 +2386,7 @@ function UpdateBanner({
         <small>
           {available
             ? update?.assetName
-              ? `${update.assetName}${update.size ? ` · ${formatBytes(update.size)}` : ""}`
+              ? `${update.assetName}${update.size ? ` · ${formatBytes(update.size)}` : ""}${updateInstallHint(update) ? ` · ${updateInstallHint(update)}` : ""}`
               : update?.message || "发布页有新版本。"
             : update?.message || `当前版本：${currentVersion}`}
         </small>
@@ -2190,6 +2430,8 @@ function InstallGuideScreen({
   const [selectedMode, setSelectedMode] = useState<RelayMode>(active.relayMode);
   const [selectedProfileId, setSelectedProfileId] = useState(normalized.activeRelayId);
   const guideProfile = normalized.relayProfiles.find((profile) => profile.id === selectedProfileId) || active;
+  const platformGuide = platformGuideFor(status);
+  const guideCompleted = installGuideCompletedForCurrentPlatform(status, settings?.settings ?? normalized);
   const codexInstalled = status?.codexApp.status === "found";
   const ccsInstalled = status?.ccs.installed === true;
   const importedProviderCount = normalized.relayProfiles.filter((profile) => profile.id.startsWith("ccs-")).length;
@@ -2212,6 +2454,24 @@ function InstallGuideScreen({
     await actions.openExternalUrl(url);
   };
 
+  const markGuideCompleted = async () => {
+    const refreshed = await actions.refreshSettings();
+    const base = normalizeSettings(refreshed?.settings ?? form);
+    const platform = status?.platform || base.onboardingCompletedPlatform || "";
+    const result = await actions.saveSettingsValue(
+      {
+        ...base,
+        onboardingCompleted: true,
+        onboardingCompletedAt: new Date().toISOString(),
+        onboardingCompletedPlatform: platform,
+      },
+      true,
+    );
+    if (!result || !isSuccessStatus(result.status)) return false;
+    await actions.refreshInstallGuideStatus();
+    return true;
+  };
+
   const applyGuideMode = async () => {
     const next = syncLegacyRelayFields({
       ...normalized,
@@ -2219,16 +2479,16 @@ function InstallGuideScreen({
       relayProfiles: normalized.relayProfiles.map((profile) => (profile.id === modeProfile.id ? modeProfile : profile)),
     });
     if (selectedMode === "official") {
-      await actions.switchRelayProfile(next);
-      setStep("finish");
+      const switched = await actions.switchRelayProfile(next);
+      if (switched && await markGuideCompleted()) setStep("finish");
       return;
     }
     if (!selectedProfileReady) {
       await actions.goRelay();
       return;
     }
-    await actions.switchRelayProfile(next);
-    setStep("finish");
+    const switched = await actions.switchRelayProfile(next);
+    if (switched && await markGuideCompleted()) setStep("finish");
   };
 
   const guideSteps: Array<{ id: GuideStep; title: string; done: boolean }> = [
@@ -2236,19 +2496,22 @@ function InstallGuideScreen({
     { id: "codex", title: "安装 Codex", done: codexInstalled },
     { id: "ccs", title: "导入 CCSwitch", done: !ccsInstalled || importedProviderCount > 0 },
     { id: "mode", title: "选择模式", done: selectedMode === active.relayMode && active.id === modeProfile.id },
-    { id: "finish", title: "启动 Codex++", done: false },
+    { id: "finish", title: "启动 Codex++", done: guideCompleted },
   ];
+  const completedStepCount = guideSteps.filter((item) => item.done).length;
+  const guideProgress = Math.round((completedStepCount / guideSteps.length) * 100);
 
   return (
     <div className="onboarding-shell">
       <section className="onboarding-hero" aria-label="新手安装引导">
         <div className="onboarding-hero-copy">
-          <h2>新手安装引导</h2>
-          <p>从系统识别、Codex 安装、CCSwitch 导入到连接模式配置，按顺序完成后直接进入启动界面。</p>
+          <h2>{platformGuide.title}</h2>
+          <p>{platformGuide.systemDescription} 从 Codex 安装、CCSwitch 导入到连接模式配置，按顺序完成后直接进入启动界面。</p>
         </div>
         <div className="onboarding-summary">
           <Metric label="系统" value={platformSummary(status)} />
           <Metric label="Codex" value={codexInstalled ? "已安装" : "未检测到"} />
+          <Metric label="引导" value={guideCompleted ? `已完成 · ${platformGuide.platformLabel}` : "待完成"} />
           <Metric label="当前模式" value={relayModeLabel(active.relayMode)} />
         </div>
       </section>
@@ -2256,6 +2519,16 @@ function InstallGuideScreen({
       <div className="onboarding-layout">
         <Panel className="simple-panel">
           <CardContent>
+            <div className="onboarding-progress" aria-label={`引导进度 ${guideProgress}%`}>
+              <div className="onboarding-progress-copy">
+                <span>引导进度</span>
+                <strong>{guideProgress}%</strong>
+              </div>
+              <div className="onboarding-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={guideProgress}>
+                <span style={{ width: `${guideProgress}%` }} />
+              </div>
+              <small>{completedStepCount} / {guideSteps.length} 步已完成</small>
+            </div>
             <div className="onboarding-steps" aria-label="引导步骤">
               {guideSteps.map((item, index) => (
                 <button
@@ -2275,14 +2548,15 @@ function InstallGuideScreen({
         <Panel fill>
           <CardContent>
             {step === "platform" ? (
-              <GuidePlatformStep status={status} actions={actions} onNext={() => setStep("codex")} />
+              <GuidePlatformStep status={status} platformGuide={platformGuide} actions={actions} onNext={() => setStep("codex")} />
             ) : null}
             {step === "codex" ? (
               <GuideCodexStep
                 status={status}
+                platformGuide={platformGuide}
                 installed={codexInstalled}
                 onInstall={openInstall}
-                onChoosePath={() => void actions.chooseCodexAppPath(status?.platform === "darwin" ? "folder" : "file")}
+                onChoosePath={(mode) => void actions.chooseCodexAppPath(mode)}
                 onRepair={() => void actions.repairCodexApp()}
                 onRefresh={() => void actions.refreshInstallGuideStatus()}
                 onNext={() => setStep("ccs")}
@@ -2314,7 +2588,7 @@ function InstallGuideScreen({
               />
             ) : null}
             {step === "finish" ? (
-              <GuideFinishStep settings={settings} relay={relay} form={normalized} actions={actions} />
+              <GuideFinishStep status={status} platformGuide={platformGuide} settings={settings} relay={relay} form={normalized} actions={actions} />
             ) : null}
           </CardContent>
         </Panel>
@@ -2325,10 +2599,12 @@ function InstallGuideScreen({
 
 function GuidePlatformStep({
   status,
+  platformGuide,
   actions,
   onNext,
 }: {
   status: InstallGuideStatusResult | null;
+  platformGuide: PlatformGuide;
   actions: Actions;
   onNext: () => void;
 }) {
@@ -2340,19 +2616,19 @@ function GuidePlatformStep({
         {ready ? <Laptop className="h-5 w-5" /> : <RefreshCw className="h-5 w-5" />}
         <div>
           <h3>{ready ? "系统已识别" : "正在识别系统"}</h3>
-          <p>{ready ? "安装包、路径检测和桌面运行方式会根据当前系统自动切换。" : "正在读取本机平台、架构和桌面运行方式。"}</p>
+          <p>{ready ? platformGuide.systemDescription : "正在读取本机平台、架构和桌面运行方式。"}</p>
         </div>
       </div>
       <div className="guide-facts">
         <Metric label="系统" value={status?.platformLabel || platformLabel(status?.platform ?? "unknown")} />
         <Metric label="架构" value={status?.archLabel || archLabel(status?.arch ?? "")} />
-        <Metric label="运行框架" value={status?.desktopRuntime || "-"} />
+        <Metric label="运行框架" value={status?.desktopRuntime || platformGuide.desktopRuntime || "-"} />
         <Metric label="状态接口" value={status ? statusLabel(status.status) : "加载中"} />
       </div>
       {ready ? (
         <div className={`platform-note ${desktopReady ? "" : "limited"}`}>
           <Info className="h-4 w-4" />
-          <span>{desktopReady ? `${platformSummary(status)} 已使用窗口化桌面运行。` : "当前环境未启用桌面窗口运行，会退回浏览器模式。"}</span>
+          <span>{desktopReady ? `${platformSummary(status)}：${platformGuide.desktopRuntimeDescription}` : "当前环境未启用桌面窗口运行，会退回浏览器模式。"}</span>
         </div>
       ) : null}
       <Toolbar>
@@ -2368,6 +2644,7 @@ function GuidePlatformStep({
 
 function GuideCodexStep({
   status,
+  platformGuide,
   installed,
   onInstall,
   onChoosePath,
@@ -2376,17 +2653,17 @@ function GuideCodexStep({
   onNext,
 }: {
   status: InstallGuideStatusResult | null;
+  platformGuide: PlatformGuide;
   installed: boolean;
   onInstall: () => void;
-  onChoosePath: () => void;
+  onChoosePath: (mode: "folder" | "file") => void;
   onRepair: () => void;
   onRefresh: () => void;
   onNext: () => void;
 }) {
   const download = status?.codexLatestDownload;
-  const installLabel = status?.platform === "darwin" ? "打开官方安装页" : "获取最新版安装包";
   const isWindows = status?.platform === "windows";
-  const isMac = status?.platform === "darwin";
+  const isSupportedDesktop = status?.platform === "windows" || status?.platform === "darwin";
   const launchStatus = status?.codexLaunch;
   const detectionMessage = status?.codexDetection?.message || (installed ? "已检测到 Codex 应用。" : "自动检测暂未找到 Codex。");
   const detectionHints = status?.codexDetection?.candidates ?? [];
@@ -2398,37 +2675,38 @@ function GuideCodexStep({
       <div className="guide-pane-head">
         {installed ? <CheckCircle2 className="h-5 w-5" /> : <Download className="h-5 w-5" />}
         <div>
-          <h3>{installed ? "Codex 已安装" : "安装 Codex"}</h3>
-          <p>{installed ? launchStatus?.message || status?.codexApp.path || detectionMessage : detectionMessage}</p>
+          <h3>{installed ? "Codex 已安装" : platformGuide.installTitle}</h3>
+          <p>{installed ? launchStatus?.message || status?.codexApp.path || detectionMessage : detectionMessage || platformGuide.installDescription}</p>
         </div>
       </div>
-      {!installed && isWindows ? (
+      {!installed && isSupportedDesktop ? (
         <div className="platform-note limited">
           <Info className="h-4 w-4" />
-          <span>Windows 的 Microsoft Store / MSIX 安装目录可能限制读取权限。已安装但未识别时，直接选择 Codex.exe、app 目录或安装解包目录即可。</span>
+          <span>{platformGuide.detectionNote}</span>
         </div>
       ) : null}
-      {!installed && isMac ? (
+      {platformGuide.unsupported ? (
         <div className="platform-note limited">
           <Info className="h-4 w-4" />
-          <span>macOS 已安装但未识别时，选择 /Applications/Codex.app 或实际放置 Codex.app 的应用目录即可。</span>
+          <span>{platformGuide.installDescription}</span>
         </div>
       ) : null}
       <div className="install-card">
         <div>
-          <strong>{installed ? "当前 Codex" : status?.platform === "darwin" ? "macOS 官方安装" : "Windows 镜像安装包"}</strong>
+          <strong>{installed ? "当前 Codex" : platformGuide.installTitle}</strong>
           <span>{installed ? status?.codexVersion ?? "版本未读取" : installDownloadText(download)}</span>
         </div>
         <Button disabled={installed} onClick={onInstall}>
           <ExternalLink className="h-4 w-4" />
-          {installLabel}
+          {platformGuide.installActionLabel}
         </Button>
       </div>
       <div className="guide-facts">
         <Metric label="检测路径" value={status?.codexApp.path ?? "未找到"} />
-        {isWindows ? <Metric label="启动方式" value={launchStatus?.methodLabel || "未检测"} /> : null}
+        <Metric label={platformGuide.launchMethodLabel} value={launchStatus?.methodLabel || (isWindows ? "未检测" : "可执行文件启动")} />
         {isWindows ? <Metric label={launchStatus?.method === "packaged_activation" ? "AppUserModelID" : "启动文件"} value={executableLabel} /> : null}
-        <Metric label="安装来源" value={status?.codexInstallSource === "official" ? "官方页面" : "镜像项目"} />
+        {!isWindows ? <Metric label={platformGuide.launchTargetLabel} value={status?.codexApp.path || platformGuide.pathHint || "未找到"} /> : null}
+        <Metric label="安装来源" value={platformGuide.installSourceLabel || (status?.codexInstallSource === "official" ? "官方页面" : "镜像项目")} />
         <Metric label="最新版本" value={download?.releaseName || download?.tagName || "未获取"} />
       </div>
       {!installed && isWindows && detectionHints.length > 0 ? (
@@ -2440,13 +2718,19 @@ function GuideCodexStep({
         </div>
       ) : null}
       <Toolbar>
-        {isWindows || isMac ? (
-          <Button onClick={onChoosePath} variant="secondary">
+        {isSupportedDesktop ? (
+          <Button onClick={() => onChoosePath(platformGuide.manualPrimaryMode)} variant="secondary">
             <ExternalLink className="h-4 w-4" />
-            {isWindows ? "手动选择 Codex.exe" : "选择 Codex.app"}
+            {platformGuide.manualPrimaryLabel}
           </Button>
         ) : null}
-        {isWindows || isMac ? (
+        {isWindows && platformGuide.manualSecondaryMode ? (
+          <Button onClick={() => onChoosePath(platformGuide.manualSecondaryMode as "folder" | "file")} variant="secondary">
+            <ExternalLink className="h-4 w-4" />
+            {platformGuide.manualSecondaryLabel || "选择应用目录"}
+          </Button>
+        ) : null}
+        {isSupportedDesktop ? (
           <Button onClick={onRepair} variant="secondary">
             <Wrench className="h-4 w-4" />
             修复 Codex 程序
@@ -2632,27 +2916,38 @@ function GuideModeStep({
 }
 
 function GuideFinishStep({
+  status,
+  platformGuide,
   settings,
   relay,
   form,
   actions,
 }: {
+  status: InstallGuideStatusResult | null;
+  platformGuide: PlatformGuide;
   settings: SettingsResult | null;
   relay: RelayResult | null;
   form: BackendSettings;
   actions: Actions;
 }) {
   const active = activeRelayProfile(form);
+  const launchStatus = status?.codexLaunch;
+  const launchTarget = launchStatus?.method === "packaged_activation"
+    ? launchStatus.appUserModelId || status?.codexApp.appUserModelId || "AppUserModelID"
+    : launchStatus?.executable || status?.codexApp.executable || status?.codexApp.path || platformGuide.pathHint || "-";
   return (
     <div className="guide-pane finish-pane">
       <div className="guide-pane-head">
         <Rocket className="h-5 w-5" />
         <div>
-          <h3>切换到启动 Codex++</h3>
-          <p>配置已经写入，可以用当前模式启动 Codex++。</p>
+          <h3>{platformGuide.completionLabel}</h3>
+          <p>配置已经写入并记录完成状态，可以用当前模式启动 Codex++。</p>
         </div>
       </div>
       <div className="guide-facts">
+        <Metric label="系统" value={platformSummary(status)} />
+        <Metric label={platformGuide.launchMethodLabel} value={launchStatus?.methodLabel || "可执行文件启动"} />
+        <Metric label={launchStatus?.method === "packaged_activation" ? "AppUserModelID" : platformGuide.launchTargetLabel} value={launchTarget} />
         <Metric label="当前模式" value={relayModeLabel(active.relayMode)} />
         <Metric label="当前供应商" value={active.name || "-"} />
         <Metric label="配置文件" value={settings?.settings_path ?? "-"} />
@@ -2878,6 +3173,12 @@ function RelayScreen({
           {relay?.backupPath ? <div className="path-line compact-path">备份：{relay.backupPath}</div> : null}
         </CardContent>
       </Panel>
+      <ProviderPresetPanel
+        onSelect={(preset) => {
+          setNewProfileDraft(createRelayProfileFromPreset(normalized, preset));
+          setDetailProfileId(null);
+        }}
+      />
       <Panel>
         <CardHead title="供应商列表" detail={`${normalized.relayProfiles.length} 个供应商配置；可拖动排序，点编辑进入详情`} />
         <CardContent>
@@ -2962,10 +3263,12 @@ function RelayScreen({
 function EnhanceScreen({
   form,
   onFormChange,
+  zedRemoteProjects,
   actions,
 }: {
   form: BackendSettings;
   onFormChange: (value: BackendSettings) => void;
+  zedRemoteProjects: ZedRemoteProjectsResult | null;
   actions: Actions;
 }) {
   const setEnhanceFlag = (key: keyof BackendSettings, value: boolean) => onFormChange({ ...form, [key]: value });
@@ -3009,13 +3312,79 @@ function EnhanceScreen({
             <FeatureToggle title="Zed Remote open" detail="远程 SSH 文件引用可直接用 Zed Remote Development 打开。" checked={form.codexAppZedRemoteOpen} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppZedRemoteOpen", value)} />
             <FeatureToggle title="Upstream worktree" detail="从 upstream 分支创建 Git worktree。" checked={form.codexAppUpstreamWorktreeCreate} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppUpstreamWorktreeCreate", value)} />
             <FeatureToggle title="原生菜单栏位置" detail="把 Codex++ 菜单插入 Codex 顶部原生菜单栏。" checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
+            <FeatureToggle title="Computer Use Guard" detail="启动 Codex 前后保护 Windows Computer Use 插件、marketplace 和 js_repl 配置。" checked={form.computerUseGuardEnabled} onChange={(value) => setEnhanceFlag("computerUseGuardEnabled", value)} />
+            <FeatureToggle title="Zed 项目记录" detail="记录成功打开的远程项目，并和当前 thread / global state 一起展示最近项目。" checked={form.zedRemoteProjectRegistryEnabled} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteProjectRegistryEnabled", value)} />
+            <FeatureToggle title="同步 Zed 设置" detail="打开远程项目时同步到 Zed 项目记录，方便后续复用。" checked={form.zedRemoteSyncToZedSettings} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteSyncToZedSettings", value)} />
           </div>
+          <Field label="Zed 打开策略">
+            <select
+              className="field-select"
+              value={form.zedRemoteOpenStrategy}
+              onChange={(event) => onFormChange({ ...form, zedRemoteOpenStrategy: event.currentTarget.value as ZedOpenStrategy })}
+            >
+              <option value="addToFocusedWorkspace">加入当前窗口</option>
+              <option value="reuseWindow">复用窗口</option>
+              <option value="newWindow">新窗口</option>
+              <option value="default">默认策略</option>
+            </select>
+          </Field>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>保存增强设置</Button>
           </Toolbar>
         </CardContent>
       </Panel>
+      <ZedRemoteProjectsPanel projects={zedRemoteProjects} form={form} actions={actions} />
     </>
+  );
+}
+
+function ZedRemoteProjectsPanel({
+  projects,
+  form,
+  actions,
+}: {
+  projects: ZedRemoteProjectsResult | null;
+  form: BackendSettings;
+  actions: Actions;
+}) {
+  const items = projects?.projects ?? [];
+  return (
+    <Panel>
+      <CardHead title="Zed 最近项目" detail={projects?.message ?? "从当前会话、Codex global state、SQLite thread cwd 和本地记录汇总"} />
+      <CardContent>
+        <Toolbar>
+          <Button onClick={() => void actions.refreshZedRemoteProjects()} variant="secondary">
+            <RefreshCw className="h-4 w-4" />
+            刷新项目
+          </Button>
+        </Toolbar>
+        <div className="table zed-project-table">
+          {items.length ? (
+            items.map((project) => (
+              <div className="zed-project-row" key={project.id}>
+                <div>
+                  <strong>{project.label || project.path}</strong>
+                  <span>{zedProjectSourceLabel(project.source)} · {project.ssh.user ? `${project.ssh.user}@` : ""}{project.ssh.host}{project.ssh.port ? `:${project.ssh.port}` : ""}</span>
+                  <small>{project.path}</small>
+                </div>
+                <div className="script-row-actions">
+                  <Button onClick={() => void actions.openZedRemoteProject(project, form.zedRemoteOpenStrategy)} size="sm" variant="secondary">
+                    <ExternalLink className="h-4 w-4" />
+                    打开
+                  </Button>
+                  <Button onClick={() => void actions.forgetZedRemoteProject(project)} size="sm" variant="outline">
+                    <Trash2 className="h-4 w-4" />
+                    忘记
+                  </Button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="empty">暂无 Zed 远程项目。打开过项目后会自动记录，也可以从当前会话解析。</div>
+          )}
+        </div>
+      </CardContent>
+    </Panel>
   );
 }
 
@@ -3435,6 +3804,7 @@ function AboutScreen({
             <Metric label="最新版本" value={update?.latestVersion || update?.tagName || "未检查"} />
             <Metric label="更新状态" value={statusLabel(update?.updateStatus ?? "not_checked")} />
             <Metric label="安装包" value={update?.assetName || "未选择"} />
+            {update ? <Metric label="安装方式" value={updateInstallHint(update) || "按系统默认安装"} /> : null}
             {update?.downloadedPath ? <Metric label="下载位置" value={update.downloadedPath} /> : null}
           </div>
           <Toolbar>
@@ -3555,6 +3925,49 @@ function SettingsScreen({
           </Toolbar>
         </CardContent>
       </Panel>
+      <Panel>
+        <CardHead title="图片覆盖层" detail="启动 Codex 时在窗口上叠加一张本地参考图，适合按截图对齐界面。" />
+        <CardContent>
+          <label className="switch-row">
+            <input
+              checked={form.codexAppImageOverlayEnabled}
+              onChange={(event) => onFormChange({ ...form, codexAppImageOverlayEnabled: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>
+              <strong>启用图片覆盖层</strong>
+              <small>覆盖层由本地 helper 提供，只读取你选择的图片文件；重启或刷新 Codex 注入后生效。</small>
+            </span>
+          </label>
+          <Field label="覆盖图片路径">
+            <Input
+              value={form.codexAppImageOverlayPath}
+              onChange={(event) => onFormChange({ ...form, codexAppImageOverlayPath: event.currentTarget.value })}
+              placeholder="/path/to/reference.png"
+            />
+          </Field>
+          <Field label={`透明度：${form.codexAppImageOverlayOpacity || 35}%`}>
+            <input
+              className="range-input"
+              max={100}
+              min={1}
+              onChange={(event) => onFormChange({ ...form, codexAppImageOverlayOpacity: Number(event.currentTarget.value) || 35 })}
+              type="range"
+              value={form.codexAppImageOverlayOpacity || 35}
+            />
+          </Field>
+          <Toolbar>
+            <Button onClick={() => void actions.chooseImageOverlayPath()} variant="secondary">
+              <Image className="h-4 w-4" />
+              选择图片
+            </Button>
+            <Button onClick={() => void actions.saveSettings()}>保存覆盖设置</Button>
+            <Button onClick={() => void actions.resetImageOverlaySettings()} variant="outline">
+              重置覆盖设置
+            </Button>
+          </Toolbar>
+        </CardContent>
+      </Panel>
     </>
   );
 }
@@ -3648,6 +4061,27 @@ function RelayProfileList({
         </div>
       </SortableContext>
     </DndContext>
+  );
+}
+
+function ProviderPresetPanel({ onSelect }: { onSelect: (preset: ProviderPreset) => void }) {
+  return (
+    <Panel>
+      <CardHead title="供应商预设" detail="选择后生成一个可编辑供应商草稿；不会自动写入 Key 或覆盖当前配置。" />
+      <CardContent>
+        <div className="provider-preset-grid">
+          {providerPresets.map((preset) => (
+            <button className="provider-preset-card" key={preset.id} onClick={() => onSelect(preset)} type="button">
+              <span>
+                <strong>{preset.name}</strong>
+                <small>{providerPresetCategoryLabel(preset.category)} · {relayProtocolLabel(preset.protocol)}</small>
+              </span>
+              <code>{preset.model || "official"}</code>
+            </button>
+          ))}
+        </div>
+      </CardContent>
+    </Panel>
   );
 }
 
@@ -5219,6 +5653,72 @@ function platformLabel(platform: string) {
   return labels[platform] ?? platform;
 }
 
+function platformGuideFor(status: InstallGuideStatusResult | null): PlatformGuide {
+  if (status?.platformGuide) return status.platformGuide;
+  const platform = status?.platform ?? "unknown";
+  const label = status?.platformLabel || platformLabel(platform);
+  const base: PlatformGuide = {
+    platform,
+    platformLabel: label,
+    title: `${label} 新手引导`,
+    systemDescription: "安装包、路径检测和桌面运行方式会根据当前系统自动切换。",
+    desktopRuntime: status?.desktopRuntime || "桌面窗口",
+    desktopRuntimeDescription: "当前系统使用桌面窗口运行管理器。",
+    installTitle: "安装 Codex",
+    installActionLabel: "打开安装入口",
+    installSourceLabel: "安装入口",
+    installDescription: "按当前系统打开对应的 Codex 安装入口。",
+    manualPrimaryLabel: "手动选择应用",
+    manualPrimaryMode: "folder",
+    manualSecondaryLabel: "",
+    manualSecondaryMode: "",
+    detectionNote: "自动检测暂未找到 Codex 时，可以手动选择实际安装位置。",
+    pathHint: "",
+    launchMethodLabel: "启动方式",
+    launchTargetLabel: "启动文件",
+    completionLabel: "已完成当前系统引导",
+    unsupported: false,
+  };
+  if (platform === "darwin") {
+    return {
+      ...base,
+      title: "macOS 新手引导",
+      systemDescription: "macOS 会检查 Codex.app、官方安装页和 WebKit 桌面窗口运行状态。",
+      desktopRuntime: status?.desktopRuntime || "macOS WebKit 桌面窗口",
+      desktopRuntimeDescription: "macOS 使用 WebKit 桌面窗口运行管理器。",
+      installTitle: "macOS 官方安装",
+      installActionLabel: "打开官方安装页",
+      installSourceLabel: "官方页面",
+      manualPrimaryLabel: "选择 Codex.app",
+      manualPrimaryMode: "folder",
+      detectionNote: "macOS 已安装但未识别时，选择 /Applications/Codex.app 或实际放置 Codex.app 的应用目录即可。",
+      pathHint: "/Applications/Codex.app",
+      launchTargetLabel: "Codex.app",
+    };
+  }
+  if (platform === "windows") {
+    return {
+      ...base,
+      title: "Windows 新手引导",
+      systemDescription: "Windows 会检查 Codex.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。",
+      desktopRuntime: status?.desktopRuntime || "Windows WebView2 桌面窗口",
+      desktopRuntimeDescription: "Windows 使用 WebView2 桌面窗口运行管理器。",
+      installTitle: "Windows 镜像 / MSIX 安装包",
+      installActionLabel: "获取最新版安装包",
+      installSourceLabel: "镜像项目",
+      installDescription: "Windows 优先使用镜像项目里的当前架构安装包；已安装但无权限读取时可手动选择。",
+      manualPrimaryLabel: "手动选择 Codex.exe",
+      manualPrimaryMode: "file",
+      manualSecondaryLabel: "选择应用目录",
+      manualSecondaryMode: "folder",
+      detectionNote: "Windows 的 Microsoft Store / MSIX 安装目录可能限制读取权限。已安装但未识别时，选择 Codex.exe、app 目录或安装解包目录即可。",
+      pathHint: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_...\\app",
+      launchTargetLabel: "Codex.exe / AppUserModelID",
+    };
+  }
+  return { ...base, unsupported: true };
+}
+
 function archLabel(arch: string) {
   const labels: Record<string, string> = {
     amd64: "x64",
@@ -5231,6 +5731,12 @@ function archLabel(arch: string) {
 function platformSummary(status: InstallGuideStatusResult | null) {
   if (!status) return "识别中";
   return `${status.platformLabel || platformLabel(status.platform)} · ${status.archLabel || archLabel(status.arch)}`;
+}
+
+function installGuideCompletedForCurrentPlatform(status: InstallGuideStatusResult | null, settings: BackendSettings) {
+  if (status?.onboardingCompletedForCurrentPlatform !== undefined) return status.onboardingCompletedForCurrentPlatform;
+  const platform = status?.platform || settings.onboardingCompletedPlatform;
+  return settings.onboardingCompleted && !!platform && settings.onboardingCompletedPlatform === platform;
 }
 
 function codexToolsReleaseUrl() {
@@ -5433,6 +5939,35 @@ function relayImageModeLabel(profile: RelayProfile): string {
   if (!profile.imageGenerationEnabled) return "图片关闭";
   if (profile.imageGenerationUseSeparateApi && profile.protocol === "responses") return "图片独立 API";
   return "图片走当前中转";
+}
+
+function updateInstallHint(update: UpdateResult | null | undefined): string {
+  if (!update) return "";
+  if (update.platform === "darwin") {
+    if (update.installerDefault) return `安装到 ${update.installTarget || "/Applications"} 并覆盖旧版`;
+    if (update.portable) return "便携 zip，仅备用";
+    if (update.assetKind === "dmg") return "拖入 /Applications 覆盖旧版";
+  }
+  if (update.assetKind === "installer") return "安装器";
+  if (update.portable) return "便携包";
+  return "";
+}
+
+function zedProjectSourceLabel(source: string): string {
+  switch (source) {
+    case "currentThread":
+      return "当前会话";
+    case "codexRemoteProject":
+      return "Codex remote project";
+    case "threadWorkspaceHint":
+      return "Thread workspace";
+    case "sqliteThreadCwd":
+      return "SQLite thread cwd";
+    case "recent":
+      return "最近打开";
+    default:
+      return source || "未知来源";
+  }
 }
 
 function officialBindingStatusLabel(profile: RelayProfile): string {
@@ -5751,6 +6286,39 @@ function createRelayProfile(settings: BackendSettings): RelayProfile {
     userAgent: "",
   };
   return deriveOfficialAuthFields(withGeneratedRelayFiles(next));
+}
+
+function createRelayProfileFromPreset(settings: BackendSettings, preset: ProviderPreset): RelayProfile {
+  const relayMode: RelayMode = preset.category === "official" ? "official" : "pureApi";
+  const profile: RelayProfile = {
+    ...createRelayProfile(settings),
+    id: `preset-${preset.id}-${Date.now().toString(36)}`,
+    name: preset.name,
+    model: preset.model,
+    baseUrl: preset.baseUrl,
+    upstreamBaseUrl: preset.upstreamBaseUrl || preset.baseUrl,
+    protocol: preset.protocol,
+    relayMode,
+    officialMixApiKey: false,
+    testModel: preset.testModel || preset.model,
+    modelList: (preset.modelList ?? []).join("\n"),
+  };
+  return deriveOfficialAuthFields(withGeneratedRelayFiles(profile));
+}
+
+function providerPresetCategoryLabel(category: ProviderPreset["category"]): string {
+  switch (category) {
+    case "official":
+      return "官方";
+    case "aggregator":
+      return "聚合";
+    case "cn_official":
+      return "国内官方";
+    case "third_party":
+      return "兼容";
+    default:
+      return category;
+  }
 }
 
 function addRelayProfile(settings: BackendSettings, profile: RelayProfile): BackendSettings {

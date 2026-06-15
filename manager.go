@@ -185,6 +185,12 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.loadComputerUseStatus()
 	case "repair_computer_use":
 		return s.repairComputerUse()
+	case "zed_remote_projects":
+		return s.zedRemoteProjects(args)
+	case "zed_remote_open":
+		return s.zedRemoteOpen(args)
+	case "zed_remote_forget_project":
+		return s.zedRemoteForgetProject(args)
 	case "list_skill_mcp_backups":
 		return s.listSkillMCPBackups()
 	case "create_skill_mcp_backup":
@@ -388,22 +394,30 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 	if len(warnings) > 0 {
 		message = "系统和本地安装状态已读取；" + strings.Join(warnings, "；") + "。"
 	}
+	onboardingCompletedForCurrentPlatform := settings.OnboardingCompleted && strings.EqualFold(settings.OnboardingCompletedPlatform, runtime.GOOS)
+	onboardingPlatformMismatch := settings.OnboardingCompleted && settings.OnboardingCompletedPlatform != "" && !strings.EqualFold(settings.OnboardingCompletedPlatform, runtime.GOOS)
 	payload := map[string]any{
-		"platform":                    runtime.GOOS,
-		"arch":                        runtime.GOARCH,
-		"platformLabel":               platformDisplayName(runtime.GOOS),
-		"archLabel":                   archDisplayName(runtime.GOARCH),
-		"desktopRuntime":              desktopRuntimeName(),
-		"desktopRuntimeStatus":        desktopRuntimeStatus(),
-		"codexApp":                    codexPathState(codexApp),
-		"codexVersion":                codexAppVersion(codexApp),
-		"codexDetection":              codexDetectionPayload(settings.CodexAppPath, codexApp),
-		"codexLaunch":                 codexLaunchPayload(codexApp),
-		"codexInstallUrl":             codexInstallURL(download),
-		"codexInstallSource":          codexInstallSource(download),
-		"codexMirrorProjectUrl":       codexAppMirrorProjectURL,
-		"codexMirrorLatestReleaseUrl": codexMirrorLatestReleaseURL(download),
-		"codexLatestDownload":         download,
+		"platform":                              runtime.GOOS,
+		"arch":                                  runtime.GOARCH,
+		"platformLabel":                         platformDisplayName(runtime.GOOS),
+		"archLabel":                             archDisplayName(runtime.GOARCH),
+		"desktopRuntime":                        desktopRuntimeName(),
+		"desktopRuntimeStatus":                  desktopRuntimeStatus(),
+		"platformGuide":                         installGuidePlatformGuide(runtime.GOOS),
+		"onboardingCompleted":                   settings.OnboardingCompleted,
+		"onboardingCompletedAt":                 settings.OnboardingCompletedAt,
+		"onboardingCompletedPlatform":           settings.OnboardingCompletedPlatform,
+		"onboardingCompletedForCurrentPlatform": onboardingCompletedForCurrentPlatform,
+		"onboardingPlatformMismatch":            onboardingPlatformMismatch,
+		"codexApp":                              codexPathState(codexApp),
+		"codexVersion":                          codexAppVersion(codexApp),
+		"codexDetection":                        codexDetectionPayload(settings.CodexAppPath, codexApp),
+		"codexLaunch":                           codexLaunchPayload(codexApp),
+		"codexInstallUrl":                       codexInstallURL(download),
+		"codexInstallSource":                    codexInstallSource(download),
+		"codexMirrorProjectUrl":                 codexAppMirrorProjectURL,
+		"codexMirrorLatestReleaseUrl":           codexMirrorLatestReleaseURL(download),
+		"codexLatestDownload":                   download,
 		"ccs": map[string]any{
 			"installed":        fileExists(ccsDBPath),
 			"dbPath":           ccsDBPath,
@@ -417,6 +431,71 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 		"connection":   installGuideConnectionPayload(settings, relayStatus),
 	}
 	return ok(message, payload)
+}
+
+func installGuidePlatformGuide(goos string) map[string]any {
+	guide := map[string]any{
+		"platform":                  goos,
+		"platformLabel":             platformDisplayName(goos),
+		"title":                     platformDisplayName(goos) + " 新手引导",
+		"systemDescription":         "安装包、路径检测和桌面运行方式会根据当前系统自动切换。",
+		"desktopRuntime":            desktopRuntimeNameFor(goos),
+		"desktopRuntimeDescription": "当前系统使用桌面窗口运行；未启用桌面窗口时会回退到浏览器模式。",
+		"installTitle":              "安装 Codex",
+		"installActionLabel":        "打开安装入口",
+		"installSourceLabel":        "安装入口",
+		"installDescription":        "按当前系统打开对应的 Codex 安装入口。",
+		"manualPrimaryLabel":        "手动选择应用",
+		"manualPrimaryMode":         "folder",
+		"manualSecondaryLabel":      "",
+		"manualSecondaryMode":       "",
+		"detectionNote":             "自动检测暂未找到 Codex 时，可以手动选择实际安装位置。",
+		"pathHint":                  "",
+		"launchMethodLabel":         "启动方式",
+		"launchTargetLabel":         "启动文件",
+		"completionLabel":           "已完成当前系统引导",
+		"unsupported":               false,
+	}
+	switch goos {
+	case "darwin":
+		guide["title"] = "macOS 新手引导"
+		guide["systemDescription"] = "macOS 会检查 Codex.app、官方安装页和 WebKit 桌面窗口运行状态。"
+		guide["desktopRuntimeDescription"] = "macOS 使用 WebKit 桌面窗口运行管理器。"
+		guide["installTitle"] = "macOS 官方安装"
+		guide["installActionLabel"] = "打开官方安装页"
+		guide["installSourceLabel"] = "官方页面"
+		guide["installDescription"] = "macOS 默认打开 Codex 官方安装页面。"
+		guide["manualPrimaryLabel"] = "选择 Codex.app"
+		guide["manualPrimaryMode"] = "folder"
+		guide["detectionNote"] = "macOS 已安装但未识别时，选择 /Applications/Codex.app 或实际放置 Codex.app 的应用目录即可。"
+		guide["pathHint"] = "/Applications/Codex.app"
+		guide["launchMethodLabel"] = "启动方式"
+		guide["launchTargetLabel"] = "Codex.app"
+	case "windows":
+		guide["title"] = "Windows 新手引导"
+		guide["systemDescription"] = "Windows 会检查 Codex.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。"
+		guide["desktopRuntimeDescription"] = "Windows 使用 WebView2 桌面窗口运行管理器。"
+		guide["installTitle"] = "Windows 镜像 / MSIX 安装包"
+		guide["installActionLabel"] = "获取最新版安装包"
+		guide["installSourceLabel"] = "镜像项目"
+		guide["installDescription"] = "Windows 优先使用镜像项目里的当前架构安装包；已安装但无权限读取时可手动选择。"
+		guide["manualPrimaryLabel"] = "手动选择 Codex.exe"
+		guide["manualPrimaryMode"] = "file"
+		guide["manualSecondaryLabel"] = "选择应用目录"
+		guide["manualSecondaryMode"] = "folder"
+		guide["detectionNote"] = "Windows 的 Microsoft Store / MSIX 安装目录可能限制读取权限。已安装但未识别时，选择 Codex.exe、app 目录或安装解包目录即可。"
+		guide["pathHint"] = `C:\Program Files\WindowsApps\OpenAI.Codex_...\app`
+		guide["launchMethodLabel"] = "启动方式"
+		guide["launchTargetLabel"] = "Codex.exe / AppUserModelID"
+	default:
+		guide["title"] = platformDisplayName(goos) + " 受限引导"
+		guide["systemDescription"] = "当前平台只提供基础状态检查；完整新手引导重点支持 macOS 和 Windows。"
+		guide["desktopRuntimeDescription"] = "当前平台会按可用能力使用桌面窗口或浏览器模式。"
+		guide["installDescription"] = "请根据当前平台手动安装 Codex，并在修复工具里填写可启动路径。"
+		guide["detectionNote"] = "此平台不在本次完整引导范围内，路径检测能力有限。"
+		guide["unsupported"] = true
+	}
+	return guide
 }
 
 func platformDisplayName(goos string) string {
@@ -446,7 +525,11 @@ func archDisplayName(goarch string) string {
 }
 
 func desktopRuntimeName() string {
-	switch runtime.GOOS {
+	return desktopRuntimeNameFor(runtime.GOOS)
+}
+
+func desktopRuntimeNameFor(goos string) string {
+	switch goos {
 	case "windows":
 		return "Windows WebView2 桌面窗口"
 	case "darwin":
@@ -665,7 +748,8 @@ func resolveWindowsCodexFromInstalledApps() string {
 	}
 	commands := [][]string{
 		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.PackageFullName -like 'OpenAI.Codex_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.CodexBeta -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.CodexBeta' -or $_.PackageFullName -like 'OpenAI.Codex_*' -or $_.PackageFullName -like 'OpenAI.CodexBeta_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
 	}
 	for _, command := range commands {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -786,7 +870,9 @@ func isWindowsProtectedAppPackagePath(path string) bool {
 	}
 	normalized := strings.ToLower(filepath.ToSlash(path))
 	return strings.Contains(normalized, "/program files/windowsapps/openai.codex_") ||
-		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codex_")
+		strings.Contains(normalized, "/program files/windowsapps/openai.codexbeta_") ||
+		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codex_") ||
+		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codexbeta_")
 }
 
 func normalizeWindowsPackageAppPath(path string) string {
@@ -891,19 +977,16 @@ func findLatestWindowsCodexAppDir(root string) string {
 
 func packagedWindowsAppUserModelID(path string) string {
 	packageName := windowsPackageNameFromPath(path)
-	if !isWindowsCodexPackageName(packageName) {
-		return ""
-	}
-	_, publisherID, ok := strings.Cut(packageName, "__")
+	identity, _, publisherID, ok := windowsCodexPackageParts(packageName)
 	if !ok || publisherID == "" {
 		return ""
 	}
-	return "OpenAI.Codex_" + publisherID + "!App"
+	return identity + "_" + publisherID + "!App"
 }
 
 func isWindowsCodexPackageName(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	return strings.HasPrefix(lower, "openai.codex_") && strings.Contains(name, "__")
+	_, _, _, ok := windowsCodexPackageParts(name)
+	return ok
 }
 
 func windowsPackageNameFromPath(path string) string {
@@ -935,11 +1018,7 @@ func windowsPackageVersionFromPath(path string) string {
 }
 
 func windowsPackageVersionFromName(name string) string {
-	if !isWindowsCodexPackageName(name) {
-		return ""
-	}
-	rest := strings.TrimSpace(name)[len("OpenAI.Codex_"):]
-	version, _, ok := strings.Cut(rest, "_")
+	_, version, _, ok := windowsCodexPackageParts(name)
 	if !ok || version == "" {
 		return ""
 	}
@@ -952,6 +1031,28 @@ func windowsPackageVersionFromName(name string) string {
 		}
 	}
 	return version
+}
+
+func windowsCodexPackageParts(name string) (identity string, version string, publisherID string, ok bool) {
+	trimmed := strings.TrimSpace(name)
+	lower := strings.ToLower(trimmed)
+	for _, canonicalIdentity := range []string{"OpenAI.Codex", "OpenAI.CodexBeta"} {
+		prefix := strings.ToLower(canonicalIdentity) + "_"
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		rest := trimmed[len(canonicalIdentity)+1:]
+		packageVersion, rest, hasArch := strings.Cut(rest, "_")
+		if !hasArch || packageVersion == "" {
+			return "", "", "", false
+		}
+		_, publisher, hasPublisher := strings.Cut(rest, "__")
+		if !hasPublisher || publisher == "" {
+			return "", "", "", false
+		}
+		return canonicalIdentity, packageVersion, publisher, true
+	}
+	return "", "", "", false
 }
 
 func splitPathParts(path string) []string {
@@ -1128,10 +1229,11 @@ func windowsCodexDetectionHints() []string {
 	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
 		hints = append(hints,
 			filepath.Join(programFiles, "WindowsApps", "OpenAI.Codex_*"),
+			filepath.Join(programFiles, "WindowsApps", "OpenAI.CodexBeta_*"),
 			filepath.Join(programFiles, "OpenAI", "Codex"),
 		)
 	}
-	hints = append(hints, "Get-AppxPackage OpenAI.Codex")
+	hints = append(hints, "Get-AppxPackage OpenAI.Codex / OpenAI.CodexBeta")
 	return hints
 }
 
@@ -1154,12 +1256,8 @@ func codexAppVersion(path string) *string {
 	}
 	parts := strings.FieldsFunc(filepath.ToSlash(path), func(r rune) bool { return r == '/' || r == '\\' })
 	for i := len(parts) - 1; i >= 0; i-- {
-		if strings.HasPrefix(strings.ToLower(parts[i]), "openai.codex_") {
-			fields := strings.Split(parts[i], "_")
-			if len(fields) > 1 {
-				version := fields[1]
-				return &version
-			}
+		if _, version, _, ok := windowsCodexPackageParts(parts[i]); ok && version != "" {
+			return &version
 		}
 	}
 	return nil

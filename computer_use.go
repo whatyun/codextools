@@ -16,6 +16,8 @@ const (
 	computerUsePluginName    = "computer-use"
 	computerUseMarketplace   = "openai-bundled"
 	computerUsePluginVersion = "0.1.0-local"
+	computerUseBrowserPlugin = "browser@openai-bundled"
+	computerUseChromePlugin  = "chrome@openai-bundled"
 )
 
 func (s *server) loadComputerUseStatus() commandResult {
@@ -120,7 +122,8 @@ func fillComputerUseFileStatus(home string, status *computerUseStatus) {
 	windows := tableValues(contents, "windows")
 	status.ConfigMarketplace = strings.TrimSpace(unquoteToml(marketplace["source_type"])) == "local" && strings.TrimSpace(unquoteToml(marketplace["source"])) != ""
 	status.ConfigPlugin = strings.TrimSpace(plugin["enabled"]) == "true"
-	status.ConfigNodeRepl = strings.TrimSpace(unquoteToml(nodeReplEnv["BROWSER_USE_MARKETPLACE_NAME"])) == computerUseMarketplace
+	features := tableValues(contents, "features")
+	status.ConfigNodeRepl = strings.TrimSpace(unquoteToml(nodeReplEnv["BROWSER_USE_MARKETPLACE_NAME"])) == computerUseMarketplace || strings.TrimSpace(features["js_repl"]) == "true"
 	status.ConfigWindows = strings.TrimSpace(unquoteToml(windows["sandbox"])) == "unelevated"
 	status.ConfigReady = status.ConfigMarketplace && status.ConfigPlugin && status.ConfigWindows
 	status.AllReady = status.Supported && status.EnvEnabled && status.MarketplaceManifest && status.MarketplacePlugin && status.CacheLatest && status.HelperTransport && status.ConfigReady
@@ -368,7 +371,8 @@ func windowsInstalledCodexPackageRoots() []string {
 	}
 	commands := [][]string{
 		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.PackageFullName -like 'OpenAI.Codex_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.CodexBeta -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.CodexBeta' -or $_.PackageFullName -like 'OpenAI.Codex_*' -or $_.PackageFullName -like 'OpenAI.CodexBeta_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
 	}
 	var roots []string
 	for _, command := range commands {
@@ -560,19 +564,234 @@ func validateComputerUseReady(status computerUseStatus) error {
 func updateComputerUseCodexConfig(home, marketplaceRoot string) (*string, error) {
 	configPath := filepath.Join(home, "config.toml")
 	contents := readFile(configPath)
-	updated := upsertTomlTable(contents, "marketplaces."+computerUseMarketplace, []string{
-		"last_updated = " + quoteToml(time.Now().UTC().Format(time.RFC3339)),
-		`source_type = "local"`,
-		"source = " + quoteToml(computerUseConfigSourcePath(marketplaceRoot)),
-	})
-	updated = upsertTomlTable(updated, fmt.Sprintf("plugins.%s", quoteToml(computerUsePluginName+"@"+computerUseMarketplace)), []string{
-		"enabled = true",
-	})
+	updated := computerUseGuardConfigText(contents, marketplaceRoot, computerUseNotifyExe(home))
 	updated, _ = repairNodeReplMCPConfig(home, updated)
 	updated = upsertTomlTable(updated, "windows", []string{
 		`sandbox = "unelevated"`,
 	})
 	return writeCodexConfigWithBackup(configPath, updated, "computer-use")
+}
+
+type computerUseGuardResult struct {
+	Changed   bool
+	NotifyExe string
+}
+
+func ensureComputerUseGuardConfig(home string) (computerUseGuardResult, error) {
+	if runtime.GOOS != "windows" {
+		return computerUseGuardResult{}, nil
+	}
+	marketplaceRoot := computerUseMarketplaceRoot(home)
+	_ = syncBundledMarketplaceFromInstalledCodex(marketplaceRoot)
+	if !isCompleteOpenAIBundledMarketplace(marketplaceRoot) {
+		if err := os.MkdirAll(marketplaceRoot, 0o755); err != nil {
+			return computerUseGuardResult{}, err
+		}
+		marketplacePlugin := filepath.Join(marketplaceRoot, "plugins", computerUsePluginName)
+		usedLocalFallback, err := materializeComputerUseMarketplacePlugin(home, marketplacePlugin)
+		if err != nil {
+			return computerUseGuardResult{}, err
+		}
+		if err := ensureComputerUseCachedPlugin(home, marketplacePlugin, usedLocalFallback); err != nil {
+			return computerUseGuardResult{}, err
+		}
+		if err := updateComputerUseMarketplaceManifest(marketplaceRoot, usedLocalFallback); err != nil {
+			return computerUseGuardResult{}, err
+		}
+	}
+	notifyExe := computerUseNotifyExe(home)
+	configPath := filepath.Join(home, "config.toml")
+	existing := readFile(configPath)
+	updated := computerUseGuardConfigText(existing, marketplaceRoot, notifyExe)
+	changed := updated != existing
+	if changed {
+		if _, err := writeCodexConfigWithBackup(configPath, updated, "computer-use-guard"); err != nil {
+			return computerUseGuardResult{}, err
+		}
+	}
+	runtimeChanged, err := ensureComputerUseRuntimeExportsCompat(home)
+	if err != nil {
+		return computerUseGuardResult{}, err
+	}
+	return computerUseGuardResult{Changed: changed || runtimeChanged, NotifyExe: notifyExe}, nil
+}
+
+func computerUseGuardConfigText(contents, marketplaceRoot, notifyExe string) string {
+	updated := strings.TrimLeft(contents, "\ufeff")
+	updated = upsertTableKey(updated, "features", "js_repl", "true")
+	for _, pluginID := range []string{computerUseBrowserPlugin, computerUseChromePlugin, computerUsePluginName + "@" + computerUseMarketplace} {
+		updated = upsertTomlTable(updated, fmt.Sprintf("plugins.%s", quoteToml(pluginID)), []string{"enabled = true"})
+	}
+	if strings.TrimSpace(marketplaceRoot) != "" {
+		updated = upsertTomlTable(updated, "marketplaces."+computerUseMarketplace, []string{
+			`source_type = "local"`,
+			"source = " + quoteToml(computerUseConfigSourcePath(marketplaceRoot)),
+		})
+	}
+	if strings.TrimSpace(notifyExe) != "" {
+		updated = upsertRootKey(updated, "notify", "["+quoteToml(notifyExe)+`, "turn-ended"]`)
+	}
+	return ensureTrailingNewline(updated)
+}
+
+func computerUseNotifyExe(home string) string {
+	candidates := []string{}
+	addMatches := func(pattern string) {
+		matches, _ := filepath.Glob(pattern)
+		candidates = append(candidates, matches...)
+	}
+	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+		addMatches(filepath.Join(localAppData, "OpenAI", "Codex", "runtimes", "cua_node", "*", "bin", "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"))
+		addMatches(filepath.Join(localAppData, "OpenAI", "Codex", "runtimes", "cua_node", "*", "**", "codex-computer-use.exe"))
+	}
+	addMatches(filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "*", "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"))
+	addMatches(filepath.Join(home, ".tmp", "bundled-marketplaces", "openai-bundled", "plugins", "computer-use", "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"))
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return fileModUnixMilli(candidates[i]) > fileModUnixMilli(candidates[j])
+	})
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func fileModUnixMilli(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixMilli()
+}
+
+func isCompleteOpenAIBundledMarketplace(path string) bool {
+	if !fileExists(filepath.Join(path, ".agents", "plugins", "marketplace.json")) {
+		return false
+	}
+	for _, plugin := range []string{"browser", "chrome", "computer-use", "latex"} {
+		if !fileExists(filepath.Join(path, "plugins", plugin, ".codex-plugin", "plugin.json")) {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureComputerUseRuntimeExportsCompat(home string) (bool, error) {
+	if runtime.GOOS != "windows" || !computerUseClientNeedsSkyInternalExport(home) {
+		return false, nil
+	}
+	packageJSON := findSkyPackageJSONForComputerUse(home)
+	if packageJSON == "" {
+		return false, nil
+	}
+	internalFile := filepath.Join(filepath.Dir(packageJSON), "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "computer_use_client_base.js")
+	if !fileExists(internalFile) {
+		return false, nil
+	}
+	data, err := os.ReadFile(packageJSON)
+	if err != nil {
+		return false, err
+	}
+	updated, changed := addSkyInternalComputerUseExport(string(data))
+	if !changed {
+		return false, nil
+	}
+	backupPath := filepath.Join(filepath.Dir(packageJSON), "package.json.bak-codexpp-runtime-exports")
+	if !fileExists(backupPath) {
+		_ = os.WriteFile(backupPath, data, 0o644)
+	}
+	return true, atomicWrite(packageJSON, []byte(updated))
+}
+
+func computerUseClientNeedsSkyInternalExport(home string) bool {
+	pattern := filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "*", "**", "computer-use-client.mjs")
+	matches, _ := filepath.Glob(pattern)
+	matches2, _ := filepath.Glob(filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "*", "scripts", "computer-use-client.mjs"))
+	matches = append(matches, matches2...)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), "@oai/sky/dist/project/cua/sky_js/src/targets/windows/internal/computer_use_client_base.js") {
+			return true
+		}
+	}
+	return false
+}
+
+func findSkyPackageJSONForComputerUse(home string) string {
+	var candidates []string
+	if notify := computerUseNotifyExe(home); notify != "" {
+		for dir := filepath.Dir(notify); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			if strings.EqualFold(filepath.Base(dir), "sky") && strings.EqualFold(filepath.Base(filepath.Dir(dir)), "@oai") {
+				candidates = append(candidates, filepath.Join(dir, "package.json"))
+				break
+			}
+		}
+	}
+	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+		matches, _ := filepath.Glob(filepath.Join(localAppData, "OpenAI", "Codex", "runtimes", "cua_node", "*", "bin", "node_modules", "@oai", "sky", "package.json"))
+		candidates = append(candidates, matches...)
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, "plugins", "cache", "openai-bundled", "computer-use", "*", "node_modules", "@oai", "sky", "package.json"))
+	candidates = append(candidates, matches...)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return fileModUnixMilli(candidates[i]) > fileModUnixMilli(candidates[j])
+	})
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func addSkyInternalComputerUseExport(contents string) (string, bool) {
+	var pkg map[string]any
+	if json.Unmarshal([]byte(contents), &pkg) != nil {
+		return contents, false
+	}
+	exports, _ := pkg["exports"].(map[string]any)
+	if exports == nil {
+		return contents, false
+	}
+	const key = "./dist/project/cua/sky_js/src/targets/windows/internal/computer_use_client_base.js"
+	if _, ok := exports[key]; ok {
+		return contents, false
+	}
+	exports[key] = key
+	data, err := json.MarshalIndent(pkg, "", "  ")
+	if err != nil {
+		return contents, false
+	}
+	return string(data) + "\n", true
+}
+
+func startComputerUseGuardWatchdog(home string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	delays := []time.Duration{0, 5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second, 180 * time.Second, 240 * time.Second, 300 * time.Second}
+	stable := 0
+	for _, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		result, err := ensureComputerUseGuardConfig(home)
+		if err != nil {
+			appendDiagnosticLog("computer_use_guard.post_launch_failed", map[string]any{"error": err.Error()})
+			continue
+		}
+		appendDiagnosticLog("computer_use_guard.post_launch_ok", map[string]any{"changed": result.Changed, "notify_exe": result.NotifyExe})
+		if result.Changed {
+			stable = 0
+			continue
+		}
+		stable++
+		if stable >= 3 {
+			appendDiagnosticLog("computer_use_guard.post_launch_stable_stop", map[string]any{"stable_attempts": stable})
+			return
+		}
+	}
 }
 
 func computerUseConfigSourcePath(path string) string {

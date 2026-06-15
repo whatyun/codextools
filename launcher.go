@@ -147,6 +147,14 @@ func runLauncher(args []string) error {
 		}
 		defer runtimeState.shutdownRelayProxy()
 	}
+	if settings.ComputerUseGuardEnabled {
+		result, guardErr := ensureComputerUseGuardConfig(codexHomeDir())
+		if guardErr != nil {
+			appendDiagnosticLog("computer_use_guard.pre_launch_failed", map[string]any{"error": guardErr.Error()})
+		} else {
+			appendDiagnosticLog("computer_use_guard.pre_launch_ok", map[string]any{"changed": result.Changed, "notify_exe": result.NotifyExe})
+		}
+	}
 	status := launchStatus{
 		Status:      "starting",
 		Message:     "Codex++ launcher starting Codex and waiting for injection.",
@@ -189,6 +197,9 @@ func runLauncher(args []string) error {
 			appendDiagnosticLog("launcher.inject_degraded", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		}
 		go runtimeState.bridgeWatchdog(helperPort)
+	}
+	if settings.ComputerUseGuardEnabled {
+		go startComputerUseGuardWatchdog(codexHomeDir())
 	}
 	_ = atomicWriteJSON(latestStatusPath(), ready)
 	appendDiagnosticLog("launcher.ready", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "launch": launch.logPayload()})
@@ -605,7 +616,8 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 }
 
 func helperNeeded(settings backendSettings) bool {
-	return settings.Enhancements || activeRelayProfile(settings).Protocol == "chatCompletions" || activeRelayProfile(settings).needsLocalRelayProxy()
+	imageOverlayNeeded := settings.CodexAppImageOverlayEnabled && strings.TrimSpace(settings.CodexAppImageOverlayPath) != ""
+	return settings.Enhancements || imageOverlayNeeded || activeRelayProfile(settings).Protocol == "chatCompletions" || activeRelayProfile(settings).needsLocalRelayProxy()
 }
 
 type codexLaunchHandle interface {

@@ -550,8 +550,11 @@ func repairNodeReplMCPConfig(home, contents string) (string, int) {
 	resourcesDir := codexResourcesDir()
 	nodeReplPath := filepath.Join(resourcesDir, "node_repl")
 	nodePath := filepath.Join(resourcesDir, "node")
-	if !fileExists(nodeReplPath) || !fileExists(nodePath) {
-		return contents, 0
+	if !fileExists(nodeReplPath) {
+		nodeReplPath = companionBinaryPath(managerBinary)
+	}
+	if !fileExists(nodePath) {
+		nodePath = companionBinaryPath(managerBinary)
 	}
 	updated := removeTable(removeTable(contents, "mcp_servers.node_repl"), "mcp_servers.node_repl.env")
 	lines := []string{

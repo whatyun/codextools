@@ -132,7 +132,8 @@ func latestCodexToolsUpdate(ctx context.Context, goos, goarch string) (map[strin
 	payload["downloadUrl"] = asset.BrowserDownloadURL
 	payload["size"] = asset.Size
 	payload["contentType"] = asset.ContentType
-	payload["message"] = "发现新版本，可下载更新包。"
+	annotateCodexToolsAssetPayload(payload, asset.Name, goos)
+	payload["message"] = codexToolsUpdateAvailableMessage(goos, stringFromAny(payload["assetKind"]))
 	return payload, nil
 }
 
@@ -182,11 +183,12 @@ func latestCodexToolsUpdateFromDownloadsPage(ctx context.Context, base map[strin
 	payload["downloadUrl"] = asset.BrowserDownloadURL
 	payload["size"] = asset.Size
 	payload["contentType"] = asset.ContentType
-	payload["message"] = "发现新版本，可下载更新包。"
+	annotateCodexToolsAssetPayload(payload, asset.Name, goos)
+	payload["message"] = codexToolsUpdateAvailableMessage(goos, stringFromAny(payload["assetKind"]))
 	return payload, nil
 }
 
-var codexToolsDownloadHrefPattern = regexp.MustCompile(`(?i)href=["']([^"']*CodexTools-[^"']+\.(pkg|zip|exe))["']`)
+var codexToolsDownloadHrefPattern = regexp.MustCompile(`(?i)href=["']([^"']*CodexTools-[^"']+\.(pkg|dmg|zip|exe))["']`)
 
 func codexToolsDownloadsAssets(page string) []codexAppMirrorAsset {
 	matches := codexToolsDownloadHrefPattern.FindAllStringSubmatch(page, -1)
@@ -228,6 +230,8 @@ func codexToolsAssetContentType(name string) string {
 	switch {
 	case strings.HasSuffix(lower, ".pkg"):
 		return "application/octet-stream"
+	case strings.HasSuffix(lower, ".dmg"):
+		return "application/x-apple-diskimage"
 	case strings.HasSuffix(lower, ".zip"):
 		return "application/zip"
 	case strings.HasSuffix(lower, ".exe"):
@@ -317,7 +321,10 @@ func codexToolsAssetScore(name, goos, goarch string) int {
 			score += 40
 		}
 		if strings.HasSuffix(lower, ".pkg") {
-			score += 24
+			score += 80
+		}
+		if strings.HasSuffix(lower, ".dmg") {
+			score += 55
 		}
 	case "windows":
 		if strings.Contains(lower, "windows") || strings.Contains(lower, "win") {
@@ -342,10 +349,17 @@ func codexToolsAssetScore(name, goos, goarch string) int {
 		}
 	}
 	if strings.HasSuffix(lower, ".zip") {
-		score += 12
+		if goos == "darwin" {
+			score -= 20
+		} else {
+			score += 12
+		}
 	}
 	if strings.HasSuffix(lower, ".pkg") {
 		score += 18
+	}
+	if strings.HasSuffix(lower, ".dmg") {
+		score += 14
 	}
 	if strings.HasSuffix(lower, ".exe") {
 		score += 18
@@ -354,6 +368,39 @@ func codexToolsAssetScore(name, goos, goarch string) int {
 		score -= 100
 	}
 	return score
+}
+
+func annotateCodexToolsAssetPayload(payload map[string]any, name, goos string) {
+	lower := strings.ToLower(name)
+	kind := "archive"
+	if strings.HasSuffix(lower, ".pkg") {
+		kind = "pkg"
+	} else if strings.HasSuffix(lower, ".dmg") {
+		kind = "dmg"
+	} else if strings.HasSuffix(lower, ".exe") {
+		kind = "installer"
+	} else if strings.HasSuffix(lower, ".zip") {
+		kind = "portable"
+	}
+	payload["assetKind"] = kind
+	payload["portable"] = kind == "portable"
+	if goos == "darwin" {
+		payload["installTarget"] = "/Applications"
+		payload["installerDefault"] = kind == "pkg" || kind == "dmg"
+	}
+}
+
+func codexToolsUpdateAvailableMessage(goos, kind string) string {
+	if goos == "darwin" {
+		if kind == "pkg" {
+			return "发现新版本，可下载 macOS pkg 安装器；安装后会覆盖 /Applications 中的 Codex++ 应用。"
+		}
+		if kind == "dmg" {
+			return "发现新版本，可下载 macOS DMG；请拖入 /Applications 覆盖旧版 Codex++ 应用。"
+		}
+		return "发现新版本，但仅找到便携包；建议到发布页下载 pkg 安装器以覆盖 /Applications。"
+	}
+	return "发现新版本，可下载更新包。"
 }
 
 func compareVersions(a, b string) int {
@@ -432,7 +479,13 @@ func downloadsDir() string {
 func safeUpdateFilename(assetName, latestVersion string) string {
 	name := filepath.Base(strings.TrimSpace(assetName))
 	if name == "." || name == string(filepath.Separator) || name == "" {
-		name = fmt.Sprintf("CodexTools-%s-%s-%s.zip", cleanVersion(latestVersion), runtime.GOOS, runtime.GOARCH)
+		ext := ".zip"
+		if runtime.GOOS == "darwin" {
+			ext = ".pkg"
+		} else if runtime.GOOS == "windows" {
+			ext = ".exe"
+		}
+		name = fmt.Sprintf("CodexTools-%s-%s-%s%s", cleanVersion(latestVersion), runtime.GOOS, runtime.GOARCH, ext)
 	}
 	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
 	return name

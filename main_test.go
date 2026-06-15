@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,12 @@ import (
 	"strings"
 	"testing"
 )
+
+func contextWithCanceledNetwork() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
 
 func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
 	request := parseLaunchRequest([]string{"--launcher", "--debug-port", "9229", "--helper-port", "57321", "--restart"})
@@ -142,6 +149,23 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 	}
 }
 
+func TestComputerUseGuardConfigPreservesExistingFeatureKeys(t *testing.T) {
+	updated := computerUseGuardConfigText("[features]\nfoo = true\n", "/tmp/marketplace", "/tmp/notify")
+
+	for _, expected := range []string{
+		`[features]`,
+		`foo = true`,
+		`js_repl = true`,
+		`[plugins."browser@openai-bundled"]`,
+		`[marketplaces.openai-bundled]`,
+		`notify = ["/tmp/notify", "turn-ended"]`,
+	} {
+		if !strings.Contains(updated, expected) {
+			t.Fatalf("computer use guard config missing %q:\n%s", expected, updated)
+		}
+	}
+}
+
 func TestBuildWatcherInstallPlanMatchesOriginalWindowsShape(t *testing.T) {
 	plan := buildWatcherInstallPlan(`C:\Tools\Codex++.exe`, 9229, `C:\Users\A\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CodexPlusPlusWatcher.lnk`)
 
@@ -174,6 +198,10 @@ func TestMacOSReleasePackageForcesApplicationsInstallLocation(t *testing.T) {
 		`--component-plist "$component_plist"`,
 		`ditto --norsrc --noextattr --noacl --noqtn`,
 		`"$pkg_root/Applications"`,
+		`verify_pkg_payload_root()`,
+		`verify_pkg_payload_root "$pkg_root"`,
+		`"$pkg_root/Applications/$LAUNCHER_NAME.app/Contents/Info.plist"`,
+		`"$pkg_root/Applications/$APP_NAME.app/Contents/Info.plist"`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("macOS pkg script must force /Applications install; missing %q", expected)
@@ -315,6 +343,30 @@ func TestSaveSettingsPreservesUnknownTopLevelFields(t *testing.T) {
 	}
 }
 
+func TestSaveSettingsPersistsOnboardingCompletion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settings := defaultSettings()
+	settings.OnboardingCompleted = true
+	settings.OnboardingCompletedAt = "2026-06-09T12:00:00Z"
+	settings.OnboardingCompletedPlatform = "windows"
+
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	loaded := loadSettings()
+	if !loaded.OnboardingCompleted {
+		t.Fatal("onboarding completion should persist")
+	}
+	if loaded.OnboardingCompletedAt != "2026-06-09T12:00:00Z" {
+		t.Fatalf("completion time mismatch: %q", loaded.OnboardingCompletedAt)
+	}
+	if loaded.OnboardingCompletedPlatform != "windows" {
+		t.Fatalf("completion platform mismatch: %q", loaded.OnboardingCompletedPlatform)
+	}
+}
+
 func TestRelayStatusDetectsBoundOfficialAuthWithoutCurrentAuthFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -417,6 +469,103 @@ func TestPlatformAndArchDisplayNames(t *testing.T) {
 	}
 	if got := archDisplayName("arm64"); got != "ARM64" {
 		t.Fatalf("arm64 arch label mismatch: %q", got)
+	}
+}
+
+func TestInstallGuidePlatformGuideSeparatesMacAndWindows(t *testing.T) {
+	mac := installGuidePlatformGuide("darwin")
+	if got := stringFromAny(mac["title"]); !strings.Contains(got, "macOS") {
+		t.Fatalf("mac guide should be labeled macOS: %#v", mac)
+	}
+	for _, expected := range []string{"Codex.app", "官方"} {
+		if !strings.Contains(stringFromAny(mac["detectionNote"])+stringFromAny(mac["installTitle"])+stringFromAny(mac["installActionLabel"]), expected) {
+			t.Fatalf("mac guide should mention %q: %#v", expected, mac)
+		}
+	}
+	if got := stringFromAny(mac["desktopRuntime"]); !strings.Contains(got, "WebKit") {
+		t.Fatalf("mac runtime should mention WebKit: %q", got)
+	}
+	if got := stringFromAny(mac["manualPrimaryMode"]); got != "folder" {
+		t.Fatalf("mac manual mode mismatch: %q", got)
+	}
+
+	windows := installGuidePlatformGuide("windows")
+	if got := stringFromAny(windows["title"]); !strings.Contains(got, "Windows") {
+		t.Fatalf("windows guide should be labeled Windows: %#v", windows)
+	}
+	combined := stringFromAny(windows["systemDescription"]) + stringFromAny(windows["detectionNote"]) + stringFromAny(windows["launchTargetLabel"])
+	for _, expected := range []string{"Codex.exe", "WindowsApps", "AppUserModelID", "MSIX"} {
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("windows guide should mention %q: %#v", expected, windows)
+		}
+	}
+	if got := stringFromAny(windows["desktopRuntime"]); !strings.Contains(got, "WebView2") {
+		t.Fatalf("windows runtime should mention WebView2: %q", got)
+	}
+	if got := stringFromAny(windows["manualPrimaryMode"]); got != "file" {
+		t.Fatalf("windows manual mode mismatch: %q", got)
+	}
+	if got := stringFromAny(windows["manualSecondaryMode"]); got != "folder" {
+		t.Fatalf("windows secondary manual mode mismatch: %q", got)
+	}
+}
+
+func TestLoadInstallGuideStatusReportsCurrentPlatformCompletion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settings := defaultSettings()
+	settings.OnboardingCompleted = true
+	settings.OnboardingCompletedAt = "2026-06-09T12:00:00Z"
+	settings.OnboardingCompletedPlatform = runtime.GOOS
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).loadInstallGuideStatus(contextWithCanceledNetwork())
+
+	if !boolFromAny(result["onboardingCompleted"]) {
+		t.Fatalf("raw onboarding completion should be reported: %#v", result)
+	}
+	if !boolFromAny(result["onboardingCompletedForCurrentPlatform"]) {
+		t.Fatalf("current platform completion should be true: %#v", result)
+	}
+	if boolFromAny(result["onboardingPlatformMismatch"]) {
+		t.Fatalf("current platform should not mismatch: %#v", result)
+	}
+	guide, ok := result["platformGuide"].(map[string]any)
+	if !ok {
+		t.Fatalf("platform guide missing: %#v", result["platformGuide"])
+	}
+	if got := stringFromAny(guide["platform"]); got != runtime.GOOS {
+		t.Fatalf("platform guide should match runtime platform: %q", got)
+	}
+}
+
+func TestLoadInstallGuideStatusReportsPlatformMismatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	otherPlatform := "windows"
+	if runtime.GOOS == "windows" {
+		otherPlatform = "darwin"
+	}
+	settings := defaultSettings()
+	settings.OnboardingCompleted = true
+	settings.OnboardingCompletedAt = "2026-06-09T12:00:00Z"
+	settings.OnboardingCompletedPlatform = otherPlatform
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).loadInstallGuideStatus(contextWithCanceledNetwork())
+
+	if !boolFromAny(result["onboardingCompleted"]) {
+		t.Fatalf("raw onboarding completion should be reported: %#v", result)
+	}
+	if boolFromAny(result["onboardingCompletedForCurrentPlatform"]) {
+		t.Fatalf("mismatched platform should not be current-platform complete: %#v", result)
+	}
+	if !boolFromAny(result["onboardingPlatformMismatch"]) {
+		t.Fatalf("mismatched platform should be reported: %#v", result)
 	}
 }
 
@@ -1750,6 +1899,17 @@ func TestPackagedWindowsAppUserModelIDMatchesOriginalLauncherShape(t *testing.T)
 
 	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
 		t.Fatalf("app user model id mismatch: %q", got)
+	}
+}
+
+func TestPackagedWindowsAppUserModelIDSupportsCodexBetaPackage(t *testing.T) {
+	path := `C:\Program Files\WindowsApps\OpenAI.CodexBeta_26.619.2200.0_x64__2p2nqsd0c76g0\app`
+
+	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.CodexBeta_2p2nqsd0c76g0!App" {
+		t.Fatalf("beta app user model id mismatch: %q", got)
+	}
+	if got := windowsPackageVersionFromPath(path); got != "26.619.2200.0" {
+		t.Fatalf("beta package version mismatch: %q", got)
 	}
 }
 

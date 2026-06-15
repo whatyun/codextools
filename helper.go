@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -101,6 +102,12 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 	switch req.URL.Path {
 	case "/backend/status", "/backend/repair":
 		writeHelperJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "后端已连接", "version": version, "transport": "http-helper"})
+	case "/overlay/image":
+		if req.Method != http.MethodGet {
+			writeHelperJSON(w, http.StatusMethodNotAllowed, map[string]any{"status": "failed", "message": "图片覆盖层只支持 GET"})
+			break
+		}
+		r.writeOverlayImage(w)
 	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
 		var payload map[string]any
 		_ = json.Unmarshal(body, &payload)
@@ -117,6 +124,29 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 	default:
 		writeHelperJSON(w, http.StatusNotFound, map[string]any{"status": "failed", "message": "未知后端路径"})
 	}
+}
+
+func (r *launcherRuntime) writeOverlayImage(w http.ResponseWriter) {
+	settings := normalizeSettings(loadSettings())
+	imagePath := strings.TrimSpace(settings.CodexAppImageOverlayPath)
+	contentType := overlayImageContentType(imagePath)
+	if !settings.CodexAppImageOverlayEnabled || imagePath == "" || contentType == "" {
+		writeHelperJSON(w, http.StatusNotFound, map[string]any{"status": "failed", "message": "图片覆盖层未启用或图片不可用"})
+		appendDiagnosticLog("helper.overlay_image_not_found", map[string]any{"reason": "disabled_or_invalid_path"})
+		return
+	}
+	bytes, err := os.ReadFile(imagePath)
+	if err != nil {
+		writeHelperJSON(w, http.StatusNotFound, map[string]any{"status": "failed", "message": "图片覆盖层未启用或图片不可用"})
+		appendDiagnosticLog("helper.overlay_image_not_found", map[string]any{"path": imagePath, "error": err.Error()})
+		return
+	}
+	writeCORSHeaders(w)
+	w.Header().Set("content-type", contentType)
+	w.Header().Set("cache-control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(bytes)
+	appendDiagnosticLog("helper.overlay_image_ok", map[string]any{"path": imagePath, "bytes": len(bytes), "content_type": contentType})
 }
 
 func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Request, body []byte) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -181,6 +182,35 @@ func TestBridgeSettingsIncludesRuntimeCodexAppVersion(t *testing.T) {
 
 	if got := stringFromAny(result["codexAppVersion"]); got != "26.601.2237.0" {
 		t.Fatalf("bridge settings should expose runtime Codex app version, got %#v from %#v", got, result)
+	}
+}
+
+func TestImageOverlayConfigAndInjectionScript(t *testing.T) {
+	imagePath := filepath.Join(t.TempDir(), "overlay.png")
+	if err := os.WriteFile(imagePath, []byte{0x89, 'P', 'N', 'G'}, 0o644); err != nil {
+		t.Fatalf("write overlay image failed: %v", err)
+	}
+	settings := defaultSettings()
+	settings.CodexAppImageOverlayEnabled = true
+	settings.CodexAppImageOverlayPath = imagePath
+	settings.CodexAppImageOverlayOpacity = 42
+
+	config := imageOverlayConfig(57321, settings)
+
+	if !boolFromAny(config["enabled"]) {
+		t.Fatalf("overlay should be enabled: %#v", config)
+	}
+	if got := stringFromAny(config["dataUrl"]); !strings.HasPrefix(got, "data:image/png;base64,") {
+		t.Fatalf("overlay data URL mismatch: %q", got)
+	}
+	if got := stringFromAny(config["imageUrl"]); got != "http://127.0.0.1:57321/overlay/image" {
+		t.Fatalf("overlay image URL mismatch: %q", got)
+	}
+	script := injectionScript(57321, settings)
+	for _, expected := range []string{"__CODEX_PLUS_IMAGE_OVERLAY__", "codex-plus-image-overlay", "image_overlay_installed"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("injection script missing overlay marker %q", expected)
+		}
 	}
 }
 

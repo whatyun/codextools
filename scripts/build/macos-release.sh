@@ -160,6 +160,25 @@ force_component_bundle_policy() {
   fi
 }
 
+verify_pkg_payload_root() {
+  local pkg_root="$1"
+  local launcher_plist="$pkg_root/Applications/$LAUNCHER_NAME.app/Contents/Info.plist"
+  local manager_plist="$pkg_root/Applications/$APP_NAME.app/Contents/Info.plist"
+
+  if [[ ! -s "$launcher_plist" ]]; then
+    echo "error: pkg payload missing /Applications/$LAUNCHER_NAME.app" >&2
+    return 1
+  fi
+  if [[ ! -s "$manager_plist" ]]; then
+    echo "error: pkg payload missing /Applications/$APP_NAME.app" >&2
+    return 1
+  fi
+  if ! find "$pkg_root/Applications" -mindepth 1 -maxdepth 1 -name '*.app' -print -quit | grep -q .; then
+    echo "error: pkg payload has no app bundles under /Applications" >&2
+    return 1
+  fi
+}
+
 build_arch() {
   local goarch="$1"
   local label
@@ -210,6 +229,7 @@ build_arch() {
   if command -v dot_clean >/dev/null 2>&1; then
     dot_clean -m "$pkg_root" >/dev/null 2>&1 || true
   fi
+  verify_pkg_payload_root "$pkg_root"
   cat > "$pkg_resources/ReadMe.html" <<HTML
 <!doctype html>
 <html>
