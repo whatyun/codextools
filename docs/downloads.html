@@ -170,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.30-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.30-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.30-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.30-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.30-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.30-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.30-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.30-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.31-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -193,20 +193,20 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.30-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.30-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.30-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.30-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.30-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.30-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.30-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.30-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.31-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -214,21 +214,25 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.30</strong>
+          <strong>Version 1.1.31</strong>
           <ul>
-            <li>Fixes Windows plugin marketplace refresh by skipping unusable WindowsApps Codex CLI aliases.</li>
-            <li>Prefers the real user-local Codex runtime CLI when refreshing plugins on Windows.</li>
-            <li>Only writes CODEX_CLI_PATH into the Node REPL MCP config when a usable Codex CLI is found.</li>
-            <li>Marks macOS pkg installers as binary release assets in repository attributes.</li>
+            <li>Adds multilingual README pages in English, Japanese, and Korean, plus a clearer Chinese landing README.</li>
+            <li>Adds macOS Gatekeeper warning screenshot guidance for unsigned pkg installers and installed app bundles.</li>
+            <li>Updates dashboard and analytics workflows with image overlay controls, provider presets, onboarding completion state, and richer update metadata.</li>
+            <li>Expands Zed Remote with remembered remote projects, configurable open strategies, registry controls, and optional Zed settings sync.</li>
+            <li>Hardens Computer Use guard setup for bundled browser/chrome plugins, js_repl, notify hooks, and Codex/CodexBeta package discovery.</li>
+            <li>Verifies macOS package payloads during release builds so both apps must be staged under `/Applications`.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.30</strong>
+          <strong>版本 1.1.31</strong>
           <ul>
-            <li>修复 Windows 插件市场刷新，跳过不可用的 WindowsApps Codex CLI alias。</li>
-            <li>Windows 刷新插件时优先使用真实的用户本地 Codex runtime CLI。</li>
-            <li>只有找到可用 Codex CLI 时，才向 Node REPL MCP 配置写入 CODEX_CLI_PATH。</li>
-            <li>在仓库属性中将 macOS pkg 安装包显式标记为二进制发布资产。</li>
+            <li>新增英文、日文、韩文 README，并整理更清晰的中文仓库首页。</li>
+            <li>新增 macOS Gatekeeper 警告截图，并扩展未签名 pkg 安装包和已安装 app 的 FAQ 指引。</li>
+            <li>更新 dashboard 与 analytics 工作流，加入图片覆盖层控制、服务商预设、onboarding 完成状态和更丰富的更新元数据。</li>
+            <li>扩展 Zed Remote：支持记住远程项目、配置打开策略、项目注册表控制，以及可选同步到 Zed settings。</li>
+            <li>强化 Computer Use guard 配置，覆盖 bundled browser/chrome 插件、js_repl、notify hooks，以及 Codex/CodexBeta 包发现。</li>
+            <li>macOS release 构建会校验 pkg payload，确保两个 app 都被放入 `/Applications`。</li>
           </ul>
         </div>
       </section>
@@ -255,7 +259,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS installer packages install `Codex++ 管理工具.app` and `Codex++.app` into `/Applications`.</li>
             <li>The macOS pkg installers and zip app bundles are unsigned community builds; use the first launch note above if Gatekeeper blocks them.</li>
             <li>Windows x64 is for traditional Intel/AMD PCs. Windows arm64 is for Windows on ARM devices.</li>
-            <li>This release focuses on platform-specific install flows, macOS desktop editing shortcuts, and broader localization coverage.</li>
+            <li>This release focuses on documentation localization, macOS unsigned-build guidance, dashboard workflows, Zed Remote, and Computer Use hardening.</li>
           </ul>
         </div>
         <div data-lang="zh">
@@ -264,7 +268,7 @@ xattr -cr "/Applications/Codex++.app"</code></pre>
             <li>macOS 安装包会把 `Codex++ 管理工具.app` 和 `Codex++.app` 安装到 `/Applications`。</li>
             <li>macOS pkg 安装包和 zip app 包都是未签名社区构建；如果被 Gatekeeper 阻止，请使用上方首次启动提醒。</li>
             <li>Windows x64 适合传统 Intel/AMD 电脑；Windows arm64 适合 Windows ARM 设备。</li>
-            <li>这个版本重点改进平台专属安装流程、macOS 桌面编辑快捷键和更完整的本地化覆盖。</li>
+            <li>这个版本重点改进文档本地化、macOS 未签名构建指引、dashboard 工作流、Zed Remote 和 Computer Use 稳定性。</li>
           </ul>
         </div>
       </section>
