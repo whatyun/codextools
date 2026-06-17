@@ -1994,6 +1994,35 @@ body {
   color: hsl(var(--primary));
 }
 
+.env-conflict-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.env-conflict-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background: hsl(var(--muted) / 0.38);
+  padding: 10px 12px;
+}
+
+.env-conflict-row strong,
+.env-conflict-row span {
+  display: block;
+}
+
+.env-conflict-row span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
 .platform-note {
   display: flex;
   gap: 9px;

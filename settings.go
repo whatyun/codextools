@@ -86,7 +86,10 @@ func diagnosticLogPath() string {
 
 func codexHomeDir() string {
 	if custom := strings.TrimSpace(os.Getenv("CODEX_HOME")); custom != "" {
-		return filepath.Clean(os.ExpandEnv(custom))
+		expanded := filepath.Clean(os.ExpandEnv(custom))
+		if isDir(expanded) {
+			return expanded
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -334,6 +337,7 @@ func defaultEnabledSettingsFromRaw() map[string]bool {
 		"codexAppMarkdownExport",
 		"codexAppProjectMove",
 		"codexAppConversationTimeline",
+		"codexAppThreadIdBadge",
 		"codexAppThreadScrollRestore",
 		"codexAppZedRemoteOpen",
 		"codexAppUpstreamWorktreeCreate",
@@ -352,11 +356,11 @@ func migrateOfficialAuthBinding(settings backendSettings) (backendSettings, bool
 	changed := false
 	for index := range settings.RelayProfiles {
 		profile := settings.RelayProfiles[index]
+		if profile.ID == activeID && relayProfileUsesLiveFiles(profile) && strings.TrimSpace(profile.ConfigContents) == "" && strings.TrimSpace(currentConfig) != "" {
+			settings.RelayProfiles[index].ConfigContents = currentConfig
+			changed = true
+		}
 		if profile.ID == activeID {
-			if strings.TrimSpace(profile.ConfigContents) == "" && strings.TrimSpace(currentConfig) != "" {
-				settings.RelayProfiles[index].ConfigContents = currentConfig
-				changed = true
-			}
 			if strings.TrimSpace(profile.AuthContents) == "" && strings.TrimSpace(profile.OfficialAuthContents) == "" && strings.TrimSpace(currentAuth) != "" {
 				settings.RelayProfiles[index].AuthContents = currentAuth
 				settings.RelayProfiles[index].OfficialAuthUpdatedAt = timeNowRFC3339()
@@ -375,6 +379,10 @@ func migrateOfficialAuthBinding(settings backendSettings) (backendSettings, bool
 		}
 	}
 	return settings, changed
+}
+
+func relayProfileUsesLiveFiles(profile relayProfile) bool {
+	return profile.RelayMode != "official" || profile.OfficialMixAPIKey
 }
 
 func timeNowRFC3339() string {
@@ -477,6 +485,7 @@ func settingsPayloadValue(settings backendSettings) map[string]any {
 		"settings":      settings,
 		"settings_path": settingsPath(),
 		"user_scripts":  userScriptInventoryValue(),
+		"envConflicts":  detectEnvConflicts(),
 	}
 }
 
@@ -489,4 +498,27 @@ func (s *server) saveSettings(args map[string]any) commandResult {
 		return failed("保存设置失败："+err.Error(), settingsPayloadValue(normalizeSettings(settings)))
 	}
 	return settingsPayload("设置已保存。")
+}
+
+func (s *server) checkEnvConflicts() commandResult {
+	payload := settingsPayloadValue(loadSettings())
+	payload["envConflicts"] = detectEnvConflicts()
+	return ok("环境变量冲突已检测。", payload)
+}
+
+func (s *server) removeEnvConflicts(args map[string]any) commandResult {
+	names := stringSliceArg(args, "names")
+	if len(names) == 0 {
+		for _, conflict := range detectEnvConflicts() {
+			names = append(names, conflict.Name)
+		}
+	}
+	removal, err := removeEnvConflicts(names, filepath.Join(stateDir(), "env-conflict-backups"))
+	payload := settingsPayloadValue(loadSettings())
+	if err != nil {
+		return failed("环境变量清理失败："+err.Error(), payload)
+	}
+	payload["envConflictRemoval"] = removal
+	payload["envConflicts"] = detectEnvConflicts()
+	return ok("环境变量冲突已清理；如 Codex 已在运行，请重启 Codex。", payload)
 }

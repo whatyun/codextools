@@ -182,7 +182,7 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 	}
 	upstreamReq.Header.Set("authorization", "Bearer "+apiKey)
 	copyProxyHeaders(req.Header, upstreamReq.Header)
-	setRelayProxyUserAgent(req.Header, upstreamReq.Header)
+	setRelayProxyUserAgent(profile.UserAgent, req.Header, upstreamReq.Header)
 	upstreamReq.Header.Set("accept-encoding", "identity")
 	resp, err := http.DefaultClient.Do(upstreamReq)
 	if err != nil {
@@ -252,8 +252,11 @@ func copyProxyHeaders(source http.Header, target http.Header) {
 	}
 }
 
-func setRelayProxyUserAgent(source http.Header, target http.Header) {
-	userAgent := strings.TrimSpace(source.Get("user-agent"))
+func setRelayProxyUserAgent(configured string, source http.Header, target http.Header) {
+	userAgent := strings.TrimSpace(configured)
+	if userAgent == "" {
+		userAgent = strings.TrimSpace(source.Get("user-agent"))
+	}
 	if userAgent == "" {
 		userAgent = "Codex"
 	}

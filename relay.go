@@ -559,6 +559,8 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
+	settings = loadSettings()
+	relay = activeRelayProfile(settings)
 	backupPath, err := writeRelaySnapshot(home, settings, relay, pure)
 	if err != nil {
 		if pure {
@@ -807,6 +809,8 @@ func (s *server) clearRelayInjection() commandResult {
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
+	settings = loadSettings()
+	relay = activeRelayProfile(settings)
 	backupPath, err := writeRelaySnapshot(home, settings, relay, false)
 	if err != nil {
 		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))

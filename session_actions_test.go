@@ -125,6 +125,32 @@ func TestExportMarkdownFromRollout(t *testing.T) {
 	}
 }
 
+func TestExportMarkdownFromAutomationRunsDiscoversArchivedRollout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sessionID := "019a61dd-9748-7743-9ce9-92b8663a935b"
+	rolloutPath := filepath.Join(home, ".codex", "archived_sessions", "2026", "05", "28", "rollout-"+sessionID+".jsonl")
+	lines := []string{
+		testSessionRolloutLine(sessionID, "/project", "Archived Export"),
+		testRolloutResponseMessage("user", "导出归档会话"),
+		testRolloutResponseMessage("assistant", "归档会话已导出。"),
+	}
+	writeTestFile(t, rolloutPath, strings.Join(lines, "\n")+"\n")
+	createTestAutomationRunsTable(t, filepath.Join(home, ".codex", "state_5.sqlite"), sessionID, "Archived Export")
+
+	result := handleSessionDataRoute("/export-markdown", map[string]any{"session_id": sessionID})
+
+	if result["status"] != "exported" {
+		t.Fatalf("automation_runs export should succeed: %#v", result)
+	}
+	markdown := stringFromAny(result["markdown"])
+	for _, expected := range []string{"# Archived Export", "导出归档会话", "归档会话已导出。"} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("markdown missing %q:\n%s", expected, markdown)
+		}
+	}
+}
+
 func TestDeleteThreadAndUndoRestoresRolloutAndSQLite(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -222,6 +248,29 @@ func createTestThreadsTable(t *testing.T, dbPath, sessionID, rolloutPath, cwd, t
 	if _, err := db.Exec(`INSERT INTO threads (id, rollout_path, created_at, updated_at, model_provider, cwd, title, archived, created_at_ms, updated_at_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`, sessionID, rolloutPath, 1779962400, 1779962500, "CodexPlusPlus", cwd, title, 1779962400000, 1779962500000); err != nil {
 		t.Fatalf("failed to insert thread row: %v", err)
+	}
+}
+
+func createTestAutomationRunsTable(t *testing.T, dbPath, sessionID, title string) {
+	t.Helper()
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open test sqlite db: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE automation_runs (
+		thread_id TEXT PRIMARY KEY,
+		status TEXT,
+		thread_title TEXT,
+		cwd TEXT,
+		created_at INTEGER,
+		updated_at INTEGER
+	)`); err != nil {
+		t.Fatalf("failed to create automation_runs table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO automation_runs (thread_id, status, thread_title, cwd, created_at, updated_at)
+		VALUES (?, 'archived', ?, '/project', 1779962400, 1779962500)`, sessionID, title); err != nil {
+		t.Fatalf("failed to insert automation run row: %v", err)
 	}
 }
 

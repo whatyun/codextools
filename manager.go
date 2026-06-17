@@ -171,6 +171,10 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return settingsPayload("设置已加载。")
 	case "save_settings":
 		return s.saveSettings(args)
+	case "check_env_conflicts":
+		return s.checkEnvConflicts()
+	case "remove_env_conflicts":
+		return s.removeEnvConflicts(args)
 	case "load_ccs_providers":
 		return s.loadCCSProviders()
 	case "import_ccs_providers":
@@ -747,6 +751,7 @@ func resolveWindowsCodexFromInstalledApps() string {
 		return ""
 	}
 	commands := [][]string{
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex* | Where-Object { @('OpenAI.Codex','OpenAI.CodexBeta') -contains $_.Name } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
 		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
 		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.CodexBeta -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
 		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.CodexBeta' -or $_.PackageFullName -like 'OpenAI.Codex_*' -or $_.PackageFullName -like 'OpenAI.CodexBeta_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
@@ -760,10 +765,19 @@ func resolveWindowsCodexFromInstalledApps() string {
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if normalized := normalizeCodexAppPath(line); normalized != "" {
+		if location := latestAppxInstallLocationFromOutput(string(out)); location != "" {
+			if normalized := normalizeCodexAppPath(location); normalized != "" {
 				return normalized
 			}
+		}
+	}
+	return ""
+}
+
+func latestAppxInstallLocationFromOutput(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""

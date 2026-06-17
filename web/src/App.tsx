@@ -251,6 +251,7 @@ type BackendSettings = {
   codexAppMarkdownExport: boolean;
   codexAppProjectMove: boolean;
   codexAppConversationTimeline: boolean;
+  codexAppThreadIdBadge: boolean;
   codexAppConversationView: boolean;
   codexAppThreadScrollRestore: boolean;
   codexAppZedRemoteOpen: boolean;
@@ -445,7 +446,14 @@ type SettingsResult = CommandResult<{
   settings: BackendSettings;
   settings_path: string;
   user_scripts: UserScriptInventory;
+  envConflicts?: EnvConflict[];
 }>;
+
+type EnvConflict = {
+  name: string;
+  source: "process" | "user" | string;
+  valuePresent: boolean;
+};
 
 type RelayResult = CommandResult<{
   authenticated: boolean;
@@ -710,6 +718,7 @@ const defaultSettings: BackendSettings = {
   codexAppMarkdownExport: true,
   codexAppProjectMove: true,
   codexAppConversationTimeline: true,
+  codexAppThreadIdBadge: false,
   codexAppConversationView: false,
   codexAppThreadScrollRestore: true,
   codexAppZedRemoteOpen: true,
@@ -1297,6 +1306,26 @@ export function App() {
     return result;
   };
 
+  const checkEnvConflicts = async () => {
+    const result = await run(() => call<SettingsResult>("check_env_conflicts"));
+    if (result) {
+      setSettings(result);
+      setSettingsForm(normalizeSettings(result.settings));
+      showNotice("环境变量冲突", result.message, result.status);
+    }
+    return result;
+  };
+
+  const removeEnvConflicts = async (names: string[]) => {
+    const result = await run(() => call<SettingsResult>("remove_env_conflicts", { names }));
+    if (result) {
+      setSettings(result);
+      setSettingsForm(normalizeSettings(result.settings));
+      showNotice("环境变量冲突", result.message, result.status);
+    }
+    return result;
+  };
+
   const changeLanguage = async (language: LanguageCode) => {
     const next = { ...settingsForm, language: normalizeLanguage(language) };
     setSettingsForm(next);
@@ -1731,6 +1760,8 @@ export function App() {
       repairShortcuts,
       saveSettings,
       saveSettingsValue,
+      checkEnvConflicts,
+      removeEnvConflicts,
       resetSettings,
       changeLanguage,
       chooseCodexAppPath: async (mode: "folder" | "file") => {
@@ -2058,6 +2089,8 @@ type Actions = {
   repairCodexApp: () => Promise<void>;
   saveSettings: () => Promise<void>;
   saveSettingsValue: (settings: BackendSettings, silent?: boolean) => Promise<SettingsResult | null>;
+  checkEnvConflicts: () => Promise<SettingsResult | null>;
+  removeEnvConflicts: (names: string[]) => Promise<SettingsResult | null>;
   resetSettings: () => Promise<void>;
   changeLanguage: (language: LanguageCode) => Promise<void>;
   chooseCodexAppPath: (mode: "folder" | "file") => Promise<void>;
@@ -3173,6 +3206,7 @@ function RelayScreen({
           {relay?.backupPath ? <div className="path-line compact-path">备份：{relay.backupPath}</div> : null}
         </CardContent>
       </Panel>
+      <EnvConflictsPanel conflicts={settings?.envConflicts ?? []} actions={actions} />
       <ProviderPresetPanel
         onSelect={(preset) => {
           setNewProfileDraft(createRelayProfileFromPreset(normalized, preset));
@@ -3260,6 +3294,46 @@ function RelayScreen({
   );
 }
 
+function EnvConflictsPanel({ conflicts, actions }: { conflicts: EnvConflict[]; actions: Actions }) {
+  const names = Array.from(new Set(conflicts.map((item) => item.name))).sort();
+  const hasConflicts = names.length > 0;
+  return (
+    <Panel>
+      <CardHead title="环境变量冲突" detail="检查 OPENAI_* 环境变量，避免它们覆盖当前供应商或官方登录配置" />
+      <CardContent>
+        <div className="hint-line">
+          {hasConflicts ? <Bell className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+          <span>{hasConflicts ? `发现 ${names.length} 个 OPENAI_* 冲突变量。` : "未发现会影响 Codex 的 OPENAI_* 环境变量。"}</span>
+        </div>
+        {hasConflicts ? (
+          <div className="env-conflict-list">
+            {conflicts.map((conflict) => (
+              <div className="env-conflict-row" key={`${conflict.source}:${conflict.name}`}>
+                <div>
+                  <strong>{conflict.name}</strong>
+                  <span>{conflict.source === "user" ? "Windows 用户环境" : "当前进程环境"} · {conflict.valuePresent ? "有值" : "空值"}</span>
+                </div>
+                <Badge status="warn" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <Toolbar>
+          <Button onClick={() => void actions.checkEnvConflicts()} variant="secondary">
+            <RefreshCw className="h-4 w-4" />
+            重新检测
+          </Button>
+          {hasConflicts ? (
+            <Button onClick={() => void actions.removeEnvConflicts(names)} variant="outline">
+              清理冲突变量
+            </Button>
+          ) : null}
+        </Toolbar>
+      </CardContent>
+    </Panel>
+  );
+}
+
 function EnhanceScreen({
   form,
   onFormChange,
@@ -3307,6 +3381,7 @@ function EnhanceScreen({
             <FeatureToggle title="Markdown 导出" detail="导出带时间戳的 Markdown。" checked={form.codexAppMarkdownExport} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppMarkdownExport", value)} />
             <FeatureToggle title="会话项目移动" detail="把会话移动到普通对话或其他本地项目。" checked={form.codexAppProjectMove} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppProjectMove", value)} />
             <FeatureToggle title="对话 Timeline" detail="在对话右侧显示用户提问时间线。" checked={form.codexAppConversationTimeline} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppConversationTimeline", value)} />
+            <FeatureToggle title="会话 ID 标识" detail="在侧边栏会话标题前显示短 ID 和 UUIDv7 创建时间。" checked={form.codexAppThreadIdBadge} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppThreadIdBadge", value)} />
             <FeatureToggle title="对话居中宽度" detail="把主对话和输入框限制到固定最大宽度。" checked={form.codexAppConversationView} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppConversationView", value)} />
             <FeatureToggle title="切换对话保留位置" detail="切换 thread 时恢复上一次浏览位置。" checked={form.codexAppThreadScrollRestore} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppThreadScrollRestore", value)} />
             <FeatureToggle title="Zed Remote open" detail="远程 SSH 文件引用可直接用 Zed Remote Development 打开。" checked={form.codexAppZedRemoteOpen} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppZedRemoteOpen", value)} />

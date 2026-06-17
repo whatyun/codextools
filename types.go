@@ -27,6 +27,7 @@ type backendSettings struct {
 	CodexAppMarkdownExport           bool           `json:"codexAppMarkdownExport"`
 	CodexAppProjectMove              bool           `json:"codexAppProjectMove"`
 	CodexAppConversationTimeline     bool           `json:"codexAppConversationTimeline"`
+	CodexAppThreadIDBadge            bool           `json:"codexAppThreadIdBadge"`
 	CodexAppConversationView         bool           `json:"codexAppConversationView"`
 	CodexAppThreadScrollRestore      bool           `json:"codexAppThreadScrollRestore"`
 	CodexAppZedRemoteOpen            bool           `json:"codexAppZedRemoteOpen"`

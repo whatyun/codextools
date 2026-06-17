@@ -158,6 +158,28 @@ func intArg(args map[string]any, key string, fallback int) int {
 	return fallback
 }
 
+func stringSliceArg(args map[string]any, key string) []string {
+	switch value := args[key].(type) {
+	case []string:
+		return uniqueStrings(value)
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if text := strings.TrimSpace(stringFromAny(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return uniqueStrings(out)
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		return uniqueStrings([]string{value})
+	default:
+		return nil
+	}
+}
+
 func uint16Arg(args map[string]any, key string, fallback uint16) uint16 {
 	value := intArg(args, key, int(fallback))
 	if value <= 0 || value > 65535 {

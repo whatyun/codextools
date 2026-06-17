@@ -7,6 +7,7 @@
   const actionButtonClass = "codex-session-action-button";
   const actionGroupClass = "codex-session-actions";
   const actionTooltipClass = "codex-session-action-tooltip";
+  const threadIdBadgeClass = "codex-thread-id-badge";
   const timelineClass = "codex-conversation-timeline";
   const timelineTrackClass = "codex-conversation-timeline-track";
   const timelineMarkerClass = "codex-conversation-timeline-marker";
@@ -54,6 +55,7 @@
   const codexConversationTimelineVersion = "2";
   const codexConversationViewVersion = "1";
   const codexThreadScrollVersion = "1";
+  const codexThreadIdBadgeVersion = "1";
   const codexThreadServiceTierVersion = "1";
   const codexServiceTierBadgeClass = "codex-service-tier-badge";
   const codexServiceTierBadgeVersion = "3";
@@ -92,6 +94,7 @@
   window.__codexThreadScrollRestoreRevision = (window.__codexThreadScrollRestoreRevision || 0) + 1;
   window.__codexThreadScrollSyncRevision = (window.__codexThreadScrollSyncRevision || 0) + 1;
   window.__codexConversationTimelineNodeCounter = window.__codexConversationTimelineNodeCounter || 0;
+  let threadIdBadgeActive = false;
   ["__codexPlusHtmlCenteredThreadWidth", "__codexPlusViewportCenteredThreadWidth", "__codexPlusBoundedThreadCenter"].forEach((key) => {
     try {
       window[key]?.cleanup?.();
@@ -542,6 +545,34 @@
       .${codexServiceTierBadgeClass}[data-tier="loading"] { color: #a1a1aa; }
       .${codexServiceTierBadgeClass}[data-tier="failed"] { border-color: rgba(248,113,113,.42); background: rgba(248,113,113,.12); color: #fca5a5; }
       .${codexServiceTierBadgeClass}[data-disabled="true"] { cursor: not-allowed; opacity: .78; }
+      .${threadIdBadgeClass} {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        max-width: 152px;
+        border: 1px solid rgba(148,163,184,.28);
+        border-radius: 999px;
+        background: rgba(148,163,184,.12);
+        color: #a1a1aa;
+        font: 600 11px/1 system-ui, sans-serif;
+        padding: 2px 6px;
+        margin-right: 6px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        user-select: text;
+      }
+      ${selectors.sidebarThread} [data-codex-thread-id-badge-wrap="true"] {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        max-width: 100%;
+      }
+      ${selectors.sidebarThread} [data-codex-thread-id-badge-wrap="true"] ${selectors.threadTitle},
+      ${selectors.sidebarThread} [data-codex-thread-id-badge-wrap="true"] .truncate.select-none,
+      ${selectors.sidebarThread} [data-codex-thread-id-badge-wrap="true"] .truncate.text-base {
+        min-width: 0;
+      }
       .codex-plus-tabs { display: flex; gap: 8px; padding: 0 20px 6px; flex: 0 0 auto; }
       .codex-plus-tab-button { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: transparent; color: #d1d5db; font: 12px system-ui, sans-serif; padding: 5px 10px; }
       .codex-plus-tab-button[data-active="true"] { background: #10a37f; color: white; border-color: #10a37f; }
@@ -648,7 +679,7 @@
   }
 
   function defaultCodexPlusSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false };
   }
 
   const codexPlusBackendSettingMap = {
@@ -660,6 +691,7 @@
     markdownExport: "codexAppMarkdownExport",
     projectMove: "codexAppProjectMove",
     conversationTimeline: "codexAppConversationTimeline",
+    threadIdBadge: "codexAppThreadIdBadge",
     conversationView: "codexAppConversationView",
     threadScrollRestore: "codexAppThreadScrollRestore",
     zedRemoteOpen: "codexAppZedRemoteOpen",
@@ -690,6 +722,7 @@
         markdownExport: false,
         projectMove: false,
         conversationTimeline: false,
+        threadIdBadge: false,
         conversationView: false,
         conversationViewMaxWidth: conversationViewDefaultWidth,
         threadScrollRestore: false,
@@ -1685,6 +1718,10 @@
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="conversationTimeline"><span></span></button>
             </div>
             <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">会话 ID 标识</div><div class="codex-plus-row-description">在侧边栏会话标题前显示短 ID 和 UUIDv7 创建时间，方便定位历史会话。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="threadIdBadge"><span></span></button>
+            </div>
+            <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">对话居中宽度</div><div class="codex-plus-row-description">开启后把主对话和输入框限制到固定最大宽度，适合大屏阅读。</div></div>
               <div class="codex-plus-width-control">
                 <input class="codex-plus-width-input" data-codex-plus-conversation-view-width="true" min="${conversationViewMinWidth}" max="${conversationViewMaxAllowedWidth}" step="10" type="number" value="${conversationViewWidth()}">
@@ -2439,6 +2476,96 @@
     const rawTitle = (titleNode?.textContent || (titleNode ? "" : (row.textContent || "Untitled session")));
     const title = (titleNode ? rawTitle : rawTitle.replace(/\s*(导出|删除|移动|移出项目)(\s*(导出|删除|移动|移出项目))*$/g, "")).trim().slice(0, 160);
     return { session_id: sessionId, title };
+  }
+
+  function threadIdBadgeTitleNode(row) {
+    return row.querySelector(`${selectors.threadTitle}, .truncate.select-none, .truncate.text-base`);
+  }
+
+  function threadIdBadgeCreatedAt(sessionId) {
+    const timestampMs = uuidV7TimestampMs(sessionId);
+    const minReasonableMs = Date.UTC(2020, 0, 1);
+    const maxReasonableMs = Date.now() + 366 * 24 * 60 * 60 * 1000;
+    if (!timestampMs || timestampMs < minReasonableMs || timestampMs > maxReasonableMs) return null;
+    return new Date(timestampMs);
+  }
+
+  function formatThreadIdBadgeCreatedAt(createdAt) {
+    if (!(createdAt instanceof Date) || Number.isNaN(createdAt.getTime())) return "";
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${pad(createdAt.getMonth() + 1)}-${pad(createdAt.getDate())} ${pad(createdAt.getHours())}:${pad(createdAt.getMinutes())}`;
+  }
+
+  function threadIdBadgeMeta(sessionId) {
+    const id = projectMoveSessionKey(sessionId);
+    const compact = id.replaceAll("-", "");
+    const shortId = compact.slice(0, 8);
+    const createdAt = threadIdBadgeCreatedAt(sessionId);
+    const createdLabel = formatThreadIdBadgeCreatedAt(createdAt);
+    return {
+      id,
+      shortId,
+      label: shortId ? `#${shortId}${createdLabel ? ` · ${createdLabel}` : ""}` : "",
+    };
+  }
+
+  function wrapThreadTitleForBadge(row, titleNode) {
+    const wrapper = row.querySelector('[data-codex-thread-id-badge-wrap="true"]') || document.createElement("span");
+    wrapper.dataset.codexThreadIdBadgeWrap = "true";
+    if (!wrapper.parentElement) {
+      titleNode.parentElement?.insertBefore(wrapper, titleNode);
+      wrapper.appendChild(titleNode);
+    }
+    return wrapper;
+  }
+
+  function removeThreadIdBadges(root = document) {
+    root.querySelectorAll?.(`.${threadIdBadgeClass}`).forEach((badge) => badge.remove());
+    root.querySelectorAll?.('[data-codex-thread-id-badge-wrap="true"]').forEach((wrapper) => {
+      const parent = wrapper.parentElement;
+      if (!parent) return;
+      while (wrapper.firstChild) parent.insertBefore(wrapper.firstChild, wrapper);
+      wrapper.remove();
+    });
+  }
+
+  function installThreadIdBadge(row) {
+    if (!row || row.nodeType !== 1) return;
+    const ref = sessionRefFromRow(row);
+    if (!ref.session_id) {
+      removeThreadIdBadges(row);
+      return;
+    }
+    const meta = threadIdBadgeMeta(ref.session_id);
+    const titleNode = threadIdBadgeTitleNode(row);
+    if (!meta.label || !titleNode) {
+      removeThreadIdBadges(row);
+      return;
+    }
+    const wrapper = wrapThreadTitleForBadge(row, titleNode);
+    if (!wrapper) return;
+    let badge = wrapper.querySelector(`.${threadIdBadgeClass}`);
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = threadIdBadgeClass;
+      wrapper.insertBefore(badge, titleNode);
+    }
+    badge.dataset.codexThreadIdBadgeVersion = codexThreadIdBadgeVersion;
+    badge.textContent = meta.label;
+    row.dataset.codexThreadIdBadge = meta.label;
+    row.dataset.codexThreadIdBadgeVersion = codexThreadIdBadgeVersion;
+  }
+
+  function refreshThreadIdBadges() {
+    if (!codexPlusSettings().threadIdBadge) {
+      if (threadIdBadgeActive) {
+        removeThreadIdBadges();
+        threadIdBadgeActive = false;
+      }
+      return;
+    }
+    threadIdBadgeActive = true;
+    sessionRows().forEach(installThreadIdBadge);
   }
 
   function codexPlusDiagnosticPayload(event, detail) {
@@ -3239,6 +3366,35 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  async function saveMarkdown(filename, markdown) {
+    if (!filename || typeof markdown !== "string") {
+      throw new Error("导出结果不完整");
+    }
+    if (typeof window.showSaveFilePicker !== "function") {
+      downloadMarkdown(filename, markdown);
+      return { status: "saved" };
+    }
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{
+          description: "Markdown",
+          accept: { "text/markdown": [".md", ".markdown"] },
+        }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+      await writable.close();
+      return { status: "saved" };
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return { status: "cancelled", message: "导出已取消" };
+      }
+      downloadMarkdown(filename, markdown);
+      return { status: "fallback", message: error?.message || String(error) };
+    }
+  }
+
   let codexStateApiPromise = null;
   let chatsSortInFlight = false;
   let chatsSortSignature = "";
@@ -3540,9 +3696,22 @@
     return Object.keys(element).filter((key) => key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance") || key.startsWith("__reactProps"));
   }
 
+  function isWorkspaceChromeNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.closest?.('[data-app-action-sidebar-section-heading="Chats"], [data-app-action-sidebar-section-heading="Projects"], [data-app-action-sidebar-thread-id], [data-app-action-sidebar-project-row], [data-app-action-sidebar-project-id]')) {
+      return false;
+    }
+    return !!node.closest?.("aside, nav, [data-testid='workspace-sidebar'], [data-testid='sidebar']");
+  }
+
+  function patchReactModelStateNodes() {
+    const selector = "[role='menu'], [role='dialog'], [role='listbox'], [data-radix-popper-content-wrapper]";
+    return [document.body, ...document.querySelectorAll(selector)].filter((node) => node && !isWorkspaceChromeNode(node));
+  }
+
   function patchReactModelState() {
     const visited = new WeakSet();
-    const nodes = [document.body, ...document.querySelectorAll("button, [role='menu'], [role='dialog'], [data-radix-popper-content-wrapper]")].filter(Boolean);
+    const nodes = patchReactModelStateNodes();
     let changed = false;
     for (const node of nodes.slice(0, 220)) {
       for (const key of reactFiberKeys(node)) {
@@ -4645,8 +4814,12 @@
   async function exportMarkdown(ref) {
     const result = await postJson("/export-markdown", ref);
     if (result.status === "exported" && result.filename && typeof result.markdown === "string") {
-      downloadMarkdown(result.filename, result.markdown);
-      showToast(result.message || "导出成功", null);
+      const saveResult = await saveMarkdown(result.filename, result.markdown);
+      if (saveResult?.status === "cancelled") {
+        showToast(saveResult.message || "导出已取消", null);
+      } else {
+        showToast(result.message || "导出成功", null);
+      }
       return;
     }
     showToast(result.message || "导出失败", null);
@@ -6453,6 +6626,7 @@
     }
     sessionRows().forEach(tryAttachButton);
     syncActionGroupsLayout();
+    refreshThreadIdBadges();
     updateDeleteButtonOffsets();
     scheduleProjectMoveProjection();
     scheduleChatsSortCorrection();
@@ -6489,6 +6663,7 @@
       '[data-app-action-sidebar-section-heading="Chats"]',
       '[data-app-action-sidebar-section-heading="Projects"]',
       '[data-codex-project-move-row="true"]',
+      '[data-codex-thread-id-badge-wrap="true"]',
       '[data-codex-archive-page-row="true"]',
       "[data-codex-archive-delete-all]",
       '[data-message-author-role]',

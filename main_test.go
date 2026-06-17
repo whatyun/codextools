@@ -125,6 +125,9 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`installPluginMarketplaceRequestPatch`,
 		`enablePluginEntry`,
 		`unblockPluginInstallButtons`,
+		`threadIdBadge`,
+		`showSaveFilePicker`,
+		`patchReactModelStateNodes`,
 		`插件 - 已解锁`,
 		`Plugins - Unlocked`,
 		`强制安装`,
@@ -310,8 +313,71 @@ func TestLoadSettingsMigratesCurrentOfficialAuthToActiveProfile(t *testing.T) {
 	if active.AuthContents == "" {
 		t.Fatal("auth contents should be migrated")
 	}
-	if active.ConfigContents == "" {
-		t.Fatal("config contents should be migrated for active profile")
+	if active.ConfigContents != "" {
+		t.Fatalf("official pure profile should not migrate live config contents: %q", active.ConfigContents)
+	}
+}
+
+func TestBridgeSettingsIncludesThreadIDBadge(t *testing.T) {
+	settings := defaultSettings()
+	settings.CodexAppThreadIDBadge = true
+	runtime := &launcherRuntime{}
+
+	value := runtime.bridgeSettingsValue(settings)
+
+	if !boolFromAny(value["codexAppThreadIdBadge"]) {
+		t.Fatalf("bridge settings should include codexAppThreadIdBadge: %#v", value)
+	}
+}
+
+func TestCodexHomeDirIgnoresMissingCODEXHOME(t *testing.T) {
+	home := t.TempDir()
+	missing := filepath.Join(home, "missing")
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", missing)
+
+	if got := codexHomeDir(); got != filepath.Join(home, ".codex") {
+		t.Fatalf("codexHomeDir should ignore missing CODEX_HOME: got %q", got)
+	}
+}
+
+func TestEnvConflictsDetectsOpenAIOnly(t *testing.T) {
+	conflicts := detectedEnvConflictsFromPairs(map[string]string{
+		"OPENAI_API_KEY":        "sk-test",
+		"OPENAI_BASE_URL":       "",
+		"CODEX_HOME":            "/tmp/codex",
+		"CUSTOM_OPENAI_API_KEY": "sk-custom",
+	}, "process")
+
+	var names []string
+	for _, conflict := range conflicts {
+		names = append(names, conflict.Name)
+	}
+	if strings.Join(names, ",") != "OPENAI_API_KEY,OPENAI_BASE_URL" {
+		t.Fatalf("env conflict names mismatch: %#v", names)
+	}
+	if !conflicts[0].ValuePresent || conflicts[1].ValuePresent {
+		t.Fatalf("value presence mismatch: %#v", conflicts)
+	}
+}
+
+func TestRemoveEnvConflictsBacksUpAndRemovesProcessEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("CUSTOM_OPENAI_API_KEY", "sk-custom")
+	backupDir := filepath.Join(t.TempDir(), "backups")
+
+	result, err := removeEnvConflicts([]string{"OPENAI_API_KEY", "CUSTOM_OPENAI_API_KEY"}, backupDir)
+	if err != nil {
+		t.Fatalf("remove env conflicts failed: %v", err)
+	}
+	if _, ok := os.LookupEnv("OPENAI_API_KEY"); ok {
+		t.Fatal("OPENAI_API_KEY should be removed from process env")
+	}
+	if got := os.Getenv("CUSTOM_OPENAI_API_KEY"); got != "sk-custom" {
+		t.Fatalf("custom API key should not be removed, got %q", got)
+	}
+	if backupPath := stringFromAny(result["backupPath"]); backupPath == "" || !fileExists(backupPath) {
+		t.Fatalf("backup should be written: %#v", result)
 	}
 }
 
@@ -2247,6 +2313,12 @@ func TestSelectCodexToolsAssetPrefersMacOSInstaller(t *testing.T) {
 	}
 }
 
+func TestLatestAppxInstallLocationFromOutput(t *testing.T) {
+	if got := latestAppxInstallLocationFromOutput("\nC:\\Program Files\\WindowsApps\\OpenAI.CodexBeta_1.2.3.0_x64__2p2nqsd0c76g0\\app\n"); got != `C:\Program Files\WindowsApps\OpenAI.CodexBeta_1.2.3.0_x64__2p2nqsd0c76g0\app` {
+		t.Fatalf("latest appx install location mismatch: %q", got)
+	}
+}
+
 func TestSelectCodexToolsAssetPrefersWindowsSetup(t *testing.T) {
 	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
 		{Name: "CodexTools-1.1.13-windows-x64.zip", BrowserDownloadURL: "https://example.com/windows.zip"},
@@ -2387,7 +2459,7 @@ func TestSetRelayProxyUserAgentForwardsCodexClientAgent(t *testing.T) {
 	source := http.Header{"User-Agent": []string{"codex-cli/1.2.3"}}
 	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
 
-	setRelayProxyUserAgent(source, target)
+	setRelayProxyUserAgent("", source, target)
 
 	if got := target.Get("User-Agent"); got != "codex-cli/1.2.3" {
 		t.Fatalf("relay proxy should forward Codex user agent, got %q", got)
@@ -2397,10 +2469,21 @@ func TestSetRelayProxyUserAgentForwardsCodexClientAgent(t *testing.T) {
 func TestSetRelayProxyUserAgentFallsBackToCodex(t *testing.T) {
 	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
 
-	setRelayProxyUserAgent(http.Header{}, target)
+	setRelayProxyUserAgent("", http.Header{}, target)
 
 	if got := target.Get("User-Agent"); got != "Codex" {
 		t.Fatalf("relay proxy should not expose GoRelay user agent, got %q", got)
+	}
+}
+
+func TestSetRelayProxyUserAgentPrefersConfiguredProfileAgent(t *testing.T) {
+	source := http.Header{"User-Agent": []string{"codex-cli/1.2.3"}}
+	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
+
+	setRelayProxyUserAgent("custom-agent/9", source, target)
+
+	if got := target.Get("User-Agent"); got != "custom-agent/9" {
+		t.Fatalf("relay proxy should prefer configured profile user agent, got %q", got)
 	}
 }
 

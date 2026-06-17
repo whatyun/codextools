@@ -291,8 +291,14 @@ func lookupSession(home, sessionID, title string, archivedOnly bool) (sessionLoo
 	var err error
 	if len(lookup.Variants) > 0 {
 		rows, err = sqliteThreadRowsByIDs(dbPath, lookup.Variants)
+		if err == nil && len(rows) == 0 {
+			rows, err = sqliteAutomationRunRowsByIDs(dbPath, lookup.Variants)
+		}
 	} else if strings.TrimSpace(title) != "" {
 		rows, err = sqliteThreadRowsByTitle(dbPath, title, archivedOnly)
+		if err == nil && len(rows) == 0 {
+			rows, err = sqliteAutomationRunRowsByTitle(dbPath, title, archivedOnly)
+		}
 	}
 	if err != nil {
 		return lookup, err
@@ -304,6 +310,13 @@ func lookupSession(home, sessionID, title string, archivedOnly bool) (sessionLoo
 			lookup.Variants = appendSessionIDVariants(lookup.Variants, id)
 			if lookup.CanonicalID == "" {
 				lookup.CanonicalID = bareSessionID(id)
+			}
+		}
+		threadID := strings.TrimSpace(stringFromAny(row.Values["thread_id"]))
+		if threadID != "" {
+			lookup.Variants = appendSessionIDVariants(lookup.Variants, threadID)
+			if lookup.CanonicalID == "" {
+				lookup.CanonicalID = bareSessionID(threadID)
 			}
 		}
 	}
@@ -454,6 +467,46 @@ func readRolloutFile(path string) (sessionRolloutFile, error) {
 	return file, nil
 }
 
+func rolloutFileMatchesAnyID(path string, ids map[string]bool) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) != nil {
+			continue
+		}
+		payload, _ := record["payload"].(map[string]any)
+		if payload == nil {
+			payload = record
+		}
+		candidates := []string{
+			stringFromAny(payload["id"]),
+			stringFromAny(payload["session_id"]),
+			stringFromAny(payload["thread_id"]),
+			stringFromAny(record["id"]),
+			stringFromAny(record["session_id"]),
+			stringFromAny(record["thread_id"]),
+		}
+		if stringFromAny(record["type"]) != "session_meta" && stringFromAny(payload["type"]) != "session_meta" {
+			candidates = candidates[:1]
+		}
+		for _, candidate := range candidates {
+			for _, variant := range sessionIDVariants(candidate) {
+				if ids[variant] || ids[bareSessionID(variant)] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func findRolloutFiles(home string, ids []string) ([]sessionRolloutFile, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -486,7 +539,7 @@ func findRolloutFiles(home string, ids []string) ([]sessionRolloutFile, error) {
 			if err != nil {
 				return nil
 			}
-			if idSet[file.SessionID] || idSet[bareSessionID(file.SessionID)] {
+			if idSet[file.SessionID] || idSet[bareSessionID(file.SessionID)] || rolloutFileMatchesAnyID(path, idSet) {
 				files = append(files, file)
 			}
 			return nil
@@ -951,6 +1004,76 @@ func sqliteThreadRowsByTitle(dbPath, title string, archivedOnly bool) ([]session
 	}
 	// Archived rows can be rendered with trimmed or decorated text in the UI, so keep a conservative normalized fallback.
 	return sqliteThreadRowsByNormalizedTitle(db, title, archivedOnly, columns)
+}
+
+func sqliteAutomationRunRowsByIDs(dbPath string, ids []string) ([]sessionSQLiteRow, error) {
+	ids = uniqueNonEmptyStrings(ids)
+	if len(ids) == 0 || !fileExists(dbPath) {
+		return nil, nil
+	}
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	columns, err := sqliteTableColumns(db, "automation_runs")
+	if err != nil || len(columns) == 0 || !containsString(columns, "thread_id") {
+		return nil, err
+	}
+	query := "SELECT * FROM automation_runs WHERE thread_id IN (" + sqlitePlaceholders(len(ids)) + ")"
+	return querySessionSQLiteRows(db, query, stringsToAny(ids)...)
+}
+
+func sqliteAutomationRunRowsByTitle(dbPath, title string, archivedOnly bool) ([]sessionSQLiteRow, error) {
+	title = strings.TrimSpace(title)
+	if title == "" || !fileExists(dbPath) {
+		return nil, nil
+	}
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	columns, err := sqliteTableColumns(db, "automation_runs")
+	if err != nil || len(columns) == 0 || !containsString(columns, "thread_id") {
+		return nil, err
+	}
+	titleColumn := ""
+	if containsString(columns, "thread_title") {
+		titleColumn = "thread_title"
+	} else if containsString(columns, "title") {
+		titleColumn = "title"
+	}
+	if titleColumn == "" {
+		return nil, nil
+	}
+	where := "WHERE COALESCE(" + quoteSQLiteIdentifier(titleColumn) + ", '') = ?"
+	if archivedOnly && containsString(columns, "status") {
+		where += " AND COALESCE(status, '') = 'archived'"
+	}
+	rows, err := querySessionSQLiteRows(db, "SELECT * FROM automation_runs "+where+" LIMIT 5", title)
+	if err != nil || len(rows) > 0 {
+		return rows, err
+	}
+	return sqliteAutomationRunRowsByNormalizedTitle(db, title, archivedOnly, columns, titleColumn)
+}
+
+func sqliteAutomationRunRowsByNormalizedTitle(db *sql.DB, title string, archivedOnly bool, columns []string, titleColumn string) ([]sessionSQLiteRow, error) {
+	where := ""
+	if archivedOnly && containsString(columns, "status") {
+		where = "WHERE COALESCE(status, '') = 'archived'"
+	}
+	rows, err := querySessionSQLiteRows(db, "SELECT * FROM automation_runs "+where+" LIMIT 200")
+	if err != nil {
+		return nil, err
+	}
+	target := normalizedSessionTitle(title)
+	for _, row := range rows {
+		if normalizedSessionTitle(stringFromAny(row.Values[titleColumn])) == target {
+			return []sessionSQLiteRow{row}, nil
+		}
+	}
+	return nil, nil
 }
 
 func sqliteThreadRowsByNormalizedTitle(db *sql.DB, title string, archivedOnly bool, columns []string) ([]sessionSQLiteRow, error) {

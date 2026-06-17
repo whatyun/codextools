@@ -144,6 +144,7 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"codexAppMarkdownExport":          settings.CodexAppMarkdownExport,
 		"codexAppProjectMove":             settings.CodexAppProjectMove,
 		"codexAppConversationTimeline":    settings.CodexAppConversationTimeline,
+		"codexAppThreadIdBadge":           settings.CodexAppThreadIDBadge,
 		"codexAppConversationView":        settings.CodexAppConversationView,
 		"codexAppThreadScrollRestore":     settings.CodexAppThreadScrollRestore,
 		"codexAppZedRemoteOpen":           settings.CodexAppZedRemoteOpen,
@@ -196,6 +197,7 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	applyBool("codexAppMarkdownExport", &settings.CodexAppMarkdownExport)
 	applyBool("codexAppProjectMove", &settings.CodexAppProjectMove)
 	applyBool("codexAppConversationTimeline", &settings.CodexAppConversationTimeline)
+	applyBool("codexAppThreadIdBadge", &settings.CodexAppThreadIDBadge)
 	applyBool("codexAppConversationView", &settings.CodexAppConversationView)
 	applyBool("codexAppThreadScrollRestore", &settings.CodexAppThreadScrollRestore)
 	applyBool("codexAppZedRemoteOpen", &settings.CodexAppZedRemoteOpen)
