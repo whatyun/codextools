@@ -757,6 +757,17 @@ const enUS: TranslationDictionary = {
   "聚合": "Aggregator",
   "国内官方": "China Official",
   "兼容": "Compatible",
+  "环境变量冲突": "Environment Conflicts",
+  "检查 OPENAI_* 环境变量，避免它们覆盖当前供应商或官方登录配置": "Check OPENAI_* environment variables so they do not override the current provider or official login configuration",
+  "发现 {} 个 OPENAI_* 冲突变量。": "Found {0} conflicting OPENAI_* variables.",
+  "未发现会影响 Codex 的 OPENAI_* 环境变量。": "No OPENAI_* environment variables affecting Codex were found.",
+  "Windows 用户环境": "Windows user environment",
+  "当前进程环境": "Current process environment",
+  "有值": "Has value",
+  "空值": "Empty value",
+  "清理冲突变量": "Clean Conflicting Variables",
+  "会话 ID 标识": "Thread ID Badges",
+  "在侧边栏会话标题前显示短 ID 和 UUIDv7 创建时间。": "Show a short ID and UUIDv7 creation time before sidebar thread titles.",
 };
 
 const koKR: TranslationDictionary = {
