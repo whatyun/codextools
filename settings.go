@@ -121,8 +121,10 @@ func defaultSettings() backendSettings {
 		ZedRemoteOpenStrategy:           "addToFocusedWorkspace",
 		ZedRemoteProjectRegistryEnabled: true,
 		CodexAppImageOverlayOpacity:     35,
+		MobileControlRelayURL:           defaultMobileRelayURL,
 		LaunchMode:                      "patch",
 		RelayProfiles:                   []relayProfile{defaultRelayProfile()},
+		AggregateRelayProfiles:          []aggregateRelayProfile{},
 		ActiveRelayID:                   "default",
 		RelayTestModel:                  defaultRelayTestModel,
 		CLIWrapperAPIKeyEnv:             defaultAPIKeyEnvironment,
@@ -182,6 +184,12 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		settings.CodexAppImageOverlayOpacity = 1
 	}
 	settings.CodexAppImageOverlayPath = strings.TrimSpace(settings.CodexAppImageOverlayPath)
+	settings.MobileControlRelayURL = strings.TrimSpace(settings.MobileControlRelayURL)
+	if settings.MobileControlRelayURL == "" {
+		settings.MobileControlRelayURL = defaultMobileRelayURL
+	}
+	settings.MobileControlRoom = strings.TrimSpace(settings.MobileControlRoom)
+	settings.MobileControlKey = strings.TrimSpace(settings.MobileControlKey)
 	common, extractedContext := splitContextConfigSections(settings.RelayCommonConfigContents)
 	settings.RelayCommonConfigContents = normalizeConfigText(common)
 	settings.RelayContextConfigContents = normalizeConfigText(joinConfigSections(settings.RelayContextConfigContents, extractedContext))
@@ -217,6 +225,8 @@ func normalizeSettings(settings backendSettings) backendSettings {
 			settings.RelayProfiles[index].OfficialMixAPIKey = true
 		case "pureApi":
 			settings.RelayProfiles[index].OfficialMixAPIKey = false
+		case "aggregate":
+			settings.RelayProfiles[index].OfficialMixAPIKey = false
 		case "official":
 			if settings.RelayProfiles[index].OfficialMixAPIKey {
 				settings.RelayProfiles[index].RelayMode = "mixedApi"
@@ -242,6 +252,15 @@ func normalizeSettings(settings backendSettings) backendSettings {
 	if settings.ActiveRelayID == "" {
 		settings.ActiveRelayID = settings.RelayProfiles[0].ID
 	}
+	if settings.AggregateRelayProfiles == nil {
+		settings.AggregateRelayProfiles = []aggregateRelayProfile{}
+	}
+	for index := range settings.AggregateRelayProfiles {
+		settings.AggregateRelayProfiles[index] = normalizeAggregateRelayProfile(settings.AggregateRelayProfiles[index], index)
+	}
+	if settings.ActiveAggregateRelayID == "" && activeRelayProfile(settings).RelayMode == "aggregate" {
+		settings.ActiveAggregateRelayID = settings.ActiveRelayID
+	}
 	if settings.RelayTestModel == "" {
 		settings.RelayTestModel = defaultRelayTestModel
 	}
@@ -255,6 +274,37 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		settings.OnboardingCompletedPlatform = runtime.GOOS
 	}
 	return settings
+}
+
+func normalizeAggregateRelayProfile(profile aggregateRelayProfile, index int) aggregateRelayProfile {
+	profile.ID = strings.TrimSpace(profile.ID)
+	if profile.ID == "" {
+		profile.ID = fmt.Sprintf("aggregate-%d", index+1)
+	}
+	profile.Name = strings.TrimSpace(profile.Name)
+	if profile.Name == "" {
+		profile.Name = profile.ID
+	}
+	profile.Strategy = normalizeAggregateRelayStrategy(profile.Strategy)
+	if profile.Members == nil {
+		profile.Members = []aggregateRelayMember{}
+	}
+	for memberIndex := range profile.Members {
+		profile.Members[memberIndex].RelayID = strings.TrimSpace(profile.Members[memberIndex].RelayID)
+		if profile.Members[memberIndex].Weight <= 0 {
+			profile.Members[memberIndex].Weight = 1
+		}
+	}
+	return profile
+}
+
+func normalizeAggregateRelayStrategy(value string) string {
+	switch strings.TrimSpace(value) {
+	case "failover", "conversationRoundRobin", "requestRoundRobin", "weightedRoundRobin":
+		return strings.TrimSpace(value)
+	default:
+		return "failover"
+	}
 }
 
 func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {

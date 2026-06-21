@@ -183,6 +183,10 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.syncProvidersNow()
 	case "repair_codex_plugins":
 		return s.repairCodexPlugins()
+	case "plugin_marketplace_status":
+		return s.pluginMarketplaceStatus()
+	case "repair_plugin_marketplace":
+		return s.repairPluginMarketplace(ctx)
 	case "repair_codex_goals":
 		return s.repairCodexGoals()
 	case "load_computer_use_status":
@@ -262,6 +266,8 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.saveRelayFile(args)
 	case "import_current_relay_files":
 		return s.importCurrentRelayFiles(args)
+	case "backfill_relay_profile_from_live":
+		return s.backfillRelayProfileFromLive(args)
 	case "bind_official_auth":
 		return s.bindOfficialAuth(args)
 	case "activate_official_auth":

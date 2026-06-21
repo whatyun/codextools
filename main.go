@@ -20,8 +20,10 @@ const (
 	diagnosticLogFileName    = "codex-plus.log"
 	relayProvider            = "CodexPlusPlus"
 	legacyRelayProvider      = "CodexPP"
+	aggregateRelayAPIKey     = "codex-plus-aggregate"
 	localRelayProxyPort      = 57323
 	protocolProxyBaseURL     = "http://127.0.0.1:57321/v1"
+	defaultMobileRelayURL    = "ws://127.0.0.1:57323"
 	scriptMarketIndexURL     = "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlusScriptMarket/main/index.json"
 	codexAppMirrorAPIURL     = "https://api.github.com/repos/Wangnov/codex-app-mirror/releases/latest"
 	codexAppMirrorReleaseURL = "https://github.com/Wangnov/codex-app-mirror/releases/latest"

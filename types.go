@@ -9,54 +9,60 @@ import (
 )
 
 type backendSettings struct {
-	CodexAppPath                     string         `json:"codexAppPath"`
-	CodexExtraArgs                   []string       `json:"codexExtraArgs"`
-	Language                         string         `json:"language"`
-	ProviderSync                     bool           `json:"providerSyncEnabled"`
-	ProviderSyncSavedProviders       []string       `json:"providerSyncSavedProviders"`
-	ProviderSyncManualProviders      []string       `json:"providerSyncManualProviders"`
-	ProviderSyncLastSelectedProvider string         `json:"providerSyncLastSelectedProvider"`
-	RelayProfilesEnabled             bool           `json:"relayProfilesEnabled"`
-	CCSLinkEnabled                   bool           `json:"ccsLinkEnabled"`
-	Enhancements                     bool           `json:"enhancementsEnabled"`
-	CodexAppPluginEntryUnlock        bool           `json:"codexAppPluginEntryUnlock"`
-	CodexAppPluginMarketplaceUnlock  bool           `json:"codexAppPluginMarketplaceUnlock"`
-	CodexAppForcePluginInstall       bool           `json:"codexAppForcePluginInstall"`
-	CodexAppModelWhitelistUnlock     bool           `json:"codexAppModelWhitelistUnlock"`
-	CodexAppSessionDelete            bool           `json:"codexAppSessionDelete"`
-	CodexAppMarkdownExport           bool           `json:"codexAppMarkdownExport"`
-	CodexAppProjectMove              bool           `json:"codexAppProjectMove"`
-	CodexAppConversationTimeline     bool           `json:"codexAppConversationTimeline"`
-	CodexAppThreadIDBadge            bool           `json:"codexAppThreadIdBadge"`
-	CodexAppConversationView         bool           `json:"codexAppConversationView"`
-	CodexAppThreadScrollRestore      bool           `json:"codexAppThreadScrollRestore"`
-	CodexAppZedRemoteOpen            bool           `json:"codexAppZedRemoteOpen"`
-	CodexAppUpstreamWorktreeCreate   bool           `json:"codexAppUpstreamWorktreeCreate"`
-	CodexAppNativeMenuPlacement      bool           `json:"codexAppNativeMenuPlacement"`
-	CodexAppServiceTierControls      bool           `json:"codexAppServiceTierControls"`
-	ComputerUseGuardEnabled          bool           `json:"computerUseGuardEnabled"`
-	ZedRemoteOpenStrategy            string         `json:"zedRemoteOpenStrategy"`
-	ZedRemoteProjectRegistryEnabled  bool           `json:"zedRemoteProjectRegistryEnabled"`
-	ZedRemoteSyncToZedSettings       bool           `json:"zedRemoteSyncToZedSettings"`
-	CodexAppImageOverlayEnabled      bool           `json:"codexAppImageOverlayEnabled"`
-	CodexAppImageOverlayPath         string         `json:"codexAppImageOverlayPath"`
-	CodexAppImageOverlayOpacity      int            `json:"codexAppImageOverlayOpacity"`
-	CodexGoalsEnabled                bool           `json:"codexGoalsEnabled"`
-	OnboardingCompleted              bool           `json:"onboardingCompleted"`
-	OnboardingCompletedAt            string         `json:"onboardingCompletedAt"`
-	OnboardingCompletedPlatform      string         `json:"onboardingCompletedPlatform"`
-	LaunchMode                       string         `json:"launchMode"`
-	RelayBaseURL                     string         `json:"relayBaseUrl"`
-	RelayAPIKey                      string         `json:"relayApiKey"`
-	RelayProfiles                    []relayProfile `json:"relayProfiles"`
-	RelayCommonConfigContents        string         `json:"relayCommonConfigContents"`
-	RelayContextConfigContents       string         `json:"relayContextConfigContents"`
-	ActiveRelayID                    string         `json:"activeRelayId"`
-	RelayTestModel                   string         `json:"relayTestModel"`
-	CLIWrapperEnabled                bool           `json:"cliWrapperEnabled"`
-	CLIWrapperBaseURL                string         `json:"cliWrapperBaseUrl"`
-	CLIWrapperAPIKey                 string         `json:"cliWrapperApiKey"`
-	CLIWrapperAPIKeyEnv              string         `json:"cliWrapperApiKeyEnv"`
+	CodexAppPath                     string                  `json:"codexAppPath"`
+	CodexExtraArgs                   []string                `json:"codexExtraArgs"`
+	Language                         string                  `json:"language"`
+	ProviderSync                     bool                    `json:"providerSyncEnabled"`
+	ProviderSyncSavedProviders       []string                `json:"providerSyncSavedProviders"`
+	ProviderSyncManualProviders      []string                `json:"providerSyncManualProviders"`
+	ProviderSyncLastSelectedProvider string                  `json:"providerSyncLastSelectedProvider"`
+	RelayProfilesEnabled             bool                    `json:"relayProfilesEnabled"`
+	CCSLinkEnabled                   bool                    `json:"ccsLinkEnabled"`
+	Enhancements                     bool                    `json:"enhancementsEnabled"`
+	CodexAppPluginEntryUnlock        bool                    `json:"codexAppPluginEntryUnlock"`
+	CodexAppPluginMarketplaceUnlock  bool                    `json:"codexAppPluginMarketplaceUnlock"`
+	CodexAppForcePluginInstall       bool                    `json:"codexAppForcePluginInstall"`
+	CodexAppModelWhitelistUnlock     bool                    `json:"codexAppModelWhitelistUnlock"`
+	CodexAppSessionDelete            bool                    `json:"codexAppSessionDelete"`
+	CodexAppMarkdownExport           bool                    `json:"codexAppMarkdownExport"`
+	CodexAppProjectMove              bool                    `json:"codexAppProjectMove"`
+	CodexAppConversationTimeline     bool                    `json:"codexAppConversationTimeline"`
+	CodexAppThreadIDBadge            bool                    `json:"codexAppThreadIdBadge"`
+	CodexAppConversationView         bool                    `json:"codexAppConversationView"`
+	CodexAppThreadScrollRestore      bool                    `json:"codexAppThreadScrollRestore"`
+	CodexAppZedRemoteOpen            bool                    `json:"codexAppZedRemoteOpen"`
+	CodexAppUpstreamWorktreeCreate   bool                    `json:"codexAppUpstreamWorktreeCreate"`
+	CodexAppNativeMenuPlacement      bool                    `json:"codexAppNativeMenuPlacement"`
+	CodexAppServiceTierControls      bool                    `json:"codexAppServiceTierControls"`
+	ComputerUseGuardEnabled          bool                    `json:"computerUseGuardEnabled"`
+	ZedRemoteOpenStrategy            string                  `json:"zedRemoteOpenStrategy"`
+	ZedRemoteProjectRegistryEnabled  bool                    `json:"zedRemoteProjectRegistryEnabled"`
+	ZedRemoteSyncToZedSettings       bool                    `json:"zedRemoteSyncToZedSettings"`
+	CodexAppImageOverlayEnabled      bool                    `json:"codexAppImageOverlayEnabled"`
+	CodexAppImageOverlayPath         string                  `json:"codexAppImageOverlayPath"`
+	CodexAppImageOverlayOpacity      int                     `json:"codexAppImageOverlayOpacity"`
+	CodexGoalsEnabled                bool                    `json:"codexGoalsEnabled"`
+	MobileControlEnabled             bool                    `json:"mobileControlEnabled"`
+	MobileControlRelayURL            string                  `json:"mobileControlRelayUrl"`
+	MobileControlRoom                string                  `json:"mobileControlRoom"`
+	MobileControlKey                 string                  `json:"mobileControlKey"`
+	OnboardingCompleted              bool                    `json:"onboardingCompleted"`
+	OnboardingCompletedAt            string                  `json:"onboardingCompletedAt"`
+	OnboardingCompletedPlatform      string                  `json:"onboardingCompletedPlatform"`
+	LaunchMode                       string                  `json:"launchMode"`
+	RelayBaseURL                     string                  `json:"relayBaseUrl"`
+	RelayAPIKey                      string                  `json:"relayApiKey"`
+	RelayProfiles                    []relayProfile          `json:"relayProfiles"`
+	RelayCommonConfigContents        string                  `json:"relayCommonConfigContents"`
+	RelayContextConfigContents       string                  `json:"relayContextConfigContents"`
+	ActiveRelayID                    string                  `json:"activeRelayId"`
+	AggregateRelayProfiles           []aggregateRelayProfile `json:"aggregateRelayProfiles"`
+	ActiveAggregateRelayID           string                  `json:"activeAggregateRelayId"`
+	RelayTestModel                   string                  `json:"relayTestModel"`
+	CLIWrapperEnabled                bool                    `json:"cliWrapperEnabled"`
+	CLIWrapperBaseURL                string                  `json:"cliWrapperBaseUrl"`
+	CLIWrapperAPIKey                 string                  `json:"cliWrapperApiKey"`
+	CLIWrapperAPIKeyEnv              string                  `json:"cliWrapperApiKeyEnv"`
 }
 
 type relayProfile struct {
@@ -90,6 +96,18 @@ type relayProfile struct {
 	UserAgent                     string                `json:"userAgent"`
 }
 
+type aggregateRelayProfile struct {
+	ID       string                 `json:"id"`
+	Name     string                 `json:"name"`
+	Strategy string                 `json:"strategy"`
+	Members  []aggregateRelayMember `json:"members"`
+}
+
+type aggregateRelayMember struct {
+	RelayID string `json:"relayId"`
+	Weight  int    `json:"weight"`
+}
+
 type relayContextSelection struct {
 	MCPServers []string `json:"mcpServers"`
 	Skills     []string `json:"skills"`
@@ -112,6 +130,7 @@ type launcherRuntime struct {
 	codexAppPath string
 	helper       *http.Server
 	relay        *http.Server
+	mobileHost   *mobileRelayHostRuntime
 	helperURL    string
 	relayURL     string
 }

@@ -115,6 +115,13 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`codexAppVersion`,
 		`codexPluginLegacyEntryUnlockBeforeVersion`,
 		`26.601.2237`,
+		`codexPluginBridgeRequestUnlockFromVersion`,
+		`26.616.0`,
+		`codexPluginMarketplaceRequestPatchStrategy`,
+		`installPluginMarketplaceBridgePatch`,
+		`installPluginMarketplaceWindowEventPatchOnly`,
+		`mergeLocalPluginMarketplaces`,
+		`__CODEX_PLUS_PLUGIN_MARKETPLACES__`,
 		`parseCodexVersionParts`,
 		`compareCodexVersions`,
 		`codexPluginUnlockStrategy`,
@@ -327,6 +334,165 @@ func TestBridgeSettingsIncludesThreadIDBadge(t *testing.T) {
 
 	if !boolFromAny(value["codexAppThreadIdBadge"]) {
 		t.Fatalf("bridge settings should include codexAppThreadIdBadge: %#v", value)
+	}
+}
+
+func TestSettingsPreserveAggregateRelayAndMobileControl(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settings := defaultSettings()
+	settings.MobileControlEnabled = true
+	settings.MobileControlRelayURL = "ws://example.test:57323"
+	settings.MobileControlRoom = "room-a"
+	settings.MobileControlKey = "key-a"
+	settings.RelayProfiles = []relayProfile{
+		{ID: "a", Name: "A", RelayMode: "pureApi", Protocol: "responses", BaseURL: "https://a.example/v1", APIKey: "sk-a"},
+		{ID: "b", Name: "B", RelayMode: "pureApi", Protocol: "responses", BaseURL: "https://b.example/v1", APIKey: "sk-b"},
+		{ID: "agg", Name: "Agg", RelayMode: "aggregate", Protocol: "responses"},
+	}
+	settings.ActiveRelayID = "agg"
+	settings.AggregateRelayProfiles = []aggregateRelayProfile{{
+		ID:       "agg",
+		Name:     "Agg",
+		Strategy: "weightedRoundRobin",
+		Members:  []aggregateRelayMember{{RelayID: "a", Weight: 1}, {RelayID: "b", Weight: 3}},
+	}}
+	settings.ActiveAggregateRelayID = "agg"
+
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("save settings failed: %v", err)
+	}
+	loaded := loadSettings()
+	if loaded.MobileControlRelayURL != "ws://example.test:57323" || loaded.MobileControlRoom != "room-a" || loaded.MobileControlKey != "key-a" {
+		t.Fatalf("mobile settings mismatch: %#v", loaded)
+	}
+	aggregate, ok := activeAggregateRelayProfile(loaded)
+	if !ok {
+		t.Fatal("active aggregate should resolve")
+	}
+	if aggregate.Strategy != "weightedRoundRobin" || aggregate.Members[1].Weight != 3 {
+		t.Fatalf("aggregate mismatch: %#v", aggregate)
+	}
+	if !activeRelayUsesProtocolProxy(loaded) {
+		t.Fatal("aggregate relay should use protocol proxy")
+	}
+}
+
+func TestRelayRotationSelectorStrategies(t *testing.T) {
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{
+		{ID: "a", Name: "A", RelayMode: "pureApi", Protocol: "responses", BaseURL: "https://a.example/v1", APIKey: "sk-a"},
+		{ID: "b", Name: "B", RelayMode: "pureApi", Protocol: "responses", BaseURL: "https://b.example/v1", APIKey: "sk-b"},
+		{ID: "agg", Name: "Agg", RelayMode: "aggregate", Protocol: "responses"},
+	}
+	settings.ActiveRelayID = "agg"
+	settings.ActiveAggregateRelayID = "agg"
+	settings.AggregateRelayProfiles = []aggregateRelayProfile{{
+		ID:       "agg",
+		Name:     "Agg",
+		Strategy: "weightedRoundRobin",
+		Members:  []aggregateRelayMember{{RelayID: "a", Weight: 1}, {RelayID: "b", Weight: 2}},
+	}}
+	clearRelayRotationSelector()
+	first, err := selectRelayForRequest(settings, rotationContext{})
+	if err != nil {
+		t.Fatalf("select first failed: %v", err)
+	}
+	second, _ := selectRelayForRequest(settings, rotationContext{})
+	third, _ := selectRelayForRequest(settings, rotationContext{})
+	if first.ID != "a" || second.ID != "b" || third.ID != "b" {
+		t.Fatalf("weighted sequence mismatch: %s %s %s", first.ID, second.ID, third.ID)
+	}
+
+	settings.AggregateRelayProfiles[0].Strategy = "conversationRoundRobin"
+	clearRelayRotationSelector()
+	convoA1, _ := selectRelayForRequest(settings, rotationContext{ConversationID: "c1"})
+	convoB, _ := selectRelayForRequest(settings, rotationContext{ConversationID: "c2"})
+	convoA2, _ := selectRelayForRequest(settings, rotationContext{ConversationID: "c1"})
+	if convoA1.ID != convoA2.ID || convoA1.ID == convoB.ID {
+		t.Fatalf("conversation assignments mismatch: %s %s %s", convoA1.ID, convoB.ID, convoA2.ID)
+	}
+}
+
+func TestMobileRelayShareURL(t *testing.T) {
+	settings := defaultSettings()
+	settings.MobileControlRelayURL = "wss://relay.example.test"
+	settings.MobileControlRoom = "项目 A"
+	settings.MobileControlKey = "a+b&c"
+
+	url := mobileRelayShareURL(settings)
+	if url != "https://relay.example.test/mobile?key=a%2Bb%26c&room=%E9%A1%B9%E7%9B%AE+A" {
+		t.Fatalf("mobile share URL mismatch: %s", url)
+	}
+}
+
+func TestMobileRelayEnablesHelperRuntime(t *testing.T) {
+	settings := defaultSettings()
+	settings.Enhancements = false
+	settings.MobileControlEnabled = true
+	settings.MobileControlRelayURL = "ws://relay.example.test"
+	settings.MobileControlRoom = "room-a"
+	settings.MobileControlKey = "key-a"
+
+	if !helperNeeded(settings) {
+		t.Fatal("mobile relay host should require helper runtime")
+	}
+}
+
+func TestMobileRelayPayloadEncryptionRoundTrip(t *testing.T) {
+	block := mobileRelayCipher("secret-key")
+	payload := map[string]any{
+		"type":   "httpRequest",
+		"id":     "req-1",
+		"path":   "/backend/status",
+		"method": "GET",
+	}
+
+	envelope, err := encryptMobileRelayPayload(block, payload)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+	if envelope["type"] != "encrypted" {
+		t.Fatalf("expected encrypted envelope: %#v", envelope)
+	}
+	decoded, err := decryptMobileRelayRequest(block, envelope)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v", err)
+	}
+	if decoded["type"] != "httpRequest" || decoded["id"] != "req-1" || decoded["path"] != "/backend/status" {
+		t.Fatalf("decoded payload mismatch: %#v", decoded)
+	}
+}
+
+func TestMobileRelayPlaintextEnvelope(t *testing.T) {
+	block := mobileRelayCipher("secret-key")
+	payload := map[string]any{"type": "appServerClose", "sessionId": "s1"}
+
+	envelope, err := encodeMobileRelayPayload(block, true, payload)
+	if err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	decoded, err := decryptMobileRelayRequest(block, envelope)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded["type"] != "appServerClose" || decoded["sessionId"] != "s1" {
+		t.Fatalf("plaintext decoded mismatch: %#v", decoded)
+	}
+}
+
+func TestMobileAppServerPortFromURLRequiresLoopback(t *testing.T) {
+	cases := map[string]uint16{
+		"ws://127.0.0.1:40123/rpc": 40123,
+		"http://localhost:40124":   40124,
+		"ws://example.test:40123":  0,
+		"wss://127.0.0.1:40123":    0,
+		"not a url":                0,
+	}
+	for raw, want := range cases {
+		if got := mobileAppServerPortFromURL(raw); got != want {
+			t.Fatalf("mobileAppServerPortFromURL(%q) = %d, want %d", raw, got, want)
+		}
 	}
 }
 

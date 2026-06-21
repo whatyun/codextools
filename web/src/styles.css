@@ -1125,7 +1125,7 @@ body {
 
 .mode-switch-panel {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
   gap: 10px;
   margin-top: 14px;
 }
@@ -1189,8 +1189,46 @@ body {
 
 .relay-add-row {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   margin-bottom: 10px;
+}
+
+.aggregate-editor {
+  display: grid;
+  gap: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  padding: 14px;
+  background: hsl(var(--muted) / 0.28);
+}
+
+.aggregate-editor-head,
+.aggregate-member-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  gap: 12px;
+  align-items: center;
+}
+
+.aggregate-editor-head div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.aggregate-editor-head span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.aggregate-member-list {
+  display: grid;
+  gap: 8px;
+}
+
+.aggregate-member-row {
+  grid-template-columns: minmax(0, 1fr) 92px 38px;
 }
 
 .provider-preset-grid {

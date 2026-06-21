@@ -382,6 +382,27 @@ func (s *server) importCurrentRelayFiles(args map[string]any) commandResult {
 	return ok("已把当前 ~/.codex/config.toml 和 auth.json 导入到此供应商。", settingsPayloadValue(loadSettings()))
 }
 
+func (s *server) backfillRelayProfileFromLive(args map[string]any) commandResult {
+	request := mapArg(args, "request")
+	var settings backendSettings
+	if err := remarshal(request["settings"], &settings); err != nil {
+		return failed("回填当前供应商配置失败："+err.Error(), settingsPayloadValue(loadSettings()))
+	}
+	settings = normalizeSettings(settings)
+	profileID := strings.TrimSpace(stringFromAny(request["profileId"]))
+	if profileID == "" {
+		profileID = activeRelayProfile(settings).ID
+	}
+	configContents := readFile(filepath.Join(codexHomeDir(), "config.toml"))
+	authContents := readFile(filepath.Join(codexHomeDir(), "auth.json"))
+	updated, found := updateRelayProfileSnapshot(settings, profileID, configContents, authContents)
+	if !found {
+		return failed("当前供应商已不在配置列表中，已停止切换以避免覆盖用户改动。", map[string]any{"settings": settings})
+	}
+	payload := map[string]any{"settings": normalizeSettings(updated)}
+	return ok("当前供应商配置已从 live 文件回填。", payload)
+}
+
 func (s *server) bindOfficialAuth(args map[string]any) commandResult {
 	profileID := relayProfileIDArg(args)
 	settings := loadSettings()
@@ -556,6 +577,11 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	if !pure && relay.RelayMode == "mixedApi" && !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
 		return failed("切换官方混合 API 失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
+	if relay.RelayMode == "aggregate" {
+		if _, err := selectRelayForProbe(settings); err != nil {
+			return failed("切换聚合供应商失败："+err.Error(), relayStatusFromHome(home))
+		}
+	}
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
 		return failed("保存供应商快照失败："+err.Error(), relayStatusFromHome(home))
 	}
@@ -621,8 +647,36 @@ func activeRelayProfile(settings backendSettings) relayProfile {
 	return defaultRelayProfile()
 }
 
+func activeAggregateRelayProfile(settings backendSettings) (aggregateRelayProfile, bool) {
+	active := activeRelayProfile(settings)
+	if active.RelayMode != "aggregate" {
+		return aggregateRelayProfile{}, false
+	}
+	activeID := strings.TrimSpace(settings.ActiveAggregateRelayID)
+	if activeID == "" {
+		activeID = active.ID
+	}
+	if activeID != active.ID {
+		return aggregateRelayProfile{}, false
+	}
+	for _, aggregate := range settings.AggregateRelayProfiles {
+		if aggregate.ID == activeID {
+			return normalizeAggregateRelayProfile(aggregate, 0), true
+		}
+	}
+	return aggregateRelayProfile{}, false
+}
+
+func activeRelayUsesProtocolProxy(settings backendSettings) bool {
+	active := activeRelayProfile(settings)
+	return active.Protocol == "chatCompletions" || active.RelayMode == "aggregate"
+}
+
 func relayConfigForWrite(settings backendSettings, relay relayProfile) (string, error) {
 	configContents := strings.TrimSpace(relay.ConfigContents)
+	if relay.RelayMode == "aggregate" {
+		configContents = upsertModelProviderConfig(configContents, effectiveBaseURL(relay), aggregateRelayAPIKey, relay)
+	}
 	if configContents == "" && relay.RelayMode != "official" {
 		configContents = upsertModelProviderConfig("", effectiveBaseURL(relay), strings.TrimSpace(relay.APIKey), relay)
 	}
@@ -709,7 +763,7 @@ func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 	if strings.TrimSpace(baseURL) == "" {
 		return errors.New("中转 Base URL 不能为空")
 	}
-	if strings.TrimSpace(relay.APIKey) == "" {
+	if strings.TrimSpace(relay.APIKey) == "" && relay.RelayMode != "aggregate" {
 		return errors.New("中转 Key 不能为空")
 	}
 	if relay.ImageGenerationEnabled && relay.ImageGenerationUseSeparateAPI {
@@ -726,7 +780,11 @@ func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 	configPath := filepath.Join(home, "config.toml")
 	existing, _ := os.ReadFile(configPath)
 	settings := loadSettings()
-	updated := upsertModelProviderConfig(string(existing), baseURL, strings.TrimSpace(relay.APIKey), relay)
+	bearerToken := strings.TrimSpace(relay.APIKey)
+	if relay.RelayMode == "aggregate" {
+		bearerToken = aggregateRelayAPIKey
+	}
+	updated := upsertModelProviderConfig(string(existing), baseURL, bearerToken, relay)
 	updated, err := relayConfigWithCommonAndLimits(settings, relay, updated)
 	if err != nil {
 		return err
@@ -739,7 +797,7 @@ func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 }
 
 func effectiveBaseURL(relay relayProfile) string {
-	if relay.Protocol == "chatCompletions" {
+	if relay.Protocol == "chatCompletions" || relay.RelayMode == "aggregate" {
 		return protocolProxyBaseURL
 	}
 	if relay.Protocol == "responses" && (disablesImageGeneration(relay) || usesSeparateImageGenerationAPI(relay)) {

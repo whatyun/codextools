@@ -80,7 +80,7 @@ func runLauncher(args []string) error {
 		if helperNeeded(settings) {
 			waitForTCPPortFree(helperPort, 5*time.Second)
 		}
-		if activeRelayProfile(settings).needsLocalRelayProxy() {
+		if activeRelayNeedsLocalProxy(settings) {
 			waitForTCPPortFree(localRelayProxyPort, 5*time.Second)
 		}
 	}
@@ -95,7 +95,7 @@ func runLauncher(args []string) error {
 			_ = forceKillMacOSApp(appPath)
 			_ = waitForMacOSAppExit(appPath, 4*time.Second)
 		}
-		if activeRelayProfile(settings).needsLocalRelayProxy() {
+		if activeRelayNeedsLocalProxy(settings) {
 			waitForTCPPortFree(localRelayProxyPort, 5*time.Second)
 		}
 	}
@@ -131,7 +131,7 @@ func runLauncher(args []string) error {
 		}
 		defer runtimeState.shutdownHelper()
 	}
-	if activeRelayProfile(settings).needsLocalRelayProxy() {
+	if activeRelayNeedsLocalProxy(settings) {
 		if err := runtimeState.startRelayProxy(localRelayProxyPort); err != nil {
 			failure := launchStatus{
 				Status:      "failed",
@@ -146,6 +146,10 @@ func runLauncher(args []string) error {
 			return err
 		}
 		defer runtimeState.shutdownRelayProxy()
+	}
+	if mobileConfig := mobileRelayHostConfigFromSettings(settings); mobileConfig != nil {
+		runtimeState.startMobileRelayHost(helperPort, mobileConfig)
+		defer runtimeState.shutdownMobileRelayHost()
 	}
 	if settings.ComputerUseGuardEnabled {
 		result, guardErr := ensureComputerUseGuardConfig(codexHomeDir())
@@ -617,7 +621,12 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 
 func helperNeeded(settings backendSettings) bool {
 	imageOverlayNeeded := settings.CodexAppImageOverlayEnabled && strings.TrimSpace(settings.CodexAppImageOverlayPath) != ""
-	return settings.Enhancements || imageOverlayNeeded || activeRelayProfile(settings).Protocol == "chatCompletions" || activeRelayProfile(settings).needsLocalRelayProxy()
+	return settings.Enhancements || imageOverlayNeeded || activeRelayUsesProtocolProxy(settings) || activeRelayNeedsLocalProxy(settings) || mobileRelayHostConfigFromSettings(settings) != nil
+}
+
+func activeRelayNeedsLocalProxy(settings backendSettings) bool {
+	active := activeRelayProfile(settings)
+	return active.needsLocalRelayProxy() || active.RelayMode == "aggregate"
 }
 
 type codexLaunchHandle interface {

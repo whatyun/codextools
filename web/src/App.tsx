@@ -48,6 +48,7 @@ import {
   Sun,
   TestTube,
   Trash2,
+  Waypoints,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -266,6 +267,10 @@ type BackendSettings = {
   codexAppImageOverlayPath: string;
   codexAppImageOverlayOpacity: number;
   codexGoalsEnabled: boolean;
+  mobileControlEnabled: boolean;
+  mobileControlRelayUrl: string;
+  mobileControlRoom: string;
+  mobileControlKey: string;
   onboardingCompleted: boolean;
   onboardingCompletedAt: string;
   onboardingCompletedPlatform: string;
@@ -276,6 +281,8 @@ type BackendSettings = {
   relayCommonConfigContents: string;
   relayContextConfigContents: string;
   activeRelayId: string;
+  aggregateRelayProfiles: AggregateRelayProfile[];
+  activeAggregateRelayId: string;
   relayTestModel: string;
   cliWrapperEnabled: boolean;
   cliWrapperBaseUrl: string;
@@ -316,6 +323,20 @@ type RelayProfile = {
   userAgent: string;
 };
 
+type AggregateRelayStrategy = "failover" | "conversationRoundRobin" | "requestRoundRobin" | "weightedRoundRobin";
+
+type AggregateRelayMember = {
+  relayId: string;
+  weight: number;
+};
+
+type AggregateRelayProfile = {
+  id: string;
+  name: string;
+  strategy: AggregateRelayStrategy;
+  members: AggregateRelayMember[];
+};
+
 type RelayContextSelection = {
   mcpServers: string[];
   skills: string[];
@@ -340,7 +361,8 @@ type CodexContextEntries = {
 };
 
 type RelayProtocol = "responses" | "chatCompletions";
-type RelayMode = "official" | "mixedApi" | "pureApi";
+type RelayMode = "official" | "mixedApi" | "pureApi" | "aggregate";
+const LOCAL_MOBILE_RELAY_URL = "ws://127.0.0.1:57323";
 type ZedOpenStrategy = "addToFocusedWorkspace" | "reuseWindow" | "newWindow" | "default";
 type ZedRemoteProject = {
   id: string;
@@ -447,6 +469,10 @@ type SettingsResult = CommandResult<{
   settings_path: string;
   user_scripts: UserScriptInventory;
   envConflicts?: EnvConflict[];
+}>;
+
+type SettingsBackfillResult = CommandResult<{
+  settings: BackendSettings;
 }>;
 
 type EnvConflict = {
@@ -733,6 +759,10 @@ const defaultSettings: BackendSettings = {
   codexAppImageOverlayPath: "",
   codexAppImageOverlayOpacity: 35,
   codexGoalsEnabled: false,
+  mobileControlEnabled: false,
+  mobileControlRelayUrl: LOCAL_MOBILE_RELAY_URL,
+  mobileControlRoom: "",
+  mobileControlKey: "",
   onboardingCompleted: false,
   onboardingCompletedAt: "",
   onboardingCompletedPlatform: "",
@@ -774,6 +804,8 @@ const defaultSettings: BackendSettings = {
   relayCommonConfigContents: "",
   relayContextConfigContents: "",
   activeRelayId: "default",
+  aggregateRelayProfiles: [],
+  activeAggregateRelayId: "",
   relayTestModel: "gpt-5-mini",
   cliWrapperEnabled: false,
   cliWrapperBaseUrl: "",
@@ -1373,6 +1405,14 @@ export function App() {
     }
   };
 
+  const repairPluginMarketplace = async () => {
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("repair_plugin_marketplace"));
+    if (result) {
+      showNotice("插件市场修复", result.message, result.status);
+      await refreshRelayFiles(true);
+    }
+  };
+
   const repairCodexGoals = async () => {
     const result = await run(() => call<CodexConfigRepairResult>("repair_codex_goals"));
     if (result) {
@@ -1648,7 +1688,7 @@ export function App() {
     }
 
     const currentSelected = activeRelayProfile(selectedSettings);
-    const launchMode = currentSelected.relayMode === "pureApi" ? "patch" : "relay";
+    const launchMode = currentSelected.relayMode === "pureApi" || currentSelected.relayMode === "aggregate" ? "patch" : "relay";
     const modeResult = await saveLaunchMode(launchMode, true, selectedSettings);
     await refreshInstallGuideStatus(true);
     await refreshRelay(true);
@@ -1660,6 +1700,19 @@ export function App() {
     const current = activeRelayProfile(settingsForm);
     const selected = activeRelayProfile(next);
     if (current.id === selected.id) return next;
+
+    const backfill = await run(() =>
+      call<SettingsBackfillResult>("backfill_relay_profile_from_live", {
+        request: { settings: next, profileId: current.id },
+      }),
+    );
+    if (backfill) {
+      if (!isSuccessStatus(backfill.status)) {
+        showNotice("供应商切换", backfill.message, backfill.status);
+        return null;
+      }
+      return normalizeSettings(backfill.settings);
+    }
 
     const files = await refreshRelayFiles(true);
     if (!files || !isSuccessStatus(files.status)) {
@@ -1754,12 +1807,14 @@ export function App() {
       restart,
       repairBackend,
       repairCodexApp,
+      repairPluginMarketplace,
       installEntrypoints,
       uninstallEntrypoints,
       uninstallCodexTools,
       repairShortcuts,
       saveSettings,
       saveSettingsValue,
+      copyText,
       checkEnvConflicts,
       removeEnvConflicts,
       resetSettings,
@@ -2082,6 +2137,7 @@ type Actions = {
   launch: () => Promise<void>;
   restart: () => Promise<void>;
   repairBackend: () => Promise<void>;
+  repairPluginMarketplace: () => Promise<void>;
   installEntrypoints: () => Promise<void>;
   uninstallEntrypoints: () => Promise<void>;
   uninstallCodexTools: () => Promise<void>;
@@ -2089,6 +2145,7 @@ type Actions = {
   repairCodexApp: () => Promise<void>;
   saveSettings: () => Promise<void>;
   saveSettingsValue: (settings: BackendSettings, silent?: boolean) => Promise<SettingsResult | null>;
+  copyText: (text: string, message: string) => Promise<void>;
   checkEnvConflicts: () => Promise<SettingsResult | null>;
   removeEnvConflicts: (names: string[]) => Promise<SettingsResult | null>;
   resetSettings: () => Promise<void>;
@@ -3101,10 +3158,16 @@ function RelayScreen({
       relayMode,
       officialMixApiKey: relayMode === "mixedApi",
     });
+    const aggregateRelayProfiles =
+      relayMode === "aggregate" && !normalized.aggregateRelayProfiles.some((item) => item.id === active.id)
+        ? [...normalized.aggregateRelayProfiles, defaultAggregateForProfile(normalized, active)]
+        : normalized.aggregateRelayProfiles;
     const next = syncLegacyRelayFields({
       ...normalized,
       relayProfiles: normalized.relayProfiles.map((profile) => (profile.id === active.id ? nextProfile : profile)),
       activeRelayId: active.id,
+      aggregateRelayProfiles,
+      activeAggregateRelayId: relayMode === "aggregate" ? active.id : normalized.activeAggregateRelayId,
     });
     void actions.switchRelayProfile(next);
   };
@@ -3202,6 +3265,14 @@ function RelayScreen({
               <strong>中转模式</strong>
               <span>写入这个供应商自己的 config.toml/auth.json 快照；缺少 auth 快照时兼容保留当前登录。</span>
             </button>
+            <button
+              className={`mode-switch-button ${active.relayMode === "aggregate" ? "active" : ""}`}
+              onClick={() => switchActiveMode("aggregate")}
+              type="button"
+            >
+              <strong>聚合轮转</strong>
+              <span>写入本地代理地址，请求时按策略轮转多个 API 供应商。</span>
+            </button>
           </div>
           {relay?.backupPath ? <div className="path-line compact-path">备份：{relay.backupPath}</div> : null}
         </CardContent>
@@ -3269,6 +3340,16 @@ function RelayScreen({
             >
               <Plus className="h-4 w-4" />
               添加供应商
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setNewProfileDraft(createAggregateRelayProfile(normalized));
+                setDetailProfileId(null);
+              }}
+            >
+              <Waypoints className="h-4 w-4" />
+              添加聚合供应商
             </Button>
           </div>
           <RelayProfileList
@@ -3405,11 +3486,74 @@ function EnhanceScreen({
           </Field>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>保存增强设置</Button>
+            <Button onClick={() => void actions.repairPluginMarketplace()} variant="secondary">
+              <Sparkles className="h-4 w-4" />
+              修复插件市场
+            </Button>
           </Toolbar>
         </CardContent>
       </Panel>
       <ZedRemoteProjectsPanel projects={zedRemoteProjects} form={form} actions={actions} />
+      <MobileControlPanel form={form} onFormChange={onFormChange} actions={actions} />
     </>
+  );
+}
+
+function MobileControlPanel({ form, onFormChange, actions }: { form: BackendSettings; onFormChange: (value: BackendSettings) => void; actions: Actions }) {
+  const shareUrl = mobileRelayShareUrl(form);
+  return (
+    <Panel>
+      <CardHead title="手机控制" detail="配置上游移动 relay 房间和密钥；启动 Codex 时会连接 relay 并桥接手机请求" />
+      <CardContent>
+        <label className="switch-row">
+          <input
+            checked={form.mobileControlEnabled}
+            onChange={(event) => onFormChange({ ...form, mobileControlEnabled: event.currentTarget.checked })}
+            type="checkbox"
+          />
+          <span>
+            <strong>启用手机控制配置</strong>
+            <small>使用上游兼容协议；relay 地址、房间和密钥也可通过 CODEX_PLUS_MOBILE_RELAY_* 环境变量覆盖。</small>
+          </span>
+        </label>
+        <div className="relay-fields">
+          <Field label="Relay URL">
+            <Input
+              value={form.mobileControlRelayUrl}
+              onChange={(event) => onFormChange({ ...form, mobileControlRelayUrl: event.currentTarget.value })}
+              placeholder={LOCAL_MOBILE_RELAY_URL}
+            />
+          </Field>
+          <Field label="房间">
+            <Input
+              value={form.mobileControlRoom}
+              onChange={(event) => onFormChange({ ...form, mobileControlRoom: event.currentTarget.value })}
+              placeholder="room"
+            />
+          </Field>
+          <Field label="密钥">
+            <Input
+              value={form.mobileControlKey}
+              onChange={(event) => onFormChange({ ...form, mobileControlKey: event.currentTarget.value })}
+              placeholder="用于端到端加密"
+            />
+          </Field>
+        </div>
+        {shareUrl ? <div className="path-line compact-path">{shareUrl}</div> : null}
+        <Toolbar>
+          <Button onClick={() => void actions.saveSettings()} variant="secondary">
+            <Save className="h-4 w-4" />
+            保存手机控制
+          </Button>
+          {shareUrl ? (
+            <Button onClick={() => void actions.copyText(shareUrl, "手机控制链接已复制。")} variant="outline">
+              <Copy className="h-4 w-4" />
+              复制链接
+            </Button>
+          ) : null}
+        </Toolbar>
+      </CardContent>
+    </Panel>
   );
 }
 
@@ -4416,7 +4560,15 @@ function RelayProfileDetail({
           保存
         </Button>
       </Toolbar>
-      <RelayProfileEditor profile={draft} form={form} isNew={isNew} onProfileChange={setDraft} onSwitch={switchDraft} actions={actions} />
+      <RelayProfileEditor
+        profile={draft}
+        form={form}
+        isNew={isNew}
+        onFormPatch={(patch) => onFormChange({ ...form, ...patch })}
+        onProfileChange={setDraft}
+        onSwitch={switchDraft}
+        actions={actions}
+      />
       <OfficialAuthBindingPanel
         profile={draft}
         isNew={isNew}
@@ -5050,10 +5202,102 @@ function tomlKey(key: string): string {
   return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${tomlString(key)}"`;
 }
 
+function AggregateRelayEditor({
+  aggregate,
+  form,
+  isNew,
+  profile,
+  onAggregateChange,
+}: {
+  aggregate: AggregateRelayProfile;
+  form: BackendSettings;
+  isNew: boolean;
+  profile: RelayProfile;
+  onAggregateChange: (value: AggregateRelayProfile) => void;
+}) {
+  const candidates = form.relayProfiles.filter((item) => item.id !== profile.id && item.relayMode === "pureApi" && item.baseUrl.trim() && item.apiKey.trim());
+  const updateMember = (index: number, patch: Partial<AggregateRelayMember>) => {
+    onAggregateChange({
+      ...aggregate,
+      members: aggregate.members.map((member, memberIndex) => memberIndex === index ? { ...member, ...patch } : member),
+    });
+  };
+  const addMember = () => {
+    const firstCandidate = candidates.find((candidate) => !aggregate.members.some((member) => member.relayId === candidate.id));
+    if (!firstCandidate) return;
+    onAggregateChange({
+      ...aggregate,
+      members: [...aggregate.members, { relayId: firstCandidate.id, weight: 1 }],
+    });
+  };
+  return (
+    <div className="aggregate-editor">
+      <div className="aggregate-editor-head">
+        <div>
+          <strong>聚合供应商</strong>
+          <span>{isNew ? "保存后会启用成员配置；成员仅支持中转 API 供应商。" : "按策略从成员 API 供应商中选择实际上游。"}</span>
+        </div>
+        <select
+          className="field-select"
+          value={aggregate.strategy}
+          onChange={(event) => onAggregateChange({ ...aggregate, strategy: event.currentTarget.value as AggregateRelayStrategy })}
+        >
+          <option value="failover">失败切换</option>
+          <option value="conversationRoundRobin">按会话轮询</option>
+          <option value="requestRoundRobin">按请求轮询</option>
+          <option value="weightedRoundRobin">按权重轮询</option>
+        </select>
+      </div>
+      {aggregate.members.length ? (
+        <div className="aggregate-member-list">
+          {aggregate.members.map((member, index) => (
+            <div className="aggregate-member-row" key={`${member.relayId}-${index}`}>
+              <select
+                className="field-select"
+                value={member.relayId}
+                onChange={(event) => updateMember(index, { relayId: event.currentTarget.value })}
+              >
+                <option value="">选择成员供应商</option>
+                {candidates.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>{candidate.name || candidate.id}</option>
+                ))}
+              </select>
+              <Input
+                inputMode="numeric"
+                min={1}
+                value={member.weight}
+                onChange={(event) => updateMember(index, { weight: Math.max(1, Number(event.currentTarget.value) || 1) })}
+              />
+              <Button
+                onClick={() => onAggregateChange({ ...aggregate, members: aggregate.members.filter((_, memberIndex) => memberIndex !== index) })}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="hint-line limited">
+          <Info className="h-4 w-4" />
+          <span>{candidates.length ? "还没有添加成员。" : "还没有可作为成员的中转 API 供应商；请先添加至少一个 Base URL / Key 完整的中转供应商。"}</span>
+        </div>
+      )}
+      <Button disabled={!candidates.length} onClick={addMember} size="sm" type="button" variant="secondary">
+        <Plus className="h-4 w-4" />
+        添加成员
+      </Button>
+    </div>
+  );
+}
+
 function RelayProfileEditor({
   profile,
   form,
   isNew = false,
+  onFormPatch,
   onProfileChange,
   onSwitch,
   actions,
@@ -5061,11 +5305,13 @@ function RelayProfileEditor({
   profile: RelayProfile;
   form: BackendSettings;
   isNew?: boolean;
+  onFormPatch: (patch: Partial<BackendSettings>) => void;
   onProfileChange: (value: RelayProfile) => void;
   onSwitch: () => void;
   actions: Actions;
 }) {
-  const showApiFields = profile.relayMode !== "official";
+  const showApiFields = profile.relayMode !== "official" && profile.relayMode !== "aggregate";
+  const aggregate = aggregateRelayProfileFor(form, profile);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const updateDraft = (patch: Partial<RelayProfile>) => {
     const shouldRegenerateFiles = [
@@ -5123,6 +5369,7 @@ function RelayProfileEditor({
             <option value="official">官方登录</option>
             <option value="mixedApi">官方混合 API</option>
             <option value="pureApi">中转 API</option>
+            <option value="aggregate">聚合轮转</option>
           </select>
         </Field>
         <Field className="relay-field-config-model" label="配置模型">
@@ -5187,6 +5434,21 @@ function RelayProfileEditor({
               />
             </Field>
           </div>
+        ) : null}
+        {profile.relayMode === "aggregate" ? (
+          <AggregateRelayEditor
+            aggregate={aggregate}
+            form={form}
+            isNew={isNew}
+            profile={profile}
+            onAggregateChange={(nextAggregate) => {
+              const nextProfiles = form.aggregateRelayProfiles.filter((item) => item.id !== nextAggregate.id);
+              onFormPatch({
+                aggregateRelayProfiles: [...nextProfiles, nextAggregate],
+                activeAggregateRelayId: profile.id,
+              });
+            }}
+          />
         ) : null}
         {showApiFields ? (
           <>
@@ -5909,6 +6171,10 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
   const activeRelayId = profiles.some((profile) => profile.id === settings.activeRelayId)
     ? settings.activeRelayId
     : profiles[0]?.id || "default";
+  const aggregateRelayProfiles = (settings.aggregateRelayProfiles ?? []).map((profile, index) => normalizeAggregateRelayProfile(profile, index));
+  const activeAggregateRelayId = aggregateRelayProfiles.some((profile) => profile.id === settings.activeAggregateRelayId)
+    ? settings.activeAggregateRelayId
+    : activeRelayId;
   return syncLegacyRelayFields({
     ...defaultSettings,
     ...settings,
@@ -5922,7 +6188,29 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
     relayContextConfigContents,
     relayProfiles: profiles,
     activeRelayId,
+    aggregateRelayProfiles,
+    activeAggregateRelayId,
+    mobileControlRelayUrl: settings.mobileControlRelayUrl || LOCAL_MOBILE_RELAY_URL,
+    mobileControlRoom: settings.mobileControlRoom || "",
+    mobileControlKey: settings.mobileControlKey || "",
   });
+}
+
+function normalizeAggregateRelayProfile(profile: AggregateRelayProfile, index = 0): AggregateRelayProfile {
+  return {
+    id: profile.id || `aggregate-${index + 1}`,
+    name: profile.name || profile.id || `聚合供应商 ${index + 1}`,
+    strategy: normalizeAggregateRelayStrategy(profile.strategy),
+    members: (profile.members ?? []).map((member) => ({
+      relayId: member.relayId || "",
+      weight: Math.max(1, Number.isFinite(Number(member.weight)) ? Number(member.weight) : 1),
+    })),
+  };
+}
+
+function normalizeAggregateRelayStrategy(strategy: string): AggregateRelayStrategy {
+  if (strategy === "conversationRoundRobin" || strategy === "requestRoundRobin" || strategy === "weightedRoundRobin") return strategy;
+  return "failover";
 }
 
 function codexExtraArgsToInput(args: string[] | undefined) {
@@ -5937,6 +6225,8 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0, defaultContextS
   const relayMode =
     profile.relayMode === "pureApi"
       ? "pureApi"
+      : profile.relayMode === "aggregate"
+        ? "aggregate"
       : profile.relayMode === "mixedApi" || profile.officialMixApiKey === true
         ? "mixedApi"
         : normalizeRelayMode(profile.relayMode);
@@ -5988,17 +6278,36 @@ function activeRelayProfile(settings: BackendSettings): RelayProfile {
   );
 }
 
+function aggregateRelayProfileFor(settings: BackendSettings, profile: RelayProfile): AggregateRelayProfile {
+  return settings.aggregateRelayProfiles.find((item) => item.id === profile.id) || defaultAggregateForProfile(settings, profile);
+}
+
+function defaultAggregateForProfile(settings: BackendSettings, profile: RelayProfile): AggregateRelayProfile {
+  const members = settings.relayProfiles
+    .filter((item) => item.id !== profile.id && item.relayMode === "pureApi" && item.baseUrl.trim() && item.apiKey.trim())
+    .slice(0, 2)
+    .map((item) => ({ relayId: item.id, weight: 1 }));
+  return {
+    id: profile.id,
+    name: profile.name || profile.id,
+    strategy: "failover",
+    members,
+  };
+}
+
 function relayProtocolLabel(protocol: RelayProtocol): string {
   return protocol === "chatCompletions" ? "Chat Completions 转 Responses" : "Responses API";
 }
 
 function normalizeRelayMode(mode: RelayMode | undefined): RelayMode {
+  if (mode === "aggregate") return mode;
   if (mode === "pureApi") return mode;
   if (mode === "mixedApi") return mode;
   return "official";
 }
 
 function relayModeLabel(mode: RelayMode): string {
+  if (mode === "aggregate") return "聚合轮转";
   if (mode === "pureApi") return "中转 API";
   if (mode === "mixedApi") return "官方混合 API";
   return "官方登录";
@@ -6094,11 +6403,17 @@ function relayProfileModeHelp(profile: RelayProfile): string {
   if (profile.relayMode === "pureApi") {
     return "此供应商会按中转 API 模式写入 config.toml，并保留现有 auth.json 登录状态。";
   }
+  if (profile.relayMode === "aggregate") {
+    return "此供应商会写入本地协议代理地址，并按策略在多个 API 供应商之间轮转。";
+  }
   return "";
 }
 
 function relayProfileReadinessText(profile: RelayProfile, relay: RelayResult | null): string {
   const hasAuthSnapshot = profile.authContents.trim() || profile.officialAuthContents.trim();
+  if (profile.relayMode === "aggregate") {
+    return "聚合供应商就绪：请求会由本地协议代理按成员策略选择实际 API 供应商。";
+  }
   if (profile.relayMode === "official") {
     return hasAuthSnapshot
       ? `此供应商已绑定官方账号：${officialBindingLabel(profile)}。`
@@ -6125,6 +6440,7 @@ function relayProfileGuideReady(profile: RelayProfile, connection?: InstallGuide
   const officialReady = profile.authContents.trim().length > 0 || profile.officialAuthContents.trim().length > 0 || relayOfficialAuthenticated(relay ?? null);
   const apiReady = profile.baseUrl.trim().length > 0 && profile.apiKey.trim().length > 0 &&
     (!profile.imageGenerationEnabled || !profile.imageGenerationUseSeparateApi || (!!profile.imageGenerationBaseUrl.trim() && !!profile.imageGenerationApiKey.trim()));
+  if (profile.relayMode === "aggregate") return true;
   if (profile.relayMode === "official") return officialReady;
   if (profile.relayMode === "mixedApi") return officialReady && apiReady;
   return apiReady;
@@ -6152,7 +6468,7 @@ function guideConnectionFacts(profile: RelayProfile, connection: InstallGuideCon
     : profile.baseUrl.trim().length > 0 && profile.apiKey.trim().length > 0;
   return [
     { label: "官方账号", value: officialReady ? officialBindingLabel(profile) || relayOfficialLoginLabel(relay) : "未绑定" },
-    { label: "服务器参数", value: profile.relayMode === "official" ? "不需要" : apiReady ? "已填写" : "缺少 URL / Key" },
+    { label: "服务器参数", value: profile.relayMode === "official" || profile.relayMode === "aggregate" ? "不需要" : apiReady ? "已填写" : "缺少 URL / Key" },
     { label: "当前写入", value: relay?.configured || connection?.configured ? "已配置" : profile.relayMode === "official" ? "官方登录" : "未写入" },
     { label: "供应商", value: profile.name || profile.id },
   ];
@@ -6169,6 +6485,7 @@ function prepareRelaySettingsForSwitch(settings: BackendSettings): BackendSettin
 }
 
 function relayProfileSwitchCommand(profile: RelayProfile): "clear_relay_injection" | "apply_relay_injection" | "apply_pure_api_injection" {
+  if (profile.relayMode === "aggregate") return "apply_pure_api_injection";
   if (profile.relayMode === "pureApi") return "apply_pure_api_injection";
   if (profile.relayMode === "mixedApi") return "apply_relay_injection";
   return "clear_relay_injection";
@@ -6177,6 +6494,8 @@ function relayProfileSwitchCommand(profile: RelayProfile): "clear_relay_injectio
 function relayProfileModeSwitchedText(profile: RelayProfile, relay?: RelayResult | null): string {
   const base = profile.relayMode === "pureApi"
     ? "已按此供应商切换到中转 API；页面增强已设为完整增强。"
+    : profile.relayMode === "aggregate"
+      ? "已按此聚合供应商切换到轮转代理；页面增强已设为完整增强。"
     : profile.relayMode === "mixedApi"
       ? "已按此供应商使用官方登录，并混入 API Key；页面增强已设为兼容增强。"
       : "已按此供应商切回官方登录；页面增强已设为兼容增强。";
@@ -6185,6 +6504,14 @@ function relayProfileModeSwitchedText(profile: RelayProfile, relay?: RelayResult
 }
 
 function withGeneratedRelayFiles(profile: RelayProfile): RelayProfile {
+  if (profile.relayMode === "aggregate") {
+    return {
+      ...profile,
+      officialMixApiKey: false,
+      configContents: buildRelayConfigToml(profile),
+      authContents: profile.authContents,
+    };
+  }
   if (profile.relayMode === "official") {
     return {
       ...profile,
@@ -6216,6 +6543,7 @@ function buildRelayConfigToml(
     | "baseUrl"
     | "apiKey"
     | "protocol"
+    | "relayMode"
     | "imageGenerationEnabled"
     | "imageGenerationUseSeparateApi"
     | "imageGenerationBaseUrl"
@@ -6223,15 +6551,19 @@ function buildRelayConfigToml(
     | "autoCompactLimit"
   >,
 ): string {
+  const isAggregate = profile.relayMode === "aggregate";
   const usesImageProxy =
+    !isAggregate &&
     profile.protocol === "responses" &&
     (!profile.imageGenerationEnabled || (profile.imageGenerationUseSeparateApi && profile.imageGenerationBaseUrl.trim()));
-  const baseUrl = usesImageProxy
+  const baseUrl = isAggregate
+    ? PROTOCOL_PROXY_BASE_URL
+    : usesImageProxy
     ? "http://127.0.0.1:57323/v1"
     : profile.protocol === "chatCompletions"
       ? PROTOCOL_PROXY_BASE_URL
       : profile.baseUrl.trim();
-  const apiKey = profile.apiKey.trim();
+  const apiKey = isAggregate ? "codex-plus-aggregate" : profile.apiKey.trim();
   const lines = [
     profile.model.trim() ? `model = "${tomlString(profile.model.trim())}"` : "",
     profile.contextWindow.trim() ? `model_context_window = ${profile.contextWindow.trim()}` : "",
@@ -6269,6 +6601,9 @@ function relayProfileSwitchValidation(profile: RelayProfile): string | null {
   if (profile.relayMode === "mixedApi" && !hasAuthSnapshot) {
     return `供应商「${profile.name || profile.id}」还没有绑定官方账号，已停止切换。`;
   }
+  if (profile.relayMode === "aggregate") {
+    return null;
+  }
   if (!profile.baseUrl.trim()) {
     return `供应商「${profile.name || profile.id}」缺少 Base URL，已停止切换。`;
   }
@@ -6292,6 +6627,24 @@ function normalizeRelayBaseUrl(value: string): string {
   const [, rest = trimmed] = trimmed.split("://");
   if (rest.includes("/")) return trimmed;
   return `${trimmed}/v1`;
+}
+
+function mobileRelayShareUrl(settings: Pick<BackendSettings, "mobileControlRelayUrl" | "mobileControlRoom" | "mobileControlKey">): string {
+  const base = mobileRelayHttpUrl(settings.mobileControlRelayUrl);
+  if (!base) return "";
+  const params = new URLSearchParams();
+  if (settings.mobileControlRoom.trim()) params.set("room", settings.mobileControlRoom.trim());
+  if (settings.mobileControlKey.trim()) params.set("key", settings.mobileControlKey.trim());
+  const query = params.toString();
+  return `${base.replace(/\/+$/, "")}/mobile${query ? `?${query}` : ""}`;
+}
+
+function mobileRelayHttpUrl(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("ws://")) return `http://${trimmed.slice("ws://".length)}`;
+  if (trimmed.startsWith("wss://")) return `https://${trimmed.slice("wss://".length)}`;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
+  return "";
 }
 
 function syncLegacyRelayFields(settings: BackendSettings): BackendSettings {
@@ -6363,6 +6716,20 @@ function createRelayProfile(settings: BackendSettings): RelayProfile {
   return deriveOfficialAuthFields(withGeneratedRelayFiles(next));
 }
 
+function createAggregateRelayProfile(settings: BackendSettings): RelayProfile {
+  const profile = createRelayProfile(settings);
+  return withGeneratedRelayFiles({
+    ...profile,
+    id: `aggregate-${Date.now().toString(36)}`,
+    name: `聚合供应商 ${settings.aggregateRelayProfiles.length + 1}`,
+    relayMode: "aggregate",
+    protocol: "responses",
+    baseUrl: PROTOCOL_PROXY_BASE_URL,
+    upstreamBaseUrl: PROTOCOL_PROXY_BASE_URL,
+    apiKey: "codex-plus-aggregate",
+  });
+}
+
 function createRelayProfileFromPreset(settings: BackendSettings, preset: ProviderPreset): RelayProfile {
   const relayMode: RelayMode = preset.category === "official" ? "official" : "pureApi";
   const profile: RelayProfile = {
@@ -6401,9 +6768,14 @@ function addRelayProfile(settings: BackendSettings, profile: RelayProfile): Back
   const activeId = settings.relayProfiles.some((item) => item.id === settings.activeRelayId)
     ? settings.activeRelayId
     : activeRelayProfile(settings).id;
+  const aggregateRelayProfiles =
+    nextWithFiles.relayMode === "aggregate" && !settings.aggregateRelayProfiles.some((item) => item.id === nextWithFiles.id)
+      ? [...settings.aggregateRelayProfiles, defaultAggregateForProfile({ ...settings, relayProfiles: [...settings.relayProfiles, nextWithFiles] }, nextWithFiles)]
+      : settings.aggregateRelayProfiles;
   return syncLegacyRelayFields({
     ...settings,
     relayProfiles: [...settings.relayProfiles, nextWithFiles],
+    aggregateRelayProfiles,
     activeRelayId: activeId,
   });
 }
@@ -6419,9 +6791,20 @@ function duplicateRelayProfile(settings: BackendSettings, id: string): BackendSe
   };
   const relayProfiles = [...settings.relayProfiles];
   relayProfiles.splice(sourceIndex >= 0 ? sourceIndex + 1 : relayProfiles.length, 0, next);
+  const aggregateRelayProfiles = source.relayMode === "aggregate"
+    ? [
+        ...settings.aggregateRelayProfiles,
+        {
+          ...aggregateRelayProfileFor(settings, source),
+          id: nextId,
+          name: next.name,
+        },
+      ]
+    : settings.aggregateRelayProfiles;
   return syncLegacyRelayFields({
     ...settings,
     relayProfiles: relayProfiles.map((profile) => deriveOfficialAuthFields(profile)),
+    aggregateRelayProfiles,
   });
 }
 
@@ -6444,6 +6827,10 @@ function removeRelayProfile(settings: BackendSettings, id: string): BackendSetti
   return syncLegacyRelayFields({
     ...settings,
     relayProfiles: profiles.length ? profiles : defaultSettings.relayProfiles,
+    aggregateRelayProfiles: settings.aggregateRelayProfiles
+      .filter((profile) => profile.id !== id)
+      .map((profile) => ({ ...profile, members: profile.members.filter((member) => member.relayId !== id) })),
+    activeAggregateRelayId: settings.activeAggregateRelayId === id ? "" : settings.activeAggregateRelayId,
     activeRelayId: settings.activeRelayId === id ? profiles[0]?.id || "default" : settings.activeRelayId,
   });
 }

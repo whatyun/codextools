@@ -185,6 +185,22 @@ func TestBridgeSettingsIncludesRuntimeCodexAppVersion(t *testing.T) {
 	}
 }
 
+func TestInjectionScriptIncludesLocalPluginMarketplaces(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	manifest := filepath.Join(home, ".codex", ".tmp", "plugins", ".agents", "plugins", "marketplace.json")
+	writeTestFile(t, manifest, `{"name":"openai-curated","plugins":[{"name":"writer"}]}`)
+	writeTestFile(t, filepath.Join(home, ".codex", ".tmp", "plugins", "plugins", "writer", ".codex-plugin", "plugin.json"), `{"interface":{"displayName":"Writer"}}`)
+	script := injectionScript(57321, defaultSettings())
+
+	if !strings.Contains(script, "window.__CODEX_PLUS_PLUGIN_MARKETPLACES__") {
+		t.Fatal("injection should include local plugin marketplaces")
+	}
+	if !strings.Contains(script, `"openai-curated"`) || !strings.Contains(script, `"writer"`) {
+		t.Fatalf("injection should include local marketplace payload: %s", script[:min(len(script), 500)])
+	}
+}
+
 func TestImageOverlayConfigAndInjectionScript(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "overlay.png")
 	if err := os.WriteFile(imagePath, []byte{0x89, 'P', 'N', 'G'}, 0o644); err != nil {

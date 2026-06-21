@@ -150,8 +150,42 @@ func (r *launcherRuntime) writeOverlayImage(w http.ResponseWriter) {
 }
 
 func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Request, body []byte) {
-	profile := activeRelayProfile(r.settings)
-	baseURL := relayProxyBaseURL(profile.BaseURL, profile.Protocol)
+	requestJSON := map[string]any{}
+	_ = json.Unmarshal(body, &requestJSON)
+	profile, selectErr := selectRelayForRequest(r.settings, rotationContext{ConversationID: conversationIDFromRelayRequest(requestJSON)})
+	if selectErr != nil {
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": selectErr.Error()}})
+		return
+	}
+	profiles := []relayProfile{profile}
+	if fallbacks, err := fallbackRelaysAfter(r.settings, profile.ID); err == nil {
+		profiles = append(profiles, fallbacks...)
+	}
+	var lastErr error
+	for attempt, candidate := range profiles {
+		if attempt > 0 {
+			appendDiagnosticLog("relay_proxy.upstream_failover", map[string]any{
+				"from_relay_id":  profile.ID,
+				"to_relay_id":    candidate.ID,
+				"attempt":        attempt + 1,
+				"candidateCount": len(profiles),
+			})
+		}
+		if forwardRelayProxyAttempt(r.settings, w, req, body, candidate, attempt+1, len(profiles)) {
+			return
+		}
+		lastErr = errors.New("upstream returned failure")
+		profile = candidate
+	}
+	message := "Codex++ relay proxy request failed"
+	if lastErr != nil {
+		message += ": " + lastErr.Error()
+	}
+	writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": message}})
+}
+
+func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, req *http.Request, body []byte, profile relayProfile, attempt, candidateCount int) bool {
+	baseURL := relayProxyBaseURL(effectiveUpstreamBaseURL(profile), profile.Protocol)
 	apiKey := strings.TrimSpace(profile.APIKey)
 	decision := relayRouteDecision{body: body, route: "text", reason: "default_text"}
 	if profile.Protocol == "responses" && profile.needsLocalRelayProxy() {
@@ -167,7 +201,8 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 	}
 	if baseURL == "" || apiKey == "" {
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy missing base URL or API key"}})
-		return
+		recordRelayRequestFailure(settings)
+		return true
 	}
 	target := relayTargetURL(baseURL, req.URL.Path)
 	startedAt := time.Now()
@@ -178,7 +213,8 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 	upstreamReq, err := http.NewRequestWithContext(req.Context(), method, target, bytes.NewReader(body))
 	if err != nil {
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": err.Error()}})
-		return
+		recordRelayRequestFailure(settings)
+		return true
 	}
 	upstreamReq.Header.Set("authorization", "Bearer "+apiKey)
 	copyProxyHeaders(req.Header, upstreamReq.Header)
@@ -186,10 +222,36 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 	upstreamReq.Header.Set("accept-encoding", "identity")
 	resp, err := http.DefaultClient.Do(upstreamReq)
 	if err != nil {
+		appendDiagnosticLog("relay_proxy.request_failed", map[string]any{
+			"relay_id":       profile.ID,
+			"relay_name":     profile.Name,
+			"target":         target,
+			"attempt":        attempt,
+			"candidateCount": candidateCount,
+			"willFailover":   attempt < candidateCount,
+			"error":          err.Error(),
+		})
+		recordRelayRequestFailure(settings)
+		if attempt < candidateCount {
+			return false
+		}
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
-		return
+		return true
 	}
 	defer resp.Body.Close()
+	recordRelayRequestEvent(settings, relayRotationEventForStatus(resp.StatusCode))
+	if resp.StatusCode >= 400 && attempt < candidateCount {
+		appendDiagnosticLog("relay_proxy.upstream_status_failed", map[string]any{
+			"relay_id":       profile.ID,
+			"relay_name":     profile.Name,
+			"target":         target,
+			"status":         resp.StatusCode,
+			"attempt":        attempt,
+			"candidateCount": candidateCount,
+			"willFailover":   true,
+		})
+		return false
+	}
 	writeCORSHeaders(w)
 	for _, name := range []string{"content-type", "cache-control", "openai-request-id", "x-request-id"} {
 		if value := resp.Header.Get(name); value != "" {
@@ -210,6 +272,10 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		"reason":              decision.reason,
 		"key_source":          decision.keySource,
 		"stripped_image_tool": decision.strippedImageTool,
+		"relay_id":            profile.ID,
+		"relay_name":          profile.Name,
+		"attempt":             attempt,
+		"candidateCount":      candidateCount,
 		"body_bytes":          responseBytes,
 		"duration_ms":         time.Since(startedAt).Milliseconds(),
 	}
@@ -217,6 +283,27 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		logDetail["copy_error"] = copyErr.Error()
 	}
 	appendDiagnosticLog("relay_proxy.response", logDetail)
+	return true
+}
+
+func relayRotationEventForStatus(statusCode int) rotationEvent {
+	if statusCode >= 200 && statusCode < 300 {
+		return rotationEventSuccess
+	}
+	return rotationEventFailure
+}
+
+func conversationIDFromRelayRequest(body map[string]any) string {
+	for _, key := range []string{"conversation", "conversation_id", "previous_response_id"} {
+		if value := strings.TrimSpace(stringFromAny(body[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func effectiveUpstreamBaseURL(profile relayProfile) string {
+	return strings.TrimSpace(firstNonEmpty(profile.UpstreamBaseURL, profile.BaseURL))
 }
 
 func relayProxyBaseURL(baseURL, protocol string) string {

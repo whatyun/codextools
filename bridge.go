@@ -159,6 +159,11 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"codexAppImageOverlayPath":        settings.CodexAppImageOverlayPath,
 		"codexAppImageOverlayOpacity":     settings.CodexAppImageOverlayOpacity,
 		"codexGoalsEnabled":               settings.CodexGoalsEnabled,
+		"mobileControlEnabled":            settings.MobileControlEnabled,
+		"mobileControlRelayUrl":           settings.MobileControlRelayURL,
+		"mobileControlRoom":               settings.MobileControlRoom,
+		"mobileControlKey":                settings.MobileControlKey,
+		"mobileControlShareUrl":           mobileRelayShareURL(settings),
 		"codexAppVersion":                 r.codexAppVersion(settings),
 		"launchMode":                      settings.LaunchMode,
 		"language":                        settings.Language,
@@ -209,6 +214,7 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	applyBool("zedRemoteSyncToZedSettings", &settings.ZedRemoteSyncToZedSettings)
 	applyBool("codexAppImageOverlayEnabled", &settings.CodexAppImageOverlayEnabled)
 	applyBool("codexGoalsEnabled", &settings.CodexGoalsEnabled)
+	applyBool("mobileControlEnabled", &settings.MobileControlEnabled)
 	if _, ok := payload["zedRemoteOpenStrategy"]; ok {
 		settings.ZedRemoteOpenStrategy = normalizeZedOpenStrategy(stringFromAny(payload["zedRemoteOpenStrategy"]))
 	}
@@ -217,6 +223,15 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	}
 	if _, ok := payload["codexAppImageOverlayOpacity"]; ok {
 		settings.CodexAppImageOverlayOpacity = intArg(payload, "codexAppImageOverlayOpacity", settings.CodexAppImageOverlayOpacity)
+	}
+	if _, ok := payload["mobileControlRelayUrl"]; ok {
+		settings.MobileControlRelayURL = strings.TrimSpace(stringFromAny(payload["mobileControlRelayUrl"]))
+	}
+	if _, ok := payload["mobileControlRoom"]; ok {
+		settings.MobileControlRoom = strings.TrimSpace(stringFromAny(payload["mobileControlRoom"]))
+	}
+	if _, ok := payload["mobileControlKey"]; ok {
+		settings.MobileControlKey = strings.TrimSpace(stringFromAny(payload["mobileControlKey"]))
 	}
 	if value := strings.TrimSpace(stringFromAny(payload["launchMode"])); value == "patch" || value == "relay" {
 		settings.LaunchMode = value
@@ -516,7 +531,8 @@ func injectionScript(helperPort uint16, settings backendSettings) string {
 	versionJSON, _ := json.Marshal(version)
 	buildJSON, _ := json.Marshal("go-20260524-1")
 	imageOverlayJSON, _ := json.Marshal(imageOverlayConfig(helperPort, settings))
-	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, rendererInjectScript)
+	pluginMarketplacesJSON, _ := json.Marshal(localPluginMarketplacesValue(codexHomeDir()))
+	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, pluginMarketplacesJSON, rendererInjectScript)
 }
 
 func imageOverlayConfig(helperPort uint16, settings backendSettings) map[string]any {
