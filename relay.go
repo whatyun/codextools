@@ -323,7 +323,7 @@ func writeRelaySnapshot(home string, settings backendSettings, relay relayProfil
 		return backupPath, err
 	}
 	authContents := canonicalAuthContents(relay)
-	if pure && strings.TrimSpace(authContents) == "" {
+	if pure {
 		return backupPath, nil
 	}
 	if strings.TrimSpace(authContents) != "" {
@@ -574,6 +574,9 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	home := codexHomeDir()
 	settings := loadSettings()
 	relay := ensureRelaySnapshot(activeRelayProfile(settings), readFile(filepath.Join(home, "config.toml")), !pure)
+	if !pure {
+		relay = refreshRelayOfficialAuthFromCurrent(home, relay)
+	}
 	if !pure && relay.RelayMode == "mixedApi" && !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
 		return failed("切换官方混合 API 失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
@@ -598,6 +601,8 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	payload := relayStatusFromHome(home)
 	payload["backupPath"] = nullableStringPtr(backupPath)
 	payload["pluginRepair"] = relayPluginRepairPayload(repairResult)
+	syncResult := runProviderSync(home)
+	payload["providerSync"] = relayProviderSyncPayload(syncResult)
 	if repairResult.Status == "failed" {
 		if pure {
 			return failed("中转 API 模式已写入，但插件恢复失败："+repairResult.Message, payload)
@@ -605,12 +610,30 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 		return failed("中转配置已写入，但插件恢复失败："+repairResult.Message, payload)
 	}
 	if pure {
-		if strings.TrimSpace(canonicalAuthContents(relay)) == "" {
-			return ok("中转 API 模式已写入：config.toml 使用当前供应商快照，auth.json 保留当前环境，因为该供应商尚未保存 auth 快照；"+relayPluginRepairMessage(repairResult), payload)
-		}
-		return ok("中转 API 模式已写入：config.toml 和 auth.json 已按当前供应商快照恢复；"+relayPluginRepairMessage(repairResult), payload)
+		return ok("中转 API 模式已写入：config.toml 使用当前供应商快照，auth.json 保留当前 ChatGPT 登录；"+relaySwitchRepairMessage(repairResult, syncResult), payload)
 	}
-	return ok("中转配置已按当前供应商快照写入；"+relayPluginRepairMessage(repairResult), payload)
+	return ok("中转配置已按当前供应商快照写入；"+relaySwitchRepairMessage(repairResult, syncResult), payload)
+}
+
+func refreshRelayOfficialAuthFromCurrent(home string, relay relayProfile) relayProfile {
+	snapshot, ok := currentOfficialAuthSnapshot(home)
+	if !ok {
+		return relay
+	}
+	currentLabel := strings.TrimSpace(snapshot.AccountLabel)
+	storedLabel := strings.TrimSpace(relay.OfficialAccountLabel)
+	if storedLabel == "" {
+		status := chatGPTAuthStatusFromContents(runtimeAuthContents(relay), "settings:"+relay.ID)
+		storedLabel = strings.TrimSpace(status.AccountLabel)
+	}
+	if storedLabel != "" && currentLabel != "" && !strings.EqualFold(storedLabel, currentLabel) {
+		return relay
+	}
+	relay.AuthContents = snapshot.Contents
+	relay.OfficialAuthContents = snapshot.Contents
+	relay.OfficialAccountLabel = snapshot.AccountLabel
+	relay.OfficialAuthUpdatedAt = snapshot.UpdatedAt
+	return relay
 }
 
 func relayPluginRepairPayload(result codexConfigRepairResult) map[string]any {
@@ -627,12 +650,34 @@ func relayPluginRepairPayload(result codexConfigRepairResult) map[string]any {
 	}
 }
 
+func relayProviderSyncPayload(result providerSyncResult) map[string]any {
+	return map[string]any{
+		"status":              result.Status,
+		"message":             result.Message,
+		"targetProvider":      result.TargetProvider,
+		"backupDir":           result.BackupDir,
+		"changedSessionFiles": result.ChangedSessionFiles,
+		"sqliteRowsUpdated":   result.SQLiteRowsUpdated,
+	}
+}
+
 func relayPluginRepairMessage(result codexConfigRepairResult) string {
 	message := strings.TrimSpace(result.Message)
 	if message == "" {
 		return "插件配置已恢复，Codex 插件市场已刷新/重读。"
 	}
 	return message
+}
+
+func relaySwitchRepairMessage(repairResult codexConfigRepairResult, syncResult providerSyncResult) string {
+	messages := []string{relayPluginRepairMessage(repairResult)}
+	if syncResult.Status == "synced" && (syncResult.ChangedSessionFiles > 0 || syncResult.SQLiteRowsUpdated > 0) {
+		messages = append(messages, fmt.Sprintf("历史会话已同步：%d 个会话文件，%d 行索引。", syncResult.ChangedSessionFiles, syncResult.SQLiteRowsUpdated))
+	}
+	if syncResult.Status == "skipped" {
+		messages = append(messages, "历史会话同步暂时跳过："+syncResult.Message)
+	}
+	return strings.Join(messages, " ")
 }
 
 func activeRelayProfile(settings backendSettings) relayProfile {
@@ -861,6 +906,7 @@ func (s *server) clearRelayInjection() commandResult {
 	settings := loadSettings()
 	currentConfig := readFile(filepath.Join(home, "config.toml"))
 	relay := ensureRelaySnapshot(activeRelayProfile(settings), currentConfig, true)
+	relay = refreshRelayOfficialAuthFromCurrent(home, relay)
 	if !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
 		return failed("切换官方登录模式失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
@@ -877,10 +923,12 @@ func (s *server) clearRelayInjection() commandResult {
 	payload["backupPath"] = nullableStringPtr(backupPath)
 	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
 	payload["pluginRepair"] = relayPluginRepairPayload(repairResult)
+	syncResult := runProviderSync(home)
+	payload["providerSync"] = relayProviderSyncPayload(syncResult)
 	if repairResult.Status == "failed" {
 		return failed("官方登录模式已写入，但插件恢复失败："+repairResult.Message, payload)
 	}
-	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式；"+relayPluginRepairMessage(repairResult), payload)
+	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式；"+relaySwitchRepairMessage(repairResult, syncResult), payload)
 }
 
 func writeOfficialAuthForRelay(home string, relay relayProfile) error {

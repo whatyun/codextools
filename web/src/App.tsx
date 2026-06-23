@@ -512,6 +512,14 @@ type RelayResult = CommandResult<{
     marketplaceRefreshSummary?: string;
     marketplaceRefreshError?: string;
   };
+  providerSync?: {
+    status: string;
+    message?: string;
+    targetProvider?: string;
+    backupDir?: string | null;
+    changedSessionFiles?: number;
+    sqliteRowsUpdated?: number;
+  };
 }>;
 
 type RelayFilesResult = CommandResult<{

@@ -1179,7 +1179,7 @@ func TestPureAPIModeKeepsCurrentAuthWhenProfileSnapshotMissing(t *testing.T) {
 	}
 }
 
-func TestPureAPIModeWritesProfileAuthSnapshotWhenPresent(t *testing.T) {
+func TestPureAPIModePreservesCurrentAuthWhenProfileSnapshotPresent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	currentAuth := fakeChatGPTAuthJSON(t, "current@example.com")
@@ -1207,8 +1207,46 @@ func TestPureAPIModeWritesProfileAuthSnapshotWhenPresent(t *testing.T) {
 		t.Fatalf("pure API switch should succeed: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "profile@example.com" {
-		t.Fatalf("pure API should restore saved auth snapshot, got:\n%s", string(auth))
+	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
+		t.Fatalf("pure API should preserve current auth snapshot, got:\n%s", string(auth))
+	}
+}
+
+func TestMixedModeRefreshesBoundOfficialAuthFromCurrentLogin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	currentAuth := fakeChatGPTAuthJSON(t, "same@example.com")
+	staleAuth := strings.Replace(fakeChatGPTAuthJSON(t, "same@example.com"), "refresh-token", "old-refresh-token", 1)
+	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), currentAuth)
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "mixed",
+		Name:                 "Mixed",
+		BaseURL:              "https://api.example.com",
+		APIKey:               "relay-key",
+		RelayMode:            "mixedApi",
+		Protocol:             "responses",
+		OfficialAuthContents: staleAuth,
+		OfficialAccountLabel: "same@example.com",
+		AuthContents:         staleAuth,
+	}}
+	settings.ActiveRelayID = "mixed"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).applyRelayInjection(false)
+
+	if result["status"] != "ok" {
+		t.Fatalf("mixed switch should succeed: %#v", result)
+	}
+	auth := readFile(filepath.Join(home, ".codex", "auth.json"))
+	if strings.TrimSpace(auth) != strings.TrimSpace(currentAuth) {
+		t.Fatalf("mixed switch should keep refreshed current auth, got:\n%s", auth)
+	}
+	loaded := activeRelayProfile(loadSettings())
+	if loaded.AuthContents != currentAuth || loaded.OfficialAuthContents != currentAuth {
+		t.Fatalf("mixed profile should refresh stored auth from current login: %#v", loaded)
 	}
 }
 
@@ -1350,6 +1388,67 @@ func TestOfficialSwitchRestoresPluginsAfterSnapshotOverwrite(t *testing.T) {
 		if !strings.Contains(config, expected) {
 			t.Fatalf("config missing %q after official switch:\n%s", expected, config)
 		}
+	}
+}
+
+func TestRelaySwitchRunsProviderSync(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubCodexPluginCommands(t, nil)
+	writeTestFile(t, filepath.Join(home, ".codex", "auth.json"), fakeChatGPTAuthJSON(t, "current@example.com"))
+	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), `model_provider = "openai"`+"\n")
+	sessionID := "019a61dd-9748-7743-9ce9-92b8663a935b"
+	rolloutPath := filepath.Join(home, ".codex", "sessions", "2026", "05", "28", "rollout-"+sessionID+".jsonl")
+	writeTestFile(t, rolloutPath, testSessionRolloutLine(sessionID, "/project", "legacy title")+"\n")
+	createProviderSyncThreadsTable(t, filepath.Join(home, ".codex", "state_5.sqlite"), true)
+	insertProviderSyncThread(t, filepath.Join(home, ".codex", "state_5.sqlite"), map[string]any{
+		"id":                 sessionID,
+		"rollout_path":       rolloutPath,
+		"created_at":         1779962400,
+		"updated_at":         1779962500,
+		"source":             "vscode",
+		"model_provider":     "openai",
+		"cwd":                "/project",
+		"title":              "legacy title",
+		"sandbox_policy":     `{"type":"danger-full-access"}`,
+		"approval_mode":      "never",
+		"tokens_used":        0,
+		"has_user_event":     0,
+		"archived":           0,
+		"cli_version":        "",
+		"first_user_message": "",
+		"memory_mode":        "enabled",
+		"created_at_ms":      1779962400000,
+		"updated_at_ms":      1779962500000,
+		"preview":            "",
+	})
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:             "pure",
+		Name:           "Pure",
+		BaseURL:        "https://api.example.com",
+		APIKey:         "pure-key",
+		RelayMode:      "pureApi",
+		Protocol:       "responses",
+		ConfigContents: buildTestRelayConfig("https://api.example.com", "pure-key"),
+	}}
+	settings.ActiveRelayID = "pure"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).applyRelayInjection(true)
+
+	if result["status"] != "ok" {
+		t.Fatalf("pure API switch should succeed: %#v", result)
+	}
+	row := providerSyncThreadRow(t, filepath.Join(home, ".codex", "state_5.sqlite"), sessionID)
+	if got := stringFromAny(row["model_provider"]); got != "CodexPlusPlus" {
+		t.Fatalf("provider sync should update sqlite provider, got %q", got)
+	}
+	syncPayload, _ := result["providerSync"].(map[string]any)
+	if int64FromFlexible(syncPayload["sqliteRowsUpdated"]) == 0 {
+		t.Fatalf("provider sync payload should report sqlite updates: %#v", syncPayload)
 	}
 }
 
