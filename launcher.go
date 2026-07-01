@@ -147,10 +147,6 @@ func runLauncher(args []string) error {
 		}
 		defer runtimeState.shutdownRelayProxy()
 	}
-	if mobileConfig := mobileRelayHostConfigFromSettings(settings); mobileConfig != nil {
-		runtimeState.startMobileRelayHost(helperPort, mobileConfig)
-		defer runtimeState.shutdownMobileRelayHost()
-	}
 	if settings.ComputerUseGuardEnabled {
 		result, guardErr := ensureComputerUseGuardConfig(codexHomeDir())
 		if guardErr != nil {
@@ -170,7 +166,7 @@ func runLauncher(args []string) error {
 	_ = atomicWriteJSON(latestStatusPath(), status)
 	appendDiagnosticLog("launcher.starting", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "enhancements": settings.Enhancements})
 
-	launch, err := startCodexApp(appPath, debugPort, settings.CodexExtraArgs)
+	launch, err := startCodexApp(appPath, debugPort, settings)
 	if err != nil {
 		detail := launchFailureDetail(appPath, debugPort, helperPort, err)
 		failure := launchStatus{
@@ -256,7 +252,11 @@ func parseLaunchRequest(args []string) launchRequest {
 }
 
 func buildCodexLaunchCommand(appPath string, debugPort uint16, extraArgs []string) []string {
-	args := buildCodexArguments(debugPort, extraArgs)
+	return buildCodexLaunchCommandForSettings(appPath, debugPort, extraArgs, backendSettings{})
+}
+
+func buildCodexLaunchCommandForSettings(appPath string, debugPort uint16, extraArgs []string, settings backendSettings) []string {
+	args := buildCodexArgumentsForSettings(debugPort, extraArgs, settings)
 	if runtime.GOOS == "darwin" && strings.EqualFold(filepath.Ext(appPath), ".app") {
 		command := []string{"open", "-W", "-a", appPath, "--args"}
 		return append(command, args...)
@@ -266,9 +266,19 @@ func buildCodexLaunchCommand(appPath string, debugPort uint16, extraArgs []strin
 }
 
 func buildCodexArguments(debugPort uint16, extraArgs []string) []string {
+	return buildCodexArgumentsForSettings(debugPort, extraArgs, backendSettings{})
+}
+
+func buildCodexArgumentsForSettings(debugPort uint16, extraArgs []string, settings backendSettings) []string {
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", debugPort),
 		fmt.Sprintf("--remote-allow-origins=http://127.0.0.1:%d", debugPort),
+	}
+	if settings.CodexAppFastStartup {
+		args = append(args, "--disable-features=CalculateNativeWinOcclusion")
+	}
+	if settings.CodexAppForceChineseLocale {
+		args = append(args, "--lang=zh-CN")
 	}
 	return append(args, normalizeExtraArgs(extraArgs)...)
 }
@@ -316,20 +326,20 @@ func buildCodexExecutable(appPath string) string {
 	return appPath
 }
 
-func startCodexApp(appPath string, debugPort uint16, extraArgs []string) (codexLaunchHandle, error) {
-	command := buildCodexLaunchCommand(appPath, debugPort, extraArgs)
+func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (codexLaunchHandle, error) {
+	command := buildCodexLaunchCommandForSettings(appPath, debugPort, settings.CodexExtraArgs, settings)
 	if runtime.GOOS == "windows" {
 		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) {
 			handle, err := startCodexProcess(command)
 			if err == nil {
 				return handle, nil
 			}
-			if buildWindowsPackagedActivation(appPath, debugPort, extraArgs) == nil {
+			if buildWindowsPackagedActivationForSettings(appPath, debugPort, settings.CodexExtraArgs, settings) == nil {
 				return nil, err
 			}
 			appendDiagnosticLog("launcher.windows_direct_start_failed", map[string]any{"command": safeCommandForLog(command), "error": err.Error()})
 		}
-		if activation := buildWindowsPackagedActivation(appPath, debugPort, extraArgs); activation != nil {
+		if activation := buildWindowsPackagedActivationForSettings(appPath, debugPort, settings.CodexExtraArgs, settings); activation != nil {
 			processID, activationErr := activateWindowsPackagedAppWithEnvironment(activation.appUserModelID, activation.arguments, codexLaunchEnvironment())
 			if activationErr == nil {
 				activation.processID = processID
@@ -369,6 +379,10 @@ func startCodexApp(appPath string, debugPort uint16, extraArgs []string) (codexL
 }
 
 func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs []string) *windowsPackagedActivation {
+	return buildWindowsPackagedActivationForSettings(appPath, debugPort, extraArgs, backendSettings{})
+}
+
+func buildWindowsPackagedActivationForSettings(appPath string, debugPort uint16, extraArgs []string, settings backendSettings) *windowsPackagedActivation {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
@@ -378,7 +392,7 @@ func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs 
 	}
 	return &windowsPackagedActivation{
 		appUserModelID: appUserModelID,
-		arguments:      commandLineArguments(buildCodexArguments(debugPort, extraArgs)),
+		arguments:      commandLineArguments(buildCodexArgumentsForSettings(debugPort, extraArgs, settings)),
 		debugPort:      debugPort,
 	}
 }
@@ -621,7 +635,7 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 
 func helperNeeded(settings backendSettings) bool {
 	imageOverlayNeeded := settings.CodexAppImageOverlayEnabled && strings.TrimSpace(settings.CodexAppImageOverlayPath) != ""
-	return settings.Enhancements || imageOverlayNeeded || activeRelayUsesProtocolProxy(settings) || activeRelayNeedsLocalProxy(settings) || mobileRelayHostConfigFromSettings(settings) != nil
+	return settings.Enhancements || imageOverlayNeeded || activeRelayUsesProtocolProxy(settings) || activeRelayNeedsLocalProxy(settings)
 }
 
 func activeRelayNeedsLocalProxy(settings backendSettings) bool {

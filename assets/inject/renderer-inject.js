@@ -1,4 +1,58 @@
 (() => {
+  function installCodexPlusFastStartup() {
+    const config = window.__CODEX_PLUS_FAST_STARTUP__;
+    if (!config || config.enabled !== true) return;
+    if (window.__codexPlusFastStartupInstalled === "1") return;
+    window.__codexPlusFastStartupInstalled = "1";
+    const timeoutMs = Math.max(100, Math.min(Number(config.statsigTimeoutMs) || 800, 3000));
+    const statsigHosts = new Set(["ab.chatgpt.com", "featureassets.org", "prodregistryv2.org", "api.statsigcdn.com", "statsigapi.net", "cloudflare-dns.com"]);
+    const isStatsigUrl = (input) => {
+      try {
+        const url = new URL(typeof input === "string" ? input : input?.url ?? "", window.location.href);
+        return statsigHosts.has(url.hostname);
+      } catch {
+        return false;
+      }
+    };
+    if (typeof window.fetch === "function" && !window.fetch.__codexPlusFastStartupPatched) {
+      const originalFetch = window.fetch.bind(window);
+      const patchedFetch = (input, init = undefined) => {
+        if (!isStatsigUrl(input)) return originalFetch(input, init);
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+        const nextInit = { ...(init || {}), signal: controller.signal };
+        return originalFetch(input, nextInit).finally(() => window.clearTimeout(timer));
+      };
+      patchedFetch.__codexPlusFastStartupPatched = true;
+      window.fetch = patchedFetch;
+    }
+  }
+
+  function installCodexPlusForceChineseLocale() {
+    const config = window.__CODEX_PLUS_FORCE_CHINESE_LOCALE__;
+    if (!config || config.enabled !== true) return;
+    if (window.__codexPlusForceChineseLocaleInstalled === "1") return;
+    window.__codexPlusForceChineseLocaleInstalled = "1";
+    const locale = typeof config.locale === "string" && config.locale ? config.locale : "zh-CN";
+    try {
+      Object.defineProperty(Navigator.prototype, "language", { configurable: true, get: () => locale });
+      Object.defineProperty(Navigator.prototype, "languages", { configurable: true, get: () => [locale, "zh", "en-US", "en"] });
+    } catch {
+    }
+  }
+
+  function installCodexPlusNativeMenuLocalization() {
+    const config = window.__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__;
+    if (!config || config.enabled !== true) return;
+    if (window.__codexPlusNativeMenuLocalizationInstalled === "1") return;
+    window.__codexPlusNativeMenuLocalizationInstalled = "1";
+    window.__codexPlusNativeMenuLocalizationLocale = config.locale || "zh-CN";
+  }
+
+  installCodexPlusFastStartup();
+  installCodexPlusForceChineseLocale();
+  installCodexPlusNativeMenuLocalization();
+
   const helperBase = window.__CODEX_SESSION_DELETE_HELPER__ || "http://127.0.0.1:57321";
   const buttonClass = "codex-delete-button";
   const exportButtonClass = "codex-export-button";
@@ -68,6 +122,8 @@
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "2";
   const codexPluginMarketplaceUnlockVersion = "12";
+  const codexPluginAutoExpandVersion = "1";
+  const codexPluginAutoExpandMaxClicks = 8;
   const codexForcePluginInstallRefreshIntervalMs = 1000;
   const codexPlusImageOverlayId = "codex-plus-image-overlay";
   const codexThreadScrollMaxEntries = 120;
@@ -679,16 +735,18 @@
   }
 
   function defaultCodexPlusSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false };
+    return { pluginAutoExpand: true, pluginEntryUnlock: false, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, pasteFix: false, projectMove: true, conversationTimeline: false, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, nativeMenuLocalization: true, serviceTierControls: false };
   }
 
   const codexPlusBackendSettingMap = {
+    pluginAutoExpand: "codexAppPluginAutoExpand",
     pluginEntryUnlock: "codexAppPluginEntryUnlock",
     pluginMarketplaceUnlock: "codexAppPluginMarketplaceUnlock",
     forcePluginInstall: "codexAppForcePluginInstall",
     modelWhitelistUnlock: "codexAppModelWhitelistUnlock",
     sessionDelete: "codexAppSessionDelete",
     markdownExport: "codexAppMarkdownExport",
+    pasteFix: "codexAppPasteFix",
     projectMove: "codexAppProjectMove",
     conversationTimeline: "codexAppConversationTimeline",
     threadIdBadge: "codexAppThreadIdBadge",
@@ -697,6 +755,7 @@
     zedRemoteOpen: "codexAppZedRemoteOpen",
     upstreamWorktreeCreate: "codexAppUpstreamWorktreeCreate",
     nativeMenuPlacement: "codexAppNativeMenuPlacement",
+    nativeMenuLocalization: "codexAppNativeMenuLocalization",
     serviceTierControls: "codexAppServiceTierControls",
   };
 
@@ -715,11 +774,13 @@
     if (codexPlusBackendSettings.enhancementsEnabled === false) {
       return {
         pluginEntryUnlock: false,
+        pluginAutoExpand: false,
         pluginMarketplaceUnlock: false,
         forcePluginInstall: false,
         modelWhitelistUnlock: false,
         sessionDelete: false,
         markdownExport: false,
+        pasteFix: false,
         projectMove: false,
         conversationTimeline: false,
         threadIdBadge: false,
@@ -729,6 +790,7 @@
         zedRemoteOpen: false,
         upstreamWorktreeCreate: false,
         nativeMenuPlacement: false,
+        nativeMenuLocalization: false,
         serviceTierControls: false,
       };
     }
@@ -736,6 +798,7 @@
       const settings = { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}"), ...backendCodexPlusSettings() };
       if (relayPatchDisabled) {
         settings.pluginEntryUnlock = false;
+        settings.pluginAutoExpand = false;
         settings.pluginMarketplaceUnlock = false;
         settings.forcePluginInstall = false;
       }
@@ -783,6 +846,12 @@
         removeCodexServiceTierBadges();
         refreshCodexServiceTierControls();
       }
+    }
+    if (key === "pluginAutoExpand" && !value) {
+      clearTimeout(window.__codexPluginAutoExpandTimer);
+      window.__codexPluginAutoExpandTimer = null;
+      window.__codexPluginAutoExpandRunning = false;
+      window.__codexPluginAutoExpandLastSignature = "";
     }
     renderCodexPlusMenu();
     scan();
@@ -1678,8 +1747,8 @@
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginMarketplaceUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">强制解锁入口</div><div class="codex-plus-row-description">强制显示并启用插件入口；兼容增强模式会自动关闭。</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginEntryUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="codex-plus-row-title">插件自动展开</div><div class="codex-plus-row-description">按上游新策略自动展开插件市场里的更多按钮；兼容增强模式会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginAutoExpand" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">特殊插件强制安装</div><div class="codex-plus-row-description">解除 App unavailable / 应用不可用导致的前端安装禁用；兼容增强模式会自动关闭。</div></div>
@@ -1692,6 +1761,10 @@
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">Fast 按钮</div><div class="codex-plus-row-description">显示服务模式切换入口，可控制 Standard / Fast / priority。</div></div>
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="serviceTierControls"><span></span></button>
+            </div>
+            <div class="codex-plus-row">
+              <div><div class="codex-plus-row-title">粘贴修复</div><div class="codex-plus-row-description">修复部分输入框粘贴事件被前端吞掉的问题。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pasteFix"><span></span></button>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">服务模式</div><div class="codex-plus-row-description">继承使用 config.toml 的 service tier；全局模式覆盖全部 thread；自定义允许按 thread 覆盖。</div></div>
@@ -2581,6 +2654,120 @@
       pluginButton.addEventListener("click", () => spoofChatGPTAuthMethod(pluginButton), true);
     }
     sendCodexPlusDiagnostic("plugin_entry_unlock_applied", { spoofed });
+  }
+
+  function pluginAutoExpandVisibleElement(el) {
+    if (!(el instanceof HTMLElement) || !el.isConnected) return false;
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function pluginAutoExpandPageLooksRelevant() {
+    const text = String(document.body?.innerText || "");
+    return /插件|Plugins?|Marketplace|市场/i.test(text) && !!document.querySelector('button, [role="button"]');
+  }
+
+  function pluginAutoExpandButtonText(button) {
+    return String(button?.textContent || button?.getAttribute?.("aria-label") || button?.getAttribute?.("title") || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function pluginAutoExpandButtonLooksScoped(button) {
+    let node = button;
+    for (let depth = 0; node instanceof HTMLElement && node !== document.body && depth < 8; depth += 1, node = node.parentElement) {
+      const text = String(node.innerText || "");
+      if (text.length > 16000) continue;
+      if (/插件|Plugins?|Marketplace|市场/i.test(text)) return true;
+    }
+    return false;
+  }
+
+  function pluginAutoExpandButtonLooksLikeMore(button) {
+    const text = pluginAutoExpandButtonText(button);
+    if (!text || text.length > 120) return false;
+    if (/^(更多|显示更多|查看更多|加载更多|Show more|Load more|More)$/i.test(text)) return true;
+    if (/^查看\s+.+以及另外\s*\d+\s*个$/i.test(text)) return true;
+    if (/^View\s+.+\s+and\s+\d+\s+more$/i.test(text)) return true;
+    if (/^Show\s+.+\s+and\s+\d+\s+more$/i.test(text)) return true;
+    return false;
+  }
+
+  function pluginAutoExpandButtonCandidates() {
+    if (!codexPlusSettings().pluginAutoExpand || !pluginAutoExpandPageLooksRelevant()) return [];
+    return Array.from(document.querySelectorAll('button, [role="button"]'))
+      .filter(pluginAutoExpandVisibleElement)
+      .filter((button) => !button.disabled && button.getAttribute("aria-disabled") !== "true")
+      .filter(pluginAutoExpandButtonLooksLikeMore)
+      .filter(pluginAutoExpandButtonLooksScoped)
+      .filter((button) => !button.closest?.(`.${moreMenuClass}, #${codexPlusMenuId}, .codex-plus-modal-overlay`));
+  }
+
+  function pluginAutoExpandSignature() {
+    return pluginAutoExpandButtonCandidates()
+      .map((button) => {
+        const rect = button.getBoundingClientRect();
+        return `${pluginAutoExpandButtonText(button)}:${Math.round(rect.top)}:${Math.round(rect.left)}`;
+      })
+      .join("|");
+  }
+
+  function schedulePluginAutoExpand(force = false) {
+    if (!codexPlusSettings().pluginAutoExpand) return;
+    if (window.__codexPluginAutoExpandRunning && !force) return;
+    clearTimeout(window.__codexPluginAutoExpandTimer);
+    window.__codexPluginAutoExpandTimer = setTimeout(() => runPluginAutoExpand(force), force ? 30 : 180);
+  }
+
+  function runPluginAutoExpand(force = false) {
+    if (!codexPlusSettings().pluginAutoExpand) return;
+    const currentSignature = pluginAutoExpandSignature();
+    if (!force && currentSignature && currentSignature === window.__codexPluginAutoExpandLastSignature) return;
+    window.__codexPluginAutoExpandLastSignature = currentSignature;
+    window.__codexPluginAutoExpandRunning = true;
+    window.__codexPluginAutoExpandClicks = 0;
+    const clickNext = () => {
+      if (!codexPlusSettings().pluginAutoExpand) {
+        window.__codexPluginAutoExpandRunning = false;
+        return;
+      }
+      const button = pluginAutoExpandButtonCandidates()[0];
+      if (!button || window.__codexPluginAutoExpandClicks >= codexPluginAutoExpandMaxClicks) {
+        window.__codexPluginAutoExpandRunning = false;
+        sendCodexPlusDiagnostic("plugin_auto_expand_finished", {
+          version: codexPluginAutoExpandVersion,
+          clicks: window.__codexPluginAutoExpandClicks || 0,
+          exhausted: !!button,
+        });
+        return;
+      }
+      window.__codexPluginAutoExpandClicks += 1;
+      button.click();
+      window.setTimeout(clickNext, 120);
+    };
+    clickNext();
+  }
+
+  function installPasteFix() {
+    if (!codexPlusSettings().pasteFix || window.__codexPasteFixInstalled === "1") return;
+    window.__codexPasteFixInstalled = "1";
+    document.addEventListener("paste", (event) => {
+      if (!codexPlusSettings().pasteFix) return;
+      const target = event.target;
+      if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement || target?.isContentEditable)) return;
+      if (!event.clipboardData) return;
+      const text = event.clipboardData.getData("text/plain");
+      if (!text) return;
+      window.setTimeout(() => {
+        try {
+          target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: text }));
+        } catch {
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }, 0);
+    }, true);
   }
 
   function pluginInstallCandidates() {
@@ -6316,6 +6503,7 @@
     installStyle();
     installCodexServiceTierDispatcherPatch();
     installCodexPlusMenu();
+    installPasteFix();
     scheduleBackendHeartbeat();
     installDeleteButtonEventDelegation();
     updateThreadScrollHandlers();
@@ -6930,6 +7118,7 @@
       unblockPluginInstallButtons();
       refreshForcePluginInstallUnlockLoop();
     }
+    schedulePluginAutoExpand();
     sessionRows().forEach(tryAttachButton);
     syncActionGroupsLayout();
     refreshThreadIdBadges();

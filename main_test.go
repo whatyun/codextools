@@ -107,12 +107,19 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 
 func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 	for _, required := range []string{
-		`pluginEntryUnlock`,
+		`pluginAutoExpand`,
 		`pluginMarketplaceUnlock`,
 		`forcePluginInstall`,
 		`pluginPatchDisabledInRelayMode`,
 		`codexPlusBackendSettings.launchMode === "relay"`,
 		`codexAppVersion`,
+		`pasteFix`,
+		`codexAppPasteFix`,
+		`installPasteFix`,
+		`__CODEX_PLUS_FAST_STARTUP__`,
+		`__CODEX_PLUS_FORCE_CHINESE_LOCALE__`,
+		`__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__`,
+		`codexAppNativeMenuLocalization`,
 		`codexPluginLegacyEntryUnlockBeforeVersion`,
 		`26.601.2237`,
 		`codexPluginBridgeRequestUnlockFromVersion`,
@@ -129,14 +136,13 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`pluginUnlockStrategy === "legacy"`,
 		`pluginUnlockStrategy === "modern"`,
 		`pluginUnlockStrategy === "unknown"`,
+		`plugin_auto_expand_finished`,
+		`schedulePluginAutoExpand`,
 		`installPluginMarketplaceRequestPatch`,
-		`enablePluginEntry`,
 		`unblockPluginInstallButtons`,
 		`threadIdBadge`,
 		`showSaveFilePicker`,
 		`patchReactModelStateNodes`,
-		`插件 - 已解锁`,
-		`Plugins - Unlocked`,
 		`强制安装`,
 	} {
 		if !strings.Contains(rendererInjectScript, required) {
@@ -337,6 +343,25 @@ func TestBridgeSettingsIncludesThreadIDBadge(t *testing.T) {
 	}
 }
 
+func TestSettingsDefaultsIncludeCodexPlusV1224Fields(t *testing.T) {
+	settings := defaultSettings()
+	value := (&launcherRuntime{}).bridgeSettingsValue(settings)
+
+	for _, key := range []string{
+		"codexAppPluginAutoExpand",
+		"codexAppForceChineseLocale",
+		"codexAppFastStartup",
+		"codexAppNativeMenuLocalization",
+	} {
+		if !boolFromAny(value[key]) {
+			t.Fatalf("bridge settings should default %s to true: %#v", key, value)
+		}
+	}
+	if boolFromAny(value["codexAppPasteFix"]) {
+		t.Fatalf("paste fix should default false: %#v", value)
+	}
+}
+
 func TestSettingsPreserveAggregateRelayAndMobileControl(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -426,16 +451,85 @@ func TestMobileRelayShareURL(t *testing.T) {
 	}
 }
 
-func TestMobileRelayEnablesHelperRuntime(t *testing.T) {
+func TestModelSuffixAndWindowsWriteCatalogContextWindow(t *testing.T) {
+	home := t.TempDir()
+	relay := defaultRelayProfile()
+	relay.Model = "deepseek-v4[1M]"
+	relay.ModelList = "qwen-plus\nbad[nope]\nqwen-plus"
+	relay.ModelWindows = `{"qwen-plus":"200K"}`
+
+	if err := writeRelayModelCatalog(home, relay); err != nil {
+		t.Fatalf("write catalog failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "codex-models.json"))
+	if err != nil {
+		t.Fatalf("read catalog failed: %v", err)
+	}
+	var catalog map[string][]map[string]any
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatalf("catalog json invalid: %v", err)
+	}
+	models := catalog["models"]
+	if len(models) != 3 {
+		t.Fatalf("catalog model count mismatch: %#v", models)
+	}
+	if stringFromAny(models[0]["slug"]) != "deepseek-v4" || int(models[0]["context_window"].(float64)) != 1000000 {
+		t.Fatalf("suffix model mismatch: %#v", models[0])
+	}
+	if stringFromAny(models[1]["slug"]) != "qwen-plus" || int(models[1]["context_window"].(float64)) != 200000 {
+		t.Fatalf("model window mismatch: %#v", models[1])
+	}
+	if stringFromAny(models[2]["slug"]) != "bad[nope]" {
+		t.Fatalf("invalid suffix should remain in slug: %#v", models[2])
+	}
+}
+
+func TestPendingProviderImportConfirmCreatesRelayProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	request := providerImportRequest{
+		Name:      "External Provider",
+		BaseURL:   "https://relay.example/v1/",
+		APIKey:    "sk-test",
+		WireAPI:   "chat",
+		RelayMode: "pureApi",
+	}
+	if err := savePendingProviderImport(request); err != nil {
+		t.Fatalf("save pending import failed: %v", err)
+	}
+	pending, err := loadPendingProviderImport()
+	if err != nil || pending == nil {
+		t.Fatalf("load pending import failed: %#v %v", pending, err)
+	}
+	result, err := confirmPendingProviderImport()
+	if err != nil {
+		t.Fatalf("confirm pending import failed: %v", err)
+	}
+	if result == nil || !result.Imported {
+		t.Fatalf("import result mismatch: %#v", result)
+	}
+	settings := loadSettings()
+	profile := activeRelayProfile(settings)
+	if profile.Name != "External Provider" || profile.Protocol != "chatCompletions" || profile.BaseURL != "https://relay.example/v1" {
+		t.Fatalf("imported profile mismatch: %#v", profile)
+	}
+	if next, err := loadPendingProviderImport(); err != nil || next != nil {
+		t.Fatalf("pending import should be cleared: %#v %v", next, err)
+	}
+}
+
+func TestDeprecatedMobileRelaySettingsDoNotEnableHelperRuntime(t *testing.T) {
 	settings := defaultSettings()
 	settings.Enhancements = false
+	settings.RelayProfiles = []relayProfile{{ID: "official", Name: "Official", RelayMode: "official", Protocol: "responses", ImageGenerationEnabled: true}}
+	settings.ActiveRelayID = "official"
 	settings.MobileControlEnabled = true
 	settings.MobileControlRelayURL = "ws://relay.example.test"
 	settings.MobileControlRoom = "room-a"
 	settings.MobileControlKey = "key-a"
 
-	if !helperNeeded(settings) {
-		t.Fatal("mobile relay host should require helper runtime")
+	if helperNeeded(settings) {
+		t.Fatal("deprecated mobile relay settings should not require helper runtime")
 	}
 }
 

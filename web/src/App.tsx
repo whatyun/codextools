@@ -44,6 +44,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Sun,
   TestTube,
@@ -244,12 +245,16 @@ type BackendSettings = {
   relayProfilesEnabled: boolean;
   ccsLinkEnabled: boolean;
   enhancementsEnabled: boolean;
+  codexAppPluginAutoExpand: boolean;
   codexAppPluginEntryUnlock: boolean;
   codexAppPluginMarketplaceUnlock: boolean;
   codexAppForcePluginInstall: boolean;
   codexAppModelWhitelistUnlock: boolean;
   codexAppSessionDelete: boolean;
   codexAppMarkdownExport: boolean;
+  codexAppPasteFix: boolean;
+  codexAppForceChineseLocale: boolean;
+  codexAppFastStartup: boolean;
   codexAppProjectMove: boolean;
   codexAppConversationTimeline: boolean;
   codexAppThreadIdBadge: boolean;
@@ -258,6 +263,7 @@ type BackendSettings = {
   codexAppZedRemoteOpen: boolean;
   codexAppUpstreamWorktreeCreate: boolean;
   codexAppNativeMenuPlacement: boolean;
+  codexAppNativeMenuLocalization: boolean;
   codexAppServiceTierControls: boolean;
   computerUseGuardEnabled: boolean;
   zedRemoteOpenStrategy: ZedOpenStrategy;
@@ -320,6 +326,7 @@ type RelayProfile = {
   autoCompactLimit: string;
   modelInsertMode: string;
   modelList: string;
+  modelWindows: string;
   userAgent: string;
 };
 
@@ -362,7 +369,6 @@ type CodexContextEntries = {
 
 type RelayProtocol = "responses" | "chatCompletions";
 type RelayMode = "official" | "mixedApi" | "pureApi" | "aggregate";
-const LOCAL_MOBILE_RELAY_URL = "ws://127.0.0.1:57323";
 type ZedOpenStrategy = "addToFocusedWorkspace" | "reuseWindow" | "newWindow" | "default";
 type ZedRemoteProject = {
   id: string;
@@ -469,6 +475,7 @@ type SettingsResult = CommandResult<{
   settings_path: string;
   user_scripts: UserScriptInventory;
   envConflicts?: EnvConflict[];
+  pendingProviderImport?: ProviderImportRequest | null;
 }>;
 
 type SettingsBackfillResult = CommandResult<{
@@ -563,6 +570,22 @@ type CcsProviderImport = {
   protocol: RelayProtocol;
   configContents: string;
   authContents: string;
+};
+
+type ProviderImportRequest = {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  wireApi: string;
+  relayMode: string;
+  configContents?: string;
+  authContents?: string;
+};
+
+type ProviderImportResult = {
+  imported: boolean;
+  profileId: string;
+  profileName: string;
 };
 
 type CcsProvidersResult = CommandResult<{
@@ -744,20 +767,25 @@ const defaultSettings: BackendSettings = {
   relayProfilesEnabled: true,
   ccsLinkEnabled: false,
   enhancementsEnabled: true,
-  codexAppPluginEntryUnlock: true,
+  codexAppPluginAutoExpand: true,
+  codexAppPluginEntryUnlock: false,
   codexAppPluginMarketplaceUnlock: true,
   codexAppForcePluginInstall: true,
   codexAppModelWhitelistUnlock: true,
   codexAppSessionDelete: true,
   codexAppMarkdownExport: true,
+  codexAppPasteFix: false,
+  codexAppForceChineseLocale: true,
+  codexAppFastStartup: true,
   codexAppProjectMove: true,
-  codexAppConversationTimeline: true,
+  codexAppConversationTimeline: false,
   codexAppThreadIdBadge: false,
   codexAppConversationView: false,
   codexAppThreadScrollRestore: true,
   codexAppZedRemoteOpen: true,
   codexAppUpstreamWorktreeCreate: true,
   codexAppNativeMenuPlacement: true,
+  codexAppNativeMenuLocalization: true,
   codexAppServiceTierControls: false,
   computerUseGuardEnabled: false,
   zedRemoteOpenStrategy: "addToFocusedWorkspace",
@@ -768,7 +796,7 @@ const defaultSettings: BackendSettings = {
   codexAppImageOverlayOpacity: 35,
   codexGoalsEnabled: false,
   mobileControlEnabled: false,
-  mobileControlRelayUrl: LOCAL_MOBILE_RELAY_URL,
+  mobileControlRelayUrl: "",
   mobileControlRoom: "",
   mobileControlKey: "",
   onboardingCompleted: false,
@@ -806,6 +834,7 @@ const defaultSettings: BackendSettings = {
       autoCompactLimit: "",
       modelInsertMode: "patch",
       modelList: "",
+      modelWindows: "",
       userAgent: "",
     },
   ],
@@ -829,6 +858,7 @@ export function App() {
   const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
   const [installGuideStatus, setInstallGuideStatus] = useState<InstallGuideStatusResult | null>(null);
   const [settings, setSettings] = useState<SettingsResult | null>(null);
+  const [pendingProviderImport, setPendingProviderImport] = useState<ProviderImportRequest | null>(null);
   const [relay, setRelay] = useState<RelayResult | null>(null);
   const [relayFiles, setRelayFiles] = useState<RelayFilesResult | null>(null);
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResult | null>(null);
@@ -923,6 +953,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("load_settings"));
     if (result) {
       setSettings(result);
+      setPendingProviderImport(result.pendingProviderImport ?? null);
       setSettingsForm(normalizeSettings(result.settings));
       setLaunchForm((current) => ({
         ...current,
@@ -1330,6 +1361,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("save_settings", { settings: settingsForm }));
     if (result) {
       setSettings(result);
+      setPendingProviderImport(result.pendingProviderImport ?? null);
       setSettingsForm(normalizeSettings(result.settings));
       showNotice("设置保存", result.message, result.status);
     }
@@ -1340,6 +1372,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("save_settings", { settings: next }));
     if (result) {
       setSettings(result);
+      setPendingProviderImport(result.pendingProviderImport ?? null);
       setSettingsForm(normalizeSettings(result.settings));
       if (!silent || !isSuccessStatus(result.status)) showNotice("设置保存", result.message, result.status);
     }
@@ -1386,6 +1419,27 @@ export function App() {
       await refreshInstallGuideStatus(true);
       await refreshRelay(true);
       showResultNotice("导入 CCSwitch 配置", result);
+    }
+  };
+
+  const confirmPendingProviderImport = async () => {
+    const result = await run(() => call<SettingsResult & { providerImportResult?: ProviderImportResult }>("confirm_pending_provider_import"));
+    if (result) {
+      setSettings(result);
+      setPendingProviderImport(result.pendingProviderImport ?? null);
+      setSettingsForm(normalizeSettings(result.settings));
+      await refreshRelay(true);
+      showResultNotice("供应商导入", result);
+    }
+  };
+
+  const dismissPendingProviderImport = async () => {
+    const result = await run(() => call<SettingsResult>("dismiss_pending_provider_import"));
+    if (result) {
+      setSettings(result);
+      setPendingProviderImport(result.pendingProviderImport ?? null);
+      setSettingsForm(normalizeSettings(result.settings));
+      showResultNotice("供应商导入", result);
     }
   };
 
@@ -1894,6 +1948,8 @@ export function App() {
       refreshLiveContextEntries,
       refreshCcsProviders,
       importCcsProviders,
+      confirmPendingProviderImport,
+      dismissPendingProviderImport,
       refreshScriptMarket,
       installMarketScript,
       setUserScriptEnabled,
@@ -1939,11 +1995,12 @@ export function App() {
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
       confirm: confirmMessage,
     }),
-    [route, launchForm, settingsForm, settings, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects],
+    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects],
   );
 
   return (
     <div className={`shell ${theme}`}>
+      <ProviderImportDialog request={pendingProviderImport} actions={actions} />
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">C</div>
@@ -2183,6 +2240,8 @@ type Actions = {
   refreshLiveContextEntries: () => Promise<LiveContextEntriesResult | null>;
   refreshCcsProviders: () => Promise<CcsProvidersResult | null>;
   importCcsProviders: () => Promise<void>;
+  confirmPendingProviderImport: () => Promise<void>;
+  dismissPendingProviderImport: () => Promise<void>;
   refreshScriptMarket: () => Promise<void>;
   installMarketScript: (id: string) => Promise<void>;
   setUserScriptEnabled: (key: string, enabled: boolean) => Promise<void>;
@@ -2231,6 +2290,39 @@ type Actions = {
   checkHealth: () => Promise<void>;
   confirm: (message: string) => boolean;
 };
+
+function ProviderImportDialog({ request, actions }: { request: ProviderImportRequest | null; actions: Actions }) {
+  if (!request) return null;
+  const protocol = request.wireApi === "chat" || request.wireApi === "chatCompletions" ? "Chat Completions" : "Responses";
+  return (
+    <div className="modal-backdrop">
+      <div className="modal-panel provider-import-dialog">
+        <div className="modal-head">
+          <div>
+            <h2>确认导入供应商</h2>
+            <p>外部工具请求新增一个中转供应商，确认后会生成 CodexTools relay profile。</p>
+          </div>
+          <UiBadge variant="secondary">Pending</UiBadge>
+        </div>
+        <div className="metric-grid compact">
+          <Metric label="名称" value={request.name || "-"} />
+          <Metric label="Base URL" value={request.baseUrl || "-"} />
+          <Metric label="协议" value={protocol} />
+          <Metric label="模式" value={request.relayMode || "pureApi"} />
+        </div>
+        <Toolbar>
+          <Button onClick={() => void actions.confirmPendingProviderImport()}>
+            <CheckCircle2 className="h-4 w-4" />
+            确认导入
+          </Button>
+          <Button onClick={() => void actions.dismissPendingProviderImport()} variant="secondary">
+            忽略
+          </Button>
+        </Toolbar>
+      </div>
+    </div>
+  );
+}
 
 function OverviewScreen({
   overview,
@@ -3462,20 +3554,23 @@ function EnhanceScreen({
           ) : null}
           <div className="feature-switch-grid">
             <FeatureToggle title="插件市场解锁" detail="API Key 模式下扩展插件市场请求，尽量显示完整插件列表。" checked={form.codexAppPluginMarketplaceUnlock} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginMarketplaceUnlock", value)} />
-            <FeatureToggle title="强制解锁入口" detail="强制显示并启用 Codex 插件入口。" checked={form.codexAppPluginEntryUnlock} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginEntryUnlock", value)} />
+            <FeatureToggle title="插件自动展开" detail="按上游新策略自动展开插件区域，不再依赖旧入口强制解锁。" checked={form.codexAppPluginAutoExpand} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginAutoExpand", value)} />
             <FeatureToggle title="特殊插件强制安装" detail="解除 App unavailable / 应用不可用导致的前端安装禁用。" checked={form.codexAppForcePluginInstall} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppForcePluginInstall", value)} />
             <FeatureToggle title="模型白名单解锁" detail="读取本地和上游模型目录，补进 Codex 模型选择列表。" checked={form.codexAppModelWhitelistUnlock} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppModelWhitelistUnlock", value)} />
             <FeatureToggle title="Fast 按钮" detail="显示服务模式切换入口，控制 Standard / Fast / priority。" checked={form.codexAppServiceTierControls} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppServiceTierControls", value)} />
+            <FeatureToggle title="粘贴修复" detail="修复部分输入框粘贴事件被 Codex 前端吞掉的问题。" checked={form.codexAppPasteFix} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppPasteFix", value)} />
+            <FeatureToggle title="强制中文界面" detail="启动时传入 zh-CN locale，并在注入层补齐部分菜单本地化。" checked={form.codexAppForceChineseLocale} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppForceChineseLocale", value)} />
+            <FeatureToggle title="快速启动参数" detail="启动 Codex 时附加上游 fast startup 参数，减少启动卡顿。" checked={form.codexAppFastStartup} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppFastStartup", value)} />
             <FeatureToggle title="会话删除" detail="在会话列表悬停显示删除按钮，并支持撤销。" checked={form.codexAppSessionDelete} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppSessionDelete", value)} />
             <FeatureToggle title="Markdown 导出" detail="导出带时间戳的 Markdown。" checked={form.codexAppMarkdownExport} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppMarkdownExport", value)} />
             <FeatureToggle title="会话项目移动" detail="把会话移动到普通对话或其他本地项目。" checked={form.codexAppProjectMove} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppProjectMove", value)} />
-            <FeatureToggle title="对话 Timeline" detail="在对话右侧显示用户提问时间线。" checked={form.codexAppConversationTimeline} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppConversationTimeline", value)} />
             <FeatureToggle title="会话 ID 标识" detail="在侧边栏会话标题前显示短 ID 和 UUIDv7 创建时间。" checked={form.codexAppThreadIdBadge} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppThreadIdBadge", value)} />
             <FeatureToggle title="对话居中宽度" detail="把主对话和输入框限制到固定最大宽度。" checked={form.codexAppConversationView} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppConversationView", value)} />
             <FeatureToggle title="切换对话保留位置" detail="切换 thread 时恢复上一次浏览位置。" checked={form.codexAppThreadScrollRestore} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppThreadScrollRestore", value)} />
             <FeatureToggle title="Zed Remote open" detail="远程 SSH 文件引用可直接用 Zed Remote Development 打开。" checked={form.codexAppZedRemoteOpen} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppZedRemoteOpen", value)} />
             <FeatureToggle title="Upstream worktree" detail="从 upstream 分支创建 Git worktree。" checked={form.codexAppUpstreamWorktreeCreate} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppUpstreamWorktreeCreate", value)} />
             <FeatureToggle title="原生菜单栏位置" detail="把 Codex++ 菜单插入 Codex 顶部原生菜单栏。" checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
+            <FeatureToggle title="原生菜单本地化" detail="启用上游 native menu localization inspector，修复原生菜单英文残留。" checked={form.codexAppNativeMenuLocalization} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuLocalization", value)} />
             <FeatureToggle title="Computer Use Guard" detail="启动 Codex 前后保护 Windows Computer Use 插件、marketplace 和 js_repl 配置。" checked={form.computerUseGuardEnabled} onChange={(value) => setEnhanceFlag("computerUseGuardEnabled", value)} />
             <FeatureToggle title="Zed 项目记录" detail="记录成功打开的远程项目，并和当前 thread / global state 一起展示最近项目。" checked={form.zedRemoteProjectRegistryEnabled} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteProjectRegistryEnabled", value)} />
             <FeatureToggle title="同步 Zed 设置" detail="打开远程项目时同步到 Zed 项目记录，方便后续复用。" checked={form.zedRemoteSyncToZedSettings} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteSyncToZedSettings", value)} />
@@ -3502,63 +3597,27 @@ function EnhanceScreen({
         </CardContent>
       </Panel>
       <ZedRemoteProjectsPanel projects={zedRemoteProjects} form={form} actions={actions} />
-      <MobileControlPanel form={form} onFormChange={onFormChange} actions={actions} />
+      <MobileHelperPanel actions={actions} />
     </>
   );
 }
 
-function MobileControlPanel({ form, onFormChange, actions }: { form: BackendSettings; onFormChange: (value: BackendSettings) => void; actions: Actions }) {
-  const shareUrl = mobileRelayShareUrl(form);
+function MobileHelperPanel({ actions }: { actions: Actions }) {
+  const mobileUrl = "http://127.0.0.1:57321/mobile";
   return (
     <Panel>
-      <CardHead title="手机控制" detail="配置上游移动 relay 房间和密钥；启动 Codex 时会连接 relay 并桥接手机请求" />
+      <CardHead title="手机控制" detail="v1.2.24 起使用本地 helper 内置 mobile 入口，不再配置外部 relay 房间和密钥" />
       <CardContent>
-        <label className="switch-row">
-          <input
-            checked={form.mobileControlEnabled}
-            onChange={(event) => onFormChange({ ...form, mobileControlEnabled: event.currentTarget.checked })}
-            type="checkbox"
-          />
-          <span>
-            <strong>启用手机控制配置</strong>
-            <small>使用上游兼容协议；relay 地址、房间和密钥也可通过 CODEX_PLUS_MOBILE_RELAY_* 环境变量覆盖。</small>
-          </span>
-        </label>
-        <div className="relay-fields">
-          <Field label="Relay URL">
-            <Input
-              value={form.mobileControlRelayUrl}
-              onChange={(event) => onFormChange({ ...form, mobileControlRelayUrl: event.currentTarget.value })}
-              placeholder={LOCAL_MOBILE_RELAY_URL}
-            />
-          </Field>
-          <Field label="房间">
-            <Input
-              value={form.mobileControlRoom}
-              onChange={(event) => onFormChange({ ...form, mobileControlRoom: event.currentTarget.value })}
-              placeholder="room"
-            />
-          </Field>
-          <Field label="密钥">
-            <Input
-              value={form.mobileControlKey}
-              onChange={(event) => onFormChange({ ...form, mobileControlKey: event.currentTarget.value })}
-              placeholder="用于端到端加密"
-            />
-          </Field>
+        <div className="hint-line">
+          <Smartphone className="h-4 w-4" />
+          <span>从 CodexTools 启动 Codex 后，helper 会提供 /mobile、/app-server/status 和 /app-server/ws。</span>
         </div>
-        {shareUrl ? <div className="path-line compact-path">{shareUrl}</div> : null}
+        <div className="path-line compact-path">{mobileUrl}</div>
         <Toolbar>
-          <Button onClick={() => void actions.saveSettings()} variant="secondary">
-            <Save className="h-4 w-4" />
-            保存手机控制
+          <Button onClick={() => void actions.copyText(mobileUrl, "手机控制入口已复制。")} variant="outline">
+            <Copy className="h-4 w-4" />
+            复制入口
           </Button>
-          {shareUrl ? (
-            <Button onClick={() => void actions.copyText(shareUrl, "手机控制链接已复制。")} variant="outline">
-              <Copy className="h-4 w-4" />
-              复制链接
-            </Button>
-          ) : null}
         </Toolbar>
       </CardContent>
     </Panel>
@@ -5503,7 +5562,16 @@ function RelayProfileEditor({
               className="relay-model-list-textarea"
               value={profile.modelList}
               onChange={(event) => updateDraft({ modelList: event.currentTarget.value })}
-              placeholder="每行一个模型，例如 gpt-5-mini"
+              placeholder="每行一个模型，例如 gpt-5-mini；也兼容 deepseek-v4[1M]"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="模型窗口">
+            <Textarea
+              className="relay-model-list-textarea"
+              value={profile.modelWindows}
+              onChange={(event) => updateDraft({ modelWindows: event.currentTarget.value })}
+              placeholder={'JSON，例如 {"deepseek-v4":"1M","qwen-plus":"200K"}'}
               spellCheck={false}
             />
           </Field>
@@ -6173,6 +6241,7 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
             autoCompactLimit: "",
             modelInsertMode: "patch",
             modelList: "",
+            modelWindows: "",
             userAgent: "",
           },
         ];
@@ -6198,7 +6267,7 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
     activeRelayId,
     aggregateRelayProfiles,
     activeAggregateRelayId,
-    mobileControlRelayUrl: settings.mobileControlRelayUrl || LOCAL_MOBILE_RELAY_URL,
+    mobileControlRelayUrl: settings.mobileControlRelayUrl || "",
     mobileControlRoom: settings.mobileControlRoom || "",
     mobileControlKey: settings.mobileControlKey || "",
   });
@@ -6270,6 +6339,7 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0, defaultContextS
     autoCompactLimit: profile.autoCompactLimit || "",
     modelInsertMode: profile.modelInsertMode || "patch",
     modelList: profile.modelList || "",
+    modelWindows: profile.modelWindows || "",
     userAgent: profile.userAgent || "",
   };
   if (!normalized.configContents.trim()) {
@@ -6637,24 +6707,6 @@ function normalizeRelayBaseUrl(value: string): string {
   return `${trimmed}/v1`;
 }
 
-function mobileRelayShareUrl(settings: Pick<BackendSettings, "mobileControlRelayUrl" | "mobileControlRoom" | "mobileControlKey">): string {
-  const base = mobileRelayHttpUrl(settings.mobileControlRelayUrl);
-  if (!base) return "";
-  const params = new URLSearchParams();
-  if (settings.mobileControlRoom.trim()) params.set("room", settings.mobileControlRoom.trim());
-  if (settings.mobileControlKey.trim()) params.set("key", settings.mobileControlKey.trim());
-  const query = params.toString();
-  return `${base.replace(/\/+$/, "")}/mobile${query ? `?${query}` : ""}`;
-}
-
-function mobileRelayHttpUrl(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.startsWith("ws://")) return `http://${trimmed.slice("ws://".length)}`;
-  if (trimmed.startsWith("wss://")) return `https://${trimmed.slice("wss://".length)}`;
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
-  return "";
-}
-
 function syncLegacyRelayFields(settings: BackendSettings): BackendSettings {
   const active = activeRelayProfile(settings);
   return {
@@ -6719,6 +6771,7 @@ function createRelayProfile(settings: BackendSettings): RelayProfile {
     autoCompactLimit: "",
     modelInsertMode: "patch",
     modelList: "",
+    modelWindows: "",
     userAgent: "",
   };
   return deriveOfficialAuthFields(withGeneratedRelayFiles(next));

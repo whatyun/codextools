@@ -19,12 +19,16 @@ type backendSettings struct {
 	RelayProfilesEnabled             bool                    `json:"relayProfilesEnabled"`
 	CCSLinkEnabled                   bool                    `json:"ccsLinkEnabled"`
 	Enhancements                     bool                    `json:"enhancementsEnabled"`
+	CodexAppPluginAutoExpand         bool                    `json:"codexAppPluginAutoExpand"`
 	CodexAppPluginEntryUnlock        bool                    `json:"codexAppPluginEntryUnlock"`
 	CodexAppPluginMarketplaceUnlock  bool                    `json:"codexAppPluginMarketplaceUnlock"`
 	CodexAppForcePluginInstall       bool                    `json:"codexAppForcePluginInstall"`
 	CodexAppModelWhitelistUnlock     bool                    `json:"codexAppModelWhitelistUnlock"`
 	CodexAppSessionDelete            bool                    `json:"codexAppSessionDelete"`
 	CodexAppMarkdownExport           bool                    `json:"codexAppMarkdownExport"`
+	CodexAppPasteFix                 bool                    `json:"codexAppPasteFix"`
+	CodexAppForceChineseLocale       bool                    `json:"codexAppForceChineseLocale"`
+	CodexAppFastStartup              bool                    `json:"codexAppFastStartup"`
 	CodexAppProjectMove              bool                    `json:"codexAppProjectMove"`
 	CodexAppConversationTimeline     bool                    `json:"codexAppConversationTimeline"`
 	CodexAppThreadIDBadge            bool                    `json:"codexAppThreadIdBadge"`
@@ -33,6 +37,7 @@ type backendSettings struct {
 	CodexAppZedRemoteOpen            bool                    `json:"codexAppZedRemoteOpen"`
 	CodexAppUpstreamWorktreeCreate   bool                    `json:"codexAppUpstreamWorktreeCreate"`
 	CodexAppNativeMenuPlacement      bool                    `json:"codexAppNativeMenuPlacement"`
+	CodexAppNativeMenuLocalization   bool                    `json:"codexAppNativeMenuLocalization"`
 	CodexAppServiceTierControls      bool                    `json:"codexAppServiceTierControls"`
 	ComputerUseGuardEnabled          bool                    `json:"computerUseGuardEnabled"`
 	ZedRemoteOpenStrategy            string                  `json:"zedRemoteOpenStrategy"`
@@ -93,6 +98,7 @@ type relayProfile struct {
 	AutoCompactLimit              string                `json:"autoCompactLimit"`
 	ModelInsertMode               string                `json:"modelInsertMode"`
 	ModelList                     string                `json:"modelList"`
+	ModelWindows                  string                `json:"modelWindows"`
 	UserAgent                     string                `json:"userAgent"`
 }
 
@@ -333,6 +339,22 @@ type ccsProviderImport struct {
 	Protocol       string `json:"protocol"`
 	ConfigContents string `json:"configContents"`
 	AuthContents   string `json:"authContents"`
+}
+
+type providerImportRequest struct {
+	Name           string `json:"name"`
+	BaseURL        string `json:"baseUrl"`
+	APIKey         string `json:"apiKey"`
+	WireAPI        string `json:"wireApi"`
+	RelayMode      string `json:"relayMode"`
+	ConfigContents string `json:"configContents"`
+	AuthContents   string `json:"authContents"`
+}
+
+type providerImportResult struct {
+	Imported    bool   `json:"imported"`
+	ProfileID   string `json:"profileId"`
+	ProfileName string `json:"profileName"`
 }
 
 type codexAppMirrorRelease struct {

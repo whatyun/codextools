@@ -136,12 +136,16 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"relayProfilesEnabled":            settings.RelayProfilesEnabled,
 		"ccsLinkEnabled":                  settings.CCSLinkEnabled,
 		"enhancementsEnabled":             settings.Enhancements,
+		"codexAppPluginAutoExpand":        settings.CodexAppPluginAutoExpand,
 		"codexAppPluginEntryUnlock":       settings.CodexAppPluginEntryUnlock,
 		"codexAppPluginMarketplaceUnlock": settings.CodexAppPluginMarketplaceUnlock,
 		"codexAppForcePluginInstall":      settings.CodexAppForcePluginInstall,
 		"codexAppModelWhitelistUnlock":    settings.CodexAppModelWhitelistUnlock,
 		"codexAppSessionDelete":           settings.CodexAppSessionDelete,
 		"codexAppMarkdownExport":          settings.CodexAppMarkdownExport,
+		"codexAppPasteFix":                settings.CodexAppPasteFix,
+		"codexAppForceChineseLocale":      settings.CodexAppForceChineseLocale,
+		"codexAppFastStartup":             settings.CodexAppFastStartup,
 		"codexAppProjectMove":             settings.CodexAppProjectMove,
 		"codexAppConversationTimeline":    settings.CodexAppConversationTimeline,
 		"codexAppThreadIdBadge":           settings.CodexAppThreadIDBadge,
@@ -150,6 +154,7 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"codexAppZedRemoteOpen":           settings.CodexAppZedRemoteOpen,
 		"codexAppUpstreamWorktreeCreate":  settings.CodexAppUpstreamWorktreeCreate,
 		"codexAppNativeMenuPlacement":     settings.CodexAppNativeMenuPlacement,
+		"codexAppNativeMenuLocalization":  settings.CodexAppNativeMenuLocalization,
 		"codexAppServiceTierControls":     settings.CodexAppServiceTierControls,
 		"computerUseGuardEnabled":         settings.ComputerUseGuardEnabled,
 		"zedRemoteOpenStrategy":           settings.ZedRemoteOpenStrategy,
@@ -194,12 +199,16 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	applyBool("relayProfilesEnabled", &settings.RelayProfilesEnabled)
 	applyBool("ccsLinkEnabled", &settings.CCSLinkEnabled)
 	applyBool("enhancementsEnabled", &settings.Enhancements)
+	applyBool("codexAppPluginAutoExpand", &settings.CodexAppPluginAutoExpand)
 	applyBool("codexAppPluginEntryUnlock", &settings.CodexAppPluginEntryUnlock)
 	applyBool("codexAppPluginMarketplaceUnlock", &settings.CodexAppPluginMarketplaceUnlock)
 	applyBool("codexAppForcePluginInstall", &settings.CodexAppForcePluginInstall)
 	applyBool("codexAppModelWhitelistUnlock", &settings.CodexAppModelWhitelistUnlock)
 	applyBool("codexAppSessionDelete", &settings.CodexAppSessionDelete)
 	applyBool("codexAppMarkdownExport", &settings.CodexAppMarkdownExport)
+	applyBool("codexAppPasteFix", &settings.CodexAppPasteFix)
+	applyBool("codexAppForceChineseLocale", &settings.CodexAppForceChineseLocale)
+	applyBool("codexAppFastStartup", &settings.CodexAppFastStartup)
 	applyBool("codexAppProjectMove", &settings.CodexAppProjectMove)
 	applyBool("codexAppConversationTimeline", &settings.CodexAppConversationTimeline)
 	applyBool("codexAppThreadIdBadge", &settings.CodexAppThreadIDBadge)
@@ -208,6 +217,7 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	applyBool("codexAppZedRemoteOpen", &settings.CodexAppZedRemoteOpen)
 	applyBool("codexAppUpstreamWorktreeCreate", &settings.CodexAppUpstreamWorktreeCreate)
 	applyBool("codexAppNativeMenuPlacement", &settings.CodexAppNativeMenuPlacement)
+	applyBool("codexAppNativeMenuLocalization", &settings.CodexAppNativeMenuLocalization)
 	applyBool("codexAppServiceTierControls", &settings.CodexAppServiceTierControls)
 	applyBool("computerUseGuardEnabled", &settings.ComputerUseGuardEnabled)
 	applyBool("zedRemoteProjectRegistryEnabled", &settings.ZedRemoteProjectRegistryEnabled)
@@ -532,7 +542,10 @@ func injectionScript(helperPort uint16, settings backendSettings) string {
 	buildJSON, _ := json.Marshal("go-20260524-1")
 	imageOverlayJSON, _ := json.Marshal(imageOverlayConfig(helperPort, settings))
 	pluginMarketplacesJSON, _ := json.Marshal(localPluginMarketplacesValue(codexHomeDir()))
-	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, pluginMarketplacesJSON, rendererInjectScript)
+	fastStartupJSON, _ := json.Marshal(map[string]any{"enabled": settings.CodexAppFastStartup, "statsigTimeoutMs": 800})
+	chineseLocaleJSON, _ := json.Marshal(map[string]any{"enabled": settings.CodexAppForceChineseLocale, "locale": "zh-CN"})
+	nativeMenuLocalizationJSON, _ := json.Marshal(map[string]any{"enabled": settings.CodexAppNativeMenuLocalization, "locale": "zh-CN"})
+	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = %s;\nwindow.__CODEX_PLUS_FAST_STARTUP__ = %s;\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = %s;\nwindow.__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, pluginMarketplacesJSON, fastStartupJSON, chineseLocaleJSON, nativeMenuLocalizationJSON, rendererInjectScript)
 }
 
 func imageOverlayConfig(helperPort uint16, settings backendSettings) map[string]any {

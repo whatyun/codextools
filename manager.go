@@ -179,6 +179,14 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.loadCCSProviders()
 	case "import_ccs_providers":
 		return s.importCCSProviders()
+	case "load_pending_provider_import":
+		return s.loadPendingProviderImport()
+	case "save_pending_provider_import":
+		return s.savePendingProviderImport(args)
+	case "confirm_pending_provider_import":
+		return s.confirmPendingProviderImport()
+	case "dismiss_pending_provider_import":
+		return s.dismissPendingProviderImport()
 	case "sync_providers_now":
 		return s.syncProvidersNow()
 	case "repair_codex_plugins":
@@ -1494,6 +1502,55 @@ func (s *server) importCCSProviders() commandResult {
 		return failed("保存 CCS 供应商失败："+err.Error(), settingsPayloadValue(loadSettings()))
 	}
 	return settingsPayload(fmt.Sprintf("已导入 CCSwitch 供应商：%d 个。", imported))
+}
+
+func (s *server) loadPendingProviderImport() commandResult {
+	return settingsPayload("待确认供应商导入已读取。")
+}
+
+func (s *server) savePendingProviderImport(args map[string]any) commandResult {
+	request := mapArg(args, "request")
+	if rawURL := strings.TrimSpace(stringArg(request, "url")); rawURL != "" {
+		parsed, err := providerImportRequestFromURL(rawURL)
+		if err != nil {
+			return failed("保存供应商导入请求失败："+err.Error(), settingsPayloadValue(loadSettings()))
+		}
+		if err := savePendingProviderImport(parsed); err != nil {
+			return failed("保存供应商导入请求失败："+err.Error(), settingsPayloadValue(loadSettings()))
+		}
+		return settingsPayload("供应商导入请求已保存，等待确认。")
+	}
+	var importRequest providerImportRequest
+	if err := remarshal(request, &importRequest); err != nil {
+		return failed("保存供应商导入请求失败："+err.Error(), settingsPayloadValue(loadSettings()))
+	}
+	if err := savePendingProviderImport(importRequest); err != nil {
+		return failed("保存供应商导入请求失败："+err.Error(), settingsPayloadValue(loadSettings()))
+	}
+	return settingsPayload("供应商导入请求已保存，等待确认。")
+}
+
+func (s *server) confirmPendingProviderImport() commandResult {
+	result, err := confirmPendingProviderImport()
+	payload := settingsPayloadValue(loadSettings())
+	if err != nil {
+		return failed("确认供应商导入失败："+err.Error(), payload)
+	}
+	if result == nil {
+		return ok("没有待确认的供应商导入。", payload)
+	}
+	payload["providerImportResult"] = result
+	if result.Imported {
+		return ok("供应商已导入："+result.ProfileName, payload)
+	}
+	return ok("供应商已存在："+result.ProfileName, payload)
+}
+
+func (s *server) dismissPendingProviderImport() commandResult {
+	if err := clearPendingProviderImport(); err != nil {
+		return failed("忽略供应商导入失败："+err.Error(), settingsPayloadValue(loadSettings()))
+	}
+	return settingsPayload("已忽略待确认供应商导入。")
 }
 
 func defaultCCSDBPath() string {

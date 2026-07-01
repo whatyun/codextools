@@ -733,13 +733,16 @@ func relayConfigForWrite(settings backendSettings, relay relayProfile) (string, 
 
 func relayConfigWithCommonAndLimits(settings backendSettings, relay relayProfile, configContents string) (string, error) {
 	profileConfig, _ := splitContextConfigSections(configContents)
-	if strings.TrimSpace(relay.ModelList) != "" {
+	if strings.TrimSpace(relay.ModelList) != "" || strings.TrimSpace(relay.ModelWindows) != "" {
 		profileConfig = upsertRootKey(profileConfig, "model_catalog_json", quoteToml("codex-models.json"))
 	} else {
 		profileConfig = removeRootKey(profileConfig, "model_catalog_json")
 	}
-	if strings.TrimSpace(relay.Model) != "" {
-		profileConfig = upsertRootKey(profileConfig, "model", quoteToml(strings.TrimSpace(relay.Model)))
+	if model := strings.TrimSpace(relay.Model); model != "" {
+		if slug, _, ok := parseModelSuffix(model); ok {
+			model = slug
+		}
+		profileConfig = upsertRootKey(profileConfig, "model", quoteToml(model))
 	}
 	profileConfig, err := applyContextLimitsToConfig(profileConfig, relay.ContextWindow, relay.AutoCompactLimit)
 	if err != nil {
@@ -781,17 +784,27 @@ func parsePositiveUintString(value, label string) (uint64, error) {
 }
 
 func writeRelayModelCatalog(home string, relay relayProfile) error {
-	models := uniqueStrings(append([]string{relay.Model}, splitModelList(relay.ModelList)...))
-	if len(models) == 0 {
+	entries := collectModelCatalogEntries(relay.ModelList, relay.ModelWindows, relay.Model)
+	if len(entries) == 0 {
 		return nil
 	}
-	items := make([]map[string]any, 0, len(models))
-	for _, model := range models {
-		items = append(items, map[string]any{
-			"slug":             model,
-			"supported_in_api": true,
-			"visibility":       "list",
-		})
+	items := make([]map[string]any, 0, len(entries))
+	for index, entry := range entries {
+		item := map[string]any{
+			"slug":                             entry.Slug,
+			"display_name":                     entry.DisplayName,
+			"description":                      entry.DisplayName,
+			"supported_in_api":                 true,
+			"visibility":                       "list",
+			"priority":                         1000 + index,
+			"effective_context_window_percent": 100,
+			"auto_compact_token_limit":         nil,
+		}
+		if entry.Window > 0 {
+			item["context_window"] = entry.Window
+			item["max_context_window"] = entry.Window
+		}
+		items = append(items, item)
 	}
 	data, err := json.MarshalIndent(map[string]any{"models": items}, "", "  ")
 	if err != nil {
@@ -862,6 +875,9 @@ func usesSeparateImageGenerationAPI(relay relayProfile) bool {
 func upsertModelProviderConfig(contents, baseURL, bearerToken string, relay relayProfile) string {
 	updated := upsertRootKey(contents, "model_provider", quoteToml(relayProvider))
 	if model := strings.TrimSpace(relay.Model); model != "" {
+		if slug, _, ok := parseModelSuffix(model); ok {
+			model = slug
+		}
 		updated = upsertRootKey(updated, "model", quoteToml(model))
 	}
 	updated = removeTable(updated, "model_providers."+relayProvider)

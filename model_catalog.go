@@ -50,8 +50,15 @@ func codexModelCatalogValue() map[string]any {
 }
 
 func relayProfileModelCatalogValue(profile relayProfile) map[string]any {
-	models := uniqueStrings(append([]string{profile.Model}, splitModelList(profile.ModelList)...))
+	entries := collectModelCatalogEntries(profile.ModelList, profile.ModelWindows, profile.Model)
+	models := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		models = append(models, entry.Slug)
+	}
 	model := strings.TrimSpace(profile.Model)
+	if slug, _, ok := parseModelSuffix(model); ok {
+		model = slug
+	}
 	defaultModel := ""
 	if containsString(models, model) {
 		defaultModel = model

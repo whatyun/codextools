@@ -201,6 +201,28 @@ func TestInjectionScriptIncludesLocalPluginMarketplaces(t *testing.T) {
 	}
 }
 
+func TestInjectionScriptIncludesV1224RuntimeConfig(t *testing.T) {
+	settings := defaultSettings()
+	settings.CodexAppFastStartup = true
+	settings.CodexAppForceChineseLocale = true
+	settings.CodexAppNativeMenuLocalization = true
+
+	script := injectionScript(57321, settings)
+
+	for _, expected := range []string{
+		"__CODEX_PLUS_FAST_STARTUP__",
+		"__CODEX_PLUS_FORCE_CHINESE_LOCALE__",
+		"__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__",
+		"codexAppPluginAutoExpand",
+		"plugin_auto_expand_finished",
+		"codexAppPasteFix",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("injection script missing v1.2.24 marker %q", expected)
+		}
+	}
+}
+
 func TestImageOverlayConfigAndInjectionScript(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "overlay.png")
 	if err := os.WriteFile(imagePath, []byte{0x89, 'P', 'N', 'G'}, 0o644); err != nil {

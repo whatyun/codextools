@@ -106,22 +106,23 @@ func defaultSettings() backendSettings {
 		ProviderSyncManualProviders:     []string{},
 		RelayProfilesEnabled:            true,
 		Enhancements:                    true,
-		CodexAppPluginEntryUnlock:       true,
+		CodexAppPluginAutoExpand:        true,
 		CodexAppPluginMarketplaceUnlock: true,
 		CodexAppForcePluginInstall:      true,
 		CodexAppModelWhitelistUnlock:    true,
 		CodexAppSessionDelete:           true,
 		CodexAppMarkdownExport:          true,
+		CodexAppForceChineseLocale:      true,
+		CodexAppFastStartup:             true,
 		CodexAppProjectMove:             true,
-		CodexAppConversationTimeline:    true,
 		CodexAppThreadScrollRestore:     true,
 		CodexAppZedRemoteOpen:           true,
 		CodexAppUpstreamWorktreeCreate:  true,
 		CodexAppNativeMenuPlacement:     true,
+		CodexAppNativeMenuLocalization:  true,
 		ZedRemoteOpenStrategy:           "addToFocusedWorkspace",
 		ZedRemoteProjectRegistryEnabled: true,
 		CodexAppImageOverlayOpacity:     35,
-		MobileControlRelayURL:           defaultMobileRelayURL,
 		LaunchMode:                      "patch",
 		RelayProfiles:                   []relayProfile{defaultRelayProfile()},
 		AggregateRelayProfiles:          []aggregateRelayProfile{},
@@ -185,9 +186,6 @@ func normalizeSettings(settings backendSettings) backendSettings {
 	}
 	settings.CodexAppImageOverlayPath = strings.TrimSpace(settings.CodexAppImageOverlayPath)
 	settings.MobileControlRelayURL = strings.TrimSpace(settings.MobileControlRelayURL)
-	if settings.MobileControlRelayURL == "" {
-		settings.MobileControlRelayURL = defaultMobileRelayURL
-	}
 	settings.MobileControlRoom = strings.TrimSpace(settings.MobileControlRoom)
 	settings.MobileControlKey = strings.TrimSpace(settings.MobileControlKey)
 	common, extractedContext := splitContextConfigSections(settings.RelayCommonConfigContents)
@@ -215,6 +213,7 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		if settings.RelayProfiles[index].ModelInsertMode == "" {
 			settings.RelayProfiles[index].ModelInsertMode = "patch"
 		}
+		settings.RelayProfiles[index].ModelList, settings.RelayProfiles[index].ModelWindows = normalizeModelListAndWindows(settings.RelayProfiles[index].ModelList, settings.RelayProfiles[index].ModelWindows)
 		if !settings.RelayProfiles[index].ContextSelectionInitialized {
 			settings.RelayProfiles[index].ContextSelection = contextSelectionForAllEntries(settings.RelayContextConfigContents)
 			settings.RelayProfiles[index].ContextSelectionInitialized = true
@@ -315,8 +314,8 @@ func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {
 	if !settings.Enhancements && !defaults["enhancementsEnabled"] {
 		settings.Enhancements = true
 	}
-	if !settings.CodexAppPluginEntryUnlock && !defaults["codexAppPluginEntryUnlock"] {
-		settings.CodexAppPluginEntryUnlock = true
+	if !settings.CodexAppPluginAutoExpand && !defaults["codexAppPluginAutoExpand"] {
+		settings.CodexAppPluginAutoExpand = true
 	}
 	if !settings.CodexAppPluginMarketplaceUnlock && !defaults["codexAppPluginMarketplaceUnlock"] {
 		settings.CodexAppPluginMarketplaceUnlock = true
@@ -333,11 +332,14 @@ func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {
 	if !settings.CodexAppMarkdownExport && !defaults["codexAppMarkdownExport"] {
 		settings.CodexAppMarkdownExport = true
 	}
+	if !settings.CodexAppForceChineseLocale && !defaults["codexAppForceChineseLocale"] {
+		settings.CodexAppForceChineseLocale = true
+	}
+	if !settings.CodexAppFastStartup && !defaults["codexAppFastStartup"] {
+		settings.CodexAppFastStartup = true
+	}
 	if !settings.CodexAppProjectMove && !defaults["codexAppProjectMove"] {
 		settings.CodexAppProjectMove = true
-	}
-	if !settings.CodexAppConversationTimeline && !defaults["codexAppConversationTimeline"] {
-		settings.CodexAppConversationTimeline = true
 	}
 	if !settings.CodexAppThreadScrollRestore && !defaults["codexAppThreadScrollRestore"] {
 		settings.CodexAppThreadScrollRestore = true
@@ -350,6 +352,9 @@ func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {
 	}
 	if !settings.CodexAppNativeMenuPlacement && !defaults["codexAppNativeMenuPlacement"] {
 		settings.CodexAppNativeMenuPlacement = true
+	}
+	if !settings.CodexAppNativeMenuLocalization && !defaults["codexAppNativeMenuLocalization"] {
+		settings.CodexAppNativeMenuLocalization = true
 	}
 	if !settings.ZedRemoteProjectRegistryEnabled && !defaults["zedRemoteProjectRegistryEnabled"] {
 		settings.ZedRemoteProjectRegistryEnabled = true
@@ -379,19 +384,22 @@ func defaultEnabledSettingsFromRaw() map[string]bool {
 	for _, key := range []string{
 		"relayProfilesEnabled",
 		"enhancementsEnabled",
-		"codexAppPluginEntryUnlock",
+		"codexAppPluginAutoExpand",
 		"codexAppPluginMarketplaceUnlock",
 		"codexAppForcePluginInstall",
 		"codexAppModelWhitelistUnlock",
 		"codexAppSessionDelete",
 		"codexAppMarkdownExport",
+		"codexAppPasteFix",
+		"codexAppForceChineseLocale",
+		"codexAppFastStartup",
 		"codexAppProjectMove",
-		"codexAppConversationTimeline",
 		"codexAppThreadIdBadge",
 		"codexAppThreadScrollRestore",
 		"codexAppZedRemoteOpen",
 		"codexAppUpstreamWorktreeCreate",
 		"codexAppNativeMenuPlacement",
+		"codexAppNativeMenuLocalization",
 		"zedRemoteProjectRegistryEnabled",
 	} {
 		_, out[key] = raw[key]
@@ -532,11 +540,20 @@ func settingsPayload(message string) commandResult {
 
 func settingsPayloadValue(settings backendSettings) map[string]any {
 	return map[string]any{
-		"settings":      settings,
-		"settings_path": settingsPath(),
-		"user_scripts":  userScriptInventoryValue(),
-		"envConflicts":  detectEnvConflicts(),
+		"settings":              settings,
+		"settings_path":         settingsPath(),
+		"user_scripts":          userScriptInventoryValue(),
+		"envConflicts":          detectEnvConflicts(),
+		"pendingProviderImport": pendingProviderImportPayload(),
 	}
+}
+
+func pendingProviderImportPayload() any {
+	request, err := loadPendingProviderImport()
+	if err != nil || request == nil {
+		return nil
+	}
+	return request
 }
 
 func (s *server) saveSettings(args map[string]any) commandResult {

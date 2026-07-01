@@ -10,8 +10,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func (r relayProfile) needsLocalRelayProxy() bool {
@@ -108,6 +111,16 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 			break
 		}
 		r.writeOverlayImage(w)
+	case "/mobile":
+		if req.Method != http.MethodGet {
+			writeHelperJSON(w, http.StatusMethodNotAllowed, map[string]any{"status": "failed", "message": "手机控制页面只支持 GET"})
+			break
+		}
+		r.writeMobilePage(w, req)
+	case "/app-server/status":
+		r.writeAppServerStatus(w, req)
+	case "/app-server/rpc", "/app-server/ws":
+		r.proxyAppServerWebSocket(w, req)
 	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
 		var payload map[string]any
 		_ = json.Unmarshal(body, &payload)
@@ -124,6 +137,111 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 	default:
 		writeHelperJSON(w, http.StatusNotFound, map[string]any{"status": "failed", "message": "未知后端路径"})
 	}
+}
+
+func (r *launcherRuntime) writeMobilePage(w http.ResponseWriter, req *http.Request) {
+	writeCORSHeaders(w)
+	w.Header().Set("content-type", "text/html; charset=utf-8")
+	w.Header().Set("cache-control", "no-store")
+	helperBase := "http://" + req.Host
+	wsBase := "ws://" + req.Host
+	page := `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Codex++ Mobile</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #f8fafc; }
+    main { width: min(680px, calc(100vw - 32px)); }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    p { line-height: 1.6; color: #cbd5e1; }
+    code { background: rgba(148, 163, 184, .18); padding: 2px 6px; border-radius: 6px; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 700; background: #f8fafc; color: #0f172a; }
+    pre { white-space: pre-wrap; background: rgba(15, 23, 42, .7); border: 1px solid rgba(148, 163, 184, .3); padding: 12px; border-radius: 8px; min-height: 96px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Codex++ Mobile</h1>
+    <p>本地 helper 已启用内置 mobile 入口。手机控制客户端可以连接 <code id="ws"></code>，HTTP 状态可读取 <code id="status"></code>。</p>
+    <button id="check">检查连接</button>
+    <pre id="out">ready</pre>
+  </main>
+  <script>
+    const statusUrl = ` + strconv.Quote(helperBase+"/app-server/status") + `;
+    const wsUrl = ` + strconv.Quote(wsBase+"/app-server/ws") + `;
+    document.getElementById("status").textContent = statusUrl;
+    document.getElementById("ws").textContent = wsUrl;
+    document.getElementById("check").onclick = async () => {
+      const out = document.getElementById("out");
+      out.textContent = "checking...";
+      try {
+        const response = await fetch(statusUrl);
+        out.textContent = JSON.stringify(await response.json(), null, 2);
+      } catch (error) {
+        out.textContent = String(error && error.message || error);
+      }
+    };
+  </script>
+</body>
+</html>`
+	_, _ = w.Write([]byte(page))
+}
+
+func (r *launcherRuntime) writeAppServerStatus(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet && req.Method != http.MethodPost {
+		writeHelperJSON(w, http.StatusMethodNotAllowed, map[string]any{"status": "failed", "message": "app-server status 只支持 GET/POST"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 12*time.Second)
+	defer cancel()
+	runtime, err := ensureMobileAppServerRuntime(ctx)
+	if err != nil {
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"status": "failed", "message": err.Error(), "ready": false})
+		return
+	}
+	writeHelperJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"ready":  true,
+		"source": runtime.source,
+		"port":   runtime.port,
+		"url":    fmt.Sprintf("ws://127.0.0.1:%d/rpc", runtime.port),
+	})
+}
+
+func (r *launcherRuntime) proxyAppServerWebSocket(w http.ResponseWriter, req *http.Request) {
+	ctx, cancel := context.WithTimeout(req.Context(), 12*time.Second)
+	defer cancel()
+	upstream, err := connectMobileAppServer(ctx)
+	if err != nil {
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"status": "failed", "message": err.Error()})
+		return
+	}
+	defer upstream.Close()
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	client, err := upgrader.Upgrade(w, req, nil)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	done := make(chan struct{}, 2)
+	pipe := func(dst, src *websocket.Conn) {
+		defer func() { done <- struct{}{} }()
+		for {
+			messageType, data, err := src.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := dst.WriteMessage(messageType, data); err != nil {
+				return
+			}
+		}
+	}
+	go pipe(upstream, client)
+	go pipe(client, upstream)
+	<-done
 }
 
 func (r *launcherRuntime) writeOverlayImage(w http.ResponseWriter) {
@@ -637,7 +755,7 @@ func (r *launcherRuntime) logRendererDiagnostic(raw json.RawMessage) {
 func writeCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("access-control-allow-origin", "*")
 	w.Header().Set("access-control-allow-methods", "GET, POST, OPTIONS")
-	w.Header().Set("access-control-allow-headers", "Content-Type, Authorization")
+	w.Header().Set("access-control-allow-headers", "Content-Type, Authorization, X-Requested-With")
 }
 
 func writeHelperJSON(w http.ResponseWriter, status int, value any) {
