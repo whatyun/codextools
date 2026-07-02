@@ -853,6 +853,9 @@ func normalizeCodexAppPath(path string) string {
 		return filepath.Dir(path)
 	}
 	if strings.EqualFold(filepath.Ext(path), ".app") {
+		if isCodexToolsAppPath(path) {
+			return ""
+		}
 		return path
 	}
 	if fileExists(path) && !isDir(path) {
@@ -878,6 +881,30 @@ func normalizeCodexAppPath(path string) string {
 		return path
 	}
 	return ""
+}
+
+func isCodexToolsAppPath(path string) bool {
+	if runtime.GOOS != "darwin" || !strings.EqualFold(filepath.Ext(path), ".app") {
+		return false
+	}
+	name := strings.TrimSuffix(filepath.Base(path), ".app")
+	for _, ownName := range []string{silentName, managerName, appName} {
+		if strings.EqualFold(name, ownName) {
+			return true
+		}
+	}
+	infoPlist := filepath.Join(path, "Contents", "Info.plist")
+	data, err := os.ReadFile(infoPlist)
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	bundleID := strings.ToLower(plistStringAfterKey(text, "CFBundleIdentifier"))
+	if strings.HasPrefix(bundleID, "com.hereww.codextools") {
+		return true
+	}
+	executable := strings.ToLower(plistStringAfterKey(text, "CFBundleExecutable"))
+	return strings.HasPrefix(executable, "codextools")
 }
 
 func isWindowsAppsExecutionAlias(path string) bool {

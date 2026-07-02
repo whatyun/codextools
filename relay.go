@@ -976,7 +976,7 @@ func relayDisplayOfficialAuthLabel(relay relayProfile) string {
 }
 
 func officialRelayConfigSnapshot(currentConfig string) string {
-	return removeRootKey(
+	officialConfig := removeRootKey(
 		removeRootKey(
 			removeTable(
 				removeTable(currentConfig, "model_providers."+relayProvider),
@@ -986,6 +986,7 @@ func officialRelayConfigSnapshot(currentConfig string) string {
 		),
 		"model_provider",
 	)
+	return upsertRootKey(officialConfig, "model_provider", quoteToml("openai"))
 }
 
 func readFile(path string) string {

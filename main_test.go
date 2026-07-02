@@ -105,6 +105,23 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 	}
 }
 
+func TestNormalizeCodexAppPathRejectsCodexToolsMacApps(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS app bundle filtering only applies on darwin")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"Codex++.app", "Codex++ 管理工具.app", "CodexTools.app"} {
+		if got := normalizeCodexAppPath(filepath.Join(root, name)); got != "" {
+			t.Fatalf("CodexTools app should not be accepted as Codex app: %q", got)
+		}
+	}
+	random := filepath.Join(root, "Renamed.app")
+	writeTestFile(t, filepath.Join(random, "Contents", "Info.plist"), `<plist><dict><key>CFBundleIdentifier</key><string>com.hereww.codextools.manager</string></dict></plist>`)
+	if got := normalizeCodexAppPath(random); got != "" {
+		t.Fatalf("CodexTools bundle id should not be accepted as Codex app: %q", got)
+	}
+}
+
 func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 	for _, required := range []string{
 		`pluginAutoExpand`,
@@ -1094,6 +1111,9 @@ func TestOfficialModeWritesBoundOfficialAuth(t *testing.T) {
 	if strings.Contains(string(config), "CodexPlusPlus") {
 		t.Fatalf("official mode should clear relay provider config:\n%s", string(config))
 	}
+	if !strings.Contains(string(config), `model_provider = "openai"`) {
+		t.Fatalf("official mode should explicitly restore openai provider:\n%s", string(config))
+	}
 }
 
 func TestActivateOfficialAuthWritesBoundOfficialAuth(t *testing.T) {
@@ -1543,6 +1563,66 @@ func TestRelaySwitchRunsProviderSync(t *testing.T) {
 	syncPayload, _ := result["providerSync"].(map[string]any)
 	if int64FromFlexible(syncPayload["sqliteRowsUpdated"]) == 0 {
 		t.Fatalf("provider sync payload should report sqlite updates: %#v", syncPayload)
+	}
+}
+
+func TestOfficialSwitchRunsProviderSyncToOpenAI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubCodexPluginCommands(t, nil)
+	sessionID := "019a61dd-9748-7743-9ce9-92b8663a935b"
+	rolloutPath := filepath.Join(home, ".codex", "sessions", "2026", "05", "28", "rollout-"+sessionID+".jsonl")
+	writeTestFile(t, rolloutPath, testSessionRolloutLine(sessionID, "/project", "official history")+"\n")
+	createProviderSyncThreadsTable(t, filepath.Join(home, ".codex", "state_5.sqlite"), true)
+	insertProviderSyncThread(t, filepath.Join(home, ".codex", "state_5.sqlite"), map[string]any{
+		"id":                 sessionID,
+		"rollout_path":       rolloutPath,
+		"created_at":         1779962400,
+		"updated_at":         1779962500,
+		"source":             "vscode",
+		"model_provider":     "CodexPlusPlus",
+		"cwd":                "/project",
+		"title":              "official history",
+		"sandbox_policy":     `{"type":"danger-full-access"}`,
+		"approval_mode":      "never",
+		"tokens_used":        0,
+		"has_user_event":     0,
+		"archived":           0,
+		"cli_version":        "",
+		"first_user_message": "",
+		"memory_mode":        "enabled",
+		"created_at_ms":      1779962400000,
+		"updated_at_ms":      1779962500000,
+		"preview":            "",
+	})
+	officialAuth := fakeChatGPTAuthJSON(t, "official@example.com")
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "official",
+		Name:                 "Official",
+		RelayMode:            "official",
+		Protocol:             "responses",
+		ConfigContents:       buildTestRelayConfig("https://api.example.com", "relay-key"),
+		OfficialAuthContents: officialAuth,
+		OfficialAccountLabel: "official@example.com",
+	}}
+	settings.ActiveRelayID = "official"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).clearRelayInjection()
+
+	if result["status"] != "ok" {
+		t.Fatalf("official switch should succeed: %#v", result)
+	}
+	config := readFile(filepath.Join(home, ".codex", "config.toml"))
+	if !strings.Contains(config, `model_provider = "openai"`) {
+		t.Fatalf("official switch should write openai provider:\n%s", config)
+	}
+	row := providerSyncThreadRow(t, filepath.Join(home, ".codex", "state_5.sqlite"), sessionID)
+	if got := stringFromAny(row["model_provider"]); got != "openai" {
+		t.Fatalf("provider sync should update sqlite provider to openai, got %q", got)
 	}
 }
 
