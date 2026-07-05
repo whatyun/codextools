@@ -170,20 +170,20 @@
             <h2>macOS</h2>
             <p>Installer packages and portable app bundles for Apple Silicon and Intel Macs.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.36-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.36-macos-x64.pkg">Download Intel installer <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.36-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.36-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-arm64.pkg">Download Apple Silicon installer <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-x64.pkg">Download Intel installer <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-arm64.zip">Portable Apple Silicon zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-x64.zip">Portable Intel zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>macOS</h2>
             <p>同时提供 Apple Silicon 与 Intel Mac 的安装包和便携 app 压缩包。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.36-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
-              <a href="./releases/CodexTools-1.1.36-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
-              <a href="./releases/CodexTools-1.1.36-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.36-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-arm64.pkg">下载 Apple Silicon 安装包 <span>M1/M2/M3/M4</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-x64.pkg">下载 Intel 安装包 <span>x64</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-arm64.zip">Apple Silicon 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.37-macos-x64.zip">Intel 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -193,20 +193,20 @@
             <h2>Windows</h2>
             <p>Setup installers for traditional PCs and Windows on ARM, plus portable zip builds.</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.36-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.36-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.36-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
-              <a href="./releases/CodexTools-1.1.36-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-x64-setup.exe">Download Windows PC installer <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-arm64-setup.exe">Download Windows ARM installer <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-x64.zip">Portable Windows PC zip <span>secondary</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-arm64.zip">Portable Windows ARM zip <span>secondary</span></a>
             </div>
           </div>
           <div data-lang="zh">
             <h2>Windows</h2>
             <p>同时提供传统电脑和 Windows ARM 设备的安装包，并保留便携 zip。</p>
             <div class="download-list">
-              <a href="./releases/CodexTools-1.1.36-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
-              <a href="./releases/CodexTools-1.1.36-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
-              <a href="./releases/CodexTools-1.1.36-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
-              <a href="./releases/CodexTools-1.1.36-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-x64-setup.exe">下载 Windows PC 安装包 <span>Intel/AMD x64</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-arm64-setup.exe">下载 Windows ARM 安装包 <span>ARM64</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-x64.zip">Windows PC 便携 zip <span>备用</span></a>
+              <a href="./releases/CodexTools-1.1.37-windows-arm64.zip">Windows ARM 便携 zip <span>备用</span></a>
             </div>
           </div>
         </section>
@@ -214,23 +214,23 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.1.36</strong>
+          <strong>Version 1.1.37</strong>
           <ul>
-            <li>Prevents macOS app path selection from accepting CodexTools, Codex++, or renamed CodexTools manager bundles as the upstream Codex app.</li>
-            <li>Detects CodexTools bundle identifiers and executables in Info.plist so renamed manager apps are filtered safely.</li>
-            <li>When switching back to official mode, explicitly restores model_provider = "openai" after removing relay provider settings.</li>
-            <li>Runs provider synchronization back to openai for existing session indexes when returning to official mode.</li>
-            <li>Adds regression tests for CodexTools app filtering, official provider restoration, and official-mode provider sync.</li>
+            <li>Regenerates CodexPlusPlus relay provider configuration when switching mixed API profiles that still contain an old official-only config snapshot.</li>
+            <li>Ensures mixed API mode writes the selected relay API key into the generated model provider config instead of leaving the profile on openai.</li>
+            <li>Restores existing official-mode session history into the mixed provider view by syncing rollout metadata and SQLite thread indexes to CodexPlusPlus.</li>
+            <li>Restores thread_source and has_user_event metadata for mixed-mode history after provider sync.</li>
+            <li>Adds regression coverage for stale mixed official snapshots, provider sync, rollout metadata rewriting, and history restoration.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.1.36</strong>
+          <strong>版本 1.1.37</strong>
           <ul>
-            <li>macOS 选择 Codex App 路径时，不再把 CodexTools、Codex++ 或重命名后的管理器 app 误当成上游 Codex。</li>
-            <li>会检查 Info.plist 里的 CodexTools bundle identifier 和 executable，安全过滤重命名后的管理器应用。</li>
-            <li>切回官方模式时，移除 relay 供应商配置后会显式恢复 model_provider = "openai"。</li>
-            <li>回到官方模式时会把已有会话索引的 provider 同步回 openai。</li>
-            <li>新增 CodexTools app 过滤、官方 provider 恢复和官方模式 provider sync 回归测试。</li>
+            <li>切换混合 API profile 时，即使旧快照还是官方 openai 配置，也会重新生成 CodexPlusPlus relay provider 配置。</li>
+            <li>混合 API 模式会把所选 relay API Key 写入生成的 model provider 配置，不再停留在 openai。</li>
+            <li>把官方模式下已有的历史会话同步到混合供应商视图，rollout metadata 和 SQLite thread 索引都会改为 CodexPlusPlus。</li>
+            <li>provider sync 后会恢复混合模式历史会话的 thread_source 和 has_user_event 元数据。</li>
+            <li>新增过期 mixed 官方快照、provider sync、rollout metadata 改写和历史恢复回归测试。</li>
           </ul>
         </div>
       </section>

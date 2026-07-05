@@ -1252,6 +1252,88 @@ func TestMixedModeWritesBoundOfficialAuthAndRelayConfig(t *testing.T) {
 	}
 }
 
+func TestMixedModeRegeneratesStaleOfficialSnapshotAndRestoresHistory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubCodexPluginCommands(t, nil)
+	officialAuth := fakeChatGPTAuthJSON(t, "mixed@example.com")
+	writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), `model_provider = "openai"`+"\n")
+	sessionID := "019a61dd-9748-7743-9ce9-92b8663a935b"
+	rolloutPath := filepath.Join(home, ".codex", "sessions", "2026", "05", "28", "rollout-"+sessionID+".jsonl")
+	writeTestFile(t, rolloutPath, strings.Join([]string{
+		strings.Replace(testSessionRolloutLine(sessionID, "/project", "official chat"), "CodexPlusPlus", "openai", 1),
+		testRolloutResponseMessage("user", "官方模式里的历史对话"),
+	}, "\n")+"\n")
+	createProviderSyncThreadsTable(t, filepath.Join(home, ".codex", "state_5.sqlite"), true)
+	insertProviderSyncThread(t, filepath.Join(home, ".codex", "state_5.sqlite"), map[string]any{
+		"id":                 sessionID,
+		"rollout_path":       rolloutPath,
+		"created_at":         1779962400,
+		"updated_at":         1779962500,
+		"source":             "vscode",
+		"model_provider":     "openai",
+		"cwd":                "/project",
+		"title":              "official chat",
+		"sandbox_policy":     `{"type":"danger-full-access"}`,
+		"approval_mode":      "never",
+		"tokens_used":        0,
+		"has_user_event":     0,
+		"archived":           0,
+		"cli_version":        "",
+		"first_user_message": "",
+		"memory_mode":        "enabled",
+		"created_at_ms":      1779962400000,
+		"updated_at_ms":      1779962500000,
+		"preview":            "",
+	})
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                   "mixed",
+		Name:                 "Mixed",
+		BaseURL:              "https://api.example.com",
+		APIKey:               "relay-key",
+		RelayMode:            "mixedApi",
+		Protocol:             "responses",
+		ConfigContents:       `model_provider = "openai"` + "\n",
+		OfficialAuthContents: officialAuth,
+		OfficialAccountLabel: "mixed@example.com",
+	}}
+	settings.ActiveRelayID = "mixed"
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	result := (&server{}).applyRelayInjection(false)
+
+	if result["status"] != "ok" {
+		t.Fatalf("mixed switch should succeed with stale official snapshot: %#v", result)
+	}
+	config := readFile(filepath.Join(home, ".codex", "config.toml"))
+	for _, expected := range []string{
+		`model_provider = "CodexPlusPlus"`,
+		`[model_providers.CodexPlusPlus]`,
+		`experimental_bearer_token = "relay-key"`,
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("mixed switch should regenerate relay config missing %q:\n%s", expected, config)
+		}
+	}
+	row := providerSyncThreadRow(t, filepath.Join(home, ".codex", "state_5.sqlite"), sessionID)
+	if got := stringFromAny(row["model_provider"]); got != "CodexPlusPlus" {
+		t.Fatalf("provider sync should move official history to mixed provider, got %q", got)
+	}
+	if got := stringFromAny(row["thread_source"]); got != "user" {
+		t.Fatalf("thread_source should be restored for mixed history, got %q", got)
+	}
+	if got := int64FromFlexible(row["has_user_event"]); got != 1 {
+		t.Fatalf("has_user_event should be restored for mixed history, got %#v", row["has_user_event"])
+	}
+	data := readFile(rolloutPath)
+	if !strings.Contains(data, `"model_provider":"CodexPlusPlus"`) {
+		t.Fatalf("rollout metadata should be rewritten to mixed provider:\n%s", data)
+	}
+}
+
 func TestPureAPIModeKeepsCurrentAuthWhenProfileSnapshotMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

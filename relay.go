@@ -719,8 +719,12 @@ func activeRelayUsesProtocolProxy(settings backendSettings) bool {
 
 func relayConfigForWrite(settings backendSettings, relay relayProfile) (string, error) {
 	configContents := strings.TrimSpace(relay.ConfigContents)
-	if relay.RelayMode == "aggregate" {
-		configContents = upsertModelProviderConfig(configContents, effectiveBaseURL(relay), aggregateRelayAPIKey, relay)
+	if relay.RelayMode == "mixedApi" || relay.RelayMode == "aggregate" {
+		bearerToken := strings.TrimSpace(relay.APIKey)
+		if relay.RelayMode == "aggregate" {
+			bearerToken = aggregateRelayAPIKey
+		}
+		configContents = upsertModelProviderConfig(configContents, effectiveBaseURL(relay), bearerToken, relay)
 	}
 	if configContents == "" && relay.RelayMode != "official" {
 		configContents = upsertModelProviderConfig("", effectiveBaseURL(relay), strings.TrimSpace(relay.APIKey), relay)
