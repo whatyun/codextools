@@ -213,6 +213,7 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		if settings.RelayProfiles[index].ModelInsertMode == "" {
 			settings.RelayProfiles[index].ModelInsertMode = "patch"
 		}
+		settings.RelayProfiles[index].ProxyURL = strings.TrimSpace(settings.RelayProfiles[index].ProxyURL)
 		settings.RelayProfiles[index].ModelList, settings.RelayProfiles[index].ModelWindows = normalizeModelListAndWindows(settings.RelayProfiles[index].ModelList, settings.RelayProfiles[index].ModelWindows)
 		if !settings.RelayProfiles[index].ContextSelectionInitialized {
 			settings.RelayProfiles[index].ContextSelection = contextSelectionForAllEntries(settings.RelayContextConfigContents)

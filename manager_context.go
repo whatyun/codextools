@@ -103,11 +103,13 @@ func (s *server) fetchRelayProfileModels(ctx context.Context, args map[string]an
 		return failed("从「"+displayRelayName(profile)+"」获取模型失败：Base URL 不能为空", map[string]any{"models": []string{}, "endpoint": ""})
 	}
 	source := codexModelSource{
-		ID:      "relay-profile:" + strings.TrimSpace(profile.ID),
-		Type:    "relay_profile",
-		Name:    displayRelayName(profile),
-		BaseURL: baseURL,
-		APIKey:  strings.TrimSpace(profile.APIKey),
+		ID:           "relay-profile:" + strings.TrimSpace(profile.ID),
+		Type:         "relay_profile",
+		Name:         displayRelayName(profile),
+		BaseURL:      baseURL,
+		APIKey:       strings.TrimSpace(profile.APIKey),
+		ProxyEnabled: profile.ProxyEnabled,
+		ProxyURL:     profile.ProxyURL,
 	}
 	endpoint := modelsEndpoint(source.BaseURL)
 	models, status := fetchModelsFromSource(ctx, source)

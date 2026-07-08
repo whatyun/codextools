@@ -336,6 +336,8 @@ type RelayProfile = {
   modelList: string;
   modelWindows: string;
   userAgent: string;
+  proxyEnabled: boolean;
+  proxyUrl: string;
 };
 
 type AggregateRelayStrategy = "failover" | "conversationRoundRobin" | "requestRoundRobin" | "weightedRoundRobin";
@@ -449,6 +451,7 @@ const providerPresets: ProviderPreset[] = [
   },
 ];
 const PROTOCOL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
+const LOCAL_RELAY_PROXY_BASE_URL = "http://127.0.0.1:57323/v1";
 const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/BigPizzaV3/CodexPlusPlusScriptMarket";
 const PROJECT_REPOSITORY_URL = "https://github.com/hereww/codextools";
 const PROJECT_RELEASES_URL = "https://github.com/hereww/codextools/releases/latest";
@@ -848,6 +851,8 @@ const defaultSettings: BackendSettings = {
       modelList: "",
       modelWindows: "",
       userAgent: "",
+      proxyEnabled: false,
+      proxyUrl: "",
     },
   ],
   relayCommonConfigContents: "",
@@ -5584,6 +5589,8 @@ function RelayProfileEditor({
       "imageGenerationApiKey",
       "contextWindow",
       "autoCompactLimit",
+      "proxyEnabled",
+      "proxyUrl",
     ].some((key) => key in patch);
     const updated = { ...profile, ...patch };
     onProfileChange(shouldRegenerateFiles ? withGeneratedRelayFiles(updated) : updated);
@@ -5690,6 +5697,29 @@ function RelayProfileEditor({
                 placeholder="留空使用默认值"
               />
             </Field>
+            {showApiFields ? (
+              <>
+                <label className="switch-row compact-switch relay-proxy-switch">
+                  <input
+                    checked={profile.proxyEnabled}
+                    onChange={(event) => updateDraft({ proxyEnabled: event.currentTarget.checked })}
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>启用 HTTP 代理</strong>
+                    <small>开启后，此供应商的测试、模型列表和运行时请求都会通过该代理访问上游；未填写代理 URL 时保持直连。</small>
+                  </span>
+                </label>
+                <Field className="relay-proxy-url-field" label="代理 URL">
+                  <Input
+                    disabled={!profile.proxyEnabled}
+                    value={profile.proxyUrl}
+                    onChange={(event) => updateDraft({ proxyUrl: event.currentTarget.value })}
+                    placeholder="http://127.0.0.1:7890"
+                  />
+                </Field>
+              </>
+            ) : null}
           </div>
         ) : null}
         {profile.relayMode === "aggregate" ? (
@@ -6450,6 +6480,8 @@ function normalizeSettings(settings: BackendSettings): BackendSettings {
             modelList: "",
             modelWindows: "",
             userAgent: "",
+            proxyEnabled: false,
+            proxyUrl: "",
           },
         ];
   const activeRelayId = profiles.some((profile) => profile.id === settings.activeRelayId)
@@ -6548,6 +6580,8 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0, defaultContextS
     modelList: profile.modelList || "",
     modelWindows: profile.modelWindows || "",
     userAgent: profile.userAgent || "",
+    proxyEnabled: Boolean(profile.proxyEnabled),
+    proxyUrl: profile.proxyUrl || "",
   };
   if (!normalized.configContents.trim()) {
     return withGeneratedRelayFiles(normalized);
@@ -6834,6 +6868,8 @@ function buildRelayConfigToml(
     | "imageGenerationBaseUrl"
     | "contextWindow"
     | "autoCompactLimit"
+    | "proxyEnabled"
+    | "proxyUrl"
   >,
 ): string {
   const isAggregate = profile.relayMode === "aggregate";
@@ -6841,10 +6877,11 @@ function buildRelayConfigToml(
     !isAggregate &&
     profile.protocol === "responses" &&
     (!profile.imageGenerationEnabled || (profile.imageGenerationUseSeparateApi && profile.imageGenerationBaseUrl.trim()));
+  const usesHttpProxy = !isAggregate && profile.relayMode !== "official" && profile.protocol === "responses" && profile.proxyEnabled && profile.proxyUrl.trim() !== "";
   const baseUrl = isAggregate
     ? PROTOCOL_PROXY_BASE_URL
-    : usesImageProxy
-    ? "http://127.0.0.1:57323/v1"
+    : usesImageProxy || usesHttpProxy
+    ? LOCAL_RELAY_PROXY_BASE_URL
     : profile.protocol === "chatCompletions"
       ? PROTOCOL_PROXY_BASE_URL
       : profile.baseUrl.trim();
@@ -6935,6 +6972,8 @@ function updateRelayProfile(settings: BackendSettings, id: string, patch: Partia
     "imageGenerationUseSeparateApi",
     "imageGenerationBaseUrl",
     "imageGenerationApiKey",
+    "proxyEnabled",
+    "proxyUrl",
   ].some((key) => key in patch);
   return syncLegacyRelayFields({
     ...settings,
@@ -6980,6 +7019,8 @@ function createRelayProfile(settings: BackendSettings): RelayProfile {
     modelList: "",
     modelWindows: "",
     userAgent: "",
+    proxyEnabled: false,
+    proxyUrl: "",
   };
   return deriveOfficialAuthFields(withGeneratedRelayFiles(next));
 }

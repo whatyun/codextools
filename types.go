@@ -100,6 +100,8 @@ type relayProfile struct {
 	ModelList                     string                `json:"modelList"`
 	ModelWindows                  string                `json:"modelWindows"`
 	UserAgent                     string                `json:"userAgent"`
+	ProxyEnabled                  bool                  `json:"proxyEnabled"`
+	ProxyURL                      string                `json:"proxyUrl"`
 }
 
 type aggregateRelayProfile struct {

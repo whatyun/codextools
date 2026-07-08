@@ -358,7 +358,25 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 	copyProxyHeaders(req.Header, upstreamReq.Header)
 	setRelayProxyUserAgent(profile.UserAgent, req.Header, upstreamReq.Header)
 	upstreamReq.Header.Set("accept-encoding", "identity")
-	resp, err := http.DefaultClient.Do(upstreamReq)
+	client, err := relayHTTPClient(profile)
+	if err != nil {
+		appendDiagnosticLog("relay_proxy.proxy_config_invalid", map[string]any{
+			"relay_id":       profile.ID,
+			"relay_name":     profile.Name,
+			"target":         target,
+			"attempt":        attempt,
+			"candidateCount": candidateCount,
+			"willFailover":   attempt < candidateCount,
+			"error":          err.Error(),
+		})
+		recordRelayRequestFailure(settings)
+		if attempt < candidateCount {
+			return false
+		}
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
+		return true
+	}
+	resp, err := client.Do(upstreamReq)
 	if err != nil {
 		appendDiagnosticLog("relay_proxy.request_failed", map[string]any{
 			"relay_id":       profile.ID,

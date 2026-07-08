@@ -803,7 +803,7 @@ func helperNeeded(settings backendSettings) bool {
 
 func activeRelayNeedsLocalProxy(settings backendSettings) bool {
 	active := activeRelayProfile(settings)
-	return active.needsLocalRelayProxy() || active.RelayMode == "aggregate"
+	return active.needsLocalRelayProxy() || active.RelayMode == "aggregate" || relayProfileUsesHTTPProxy(active)
 }
 
 type codexLaunchHandle interface {

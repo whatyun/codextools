@@ -1602,6 +1602,11 @@ body {
   gap: 12px;
 }
 
+.relay-proxy-switch,
+.relay-proxy-url-field {
+  grid-column: 1 / -1;
+}
+
 .protocol-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2659,6 +2664,7 @@ body {
   .grid.two,
   .form-row,
   .relay-fields,
+  .relay-advanced-fields,
   .relay-file-grid,
   .mode-grid,
   .mode-grid.three,

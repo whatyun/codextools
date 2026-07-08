@@ -29,11 +29,13 @@ var (
 )
 
 type codexModelSource struct {
-	ID      string
-	Type    string
-	Name    string
-	BaseURL string
-	APIKey  string
+	ID           string
+	Type         string
+	Name         string
+	BaseURL      string
+	APIKey       string
+	ProxyEnabled bool
+	ProxyURL     string
 }
 
 func codexModelCatalogValue() map[string]any {
@@ -42,6 +44,18 @@ func codexModelCatalogValue() map[string]any {
 		profile := activeRelayProfile(settings)
 		if strings.TrimSpace(profile.ModelList) != "" || strings.TrimSpace(profile.Model) != "" {
 			return relayProfileModelCatalogValue(profile)
+		}
+		if profile.RelayMode == "aggregate" {
+			if member, err := selectRelayForProbe(settings); err == nil && effectiveUpstreamBaseURL(member) != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+				defer cancel()
+				return relayProfileRemoteModelCatalogValue(ctx, member)
+			}
+		}
+		if profile.RelayMode != "official" && profile.RelayMode != "aggregate" && effectiveUpstreamBaseURL(profile) != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+			defer cancel()
+			return relayProfileRemoteModelCatalogValue(ctx, profile)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
@@ -91,6 +105,46 @@ func relayProfileModelCatalogValue(profile relayProfile) map[string]any {
 			"responses_api": responsesAPIStatus("unknown", "", ""),
 		}},
 		"responses_api": responsesAPIStatus("unknown", "", ""),
+	}
+}
+
+func relayProfileRemoteModelCatalogValue(ctx context.Context, profile relayProfile) map[string]any {
+	source := codexModelSource{
+		ID:           "relay-profile:" + strings.TrimSpace(profile.ID),
+		Type:         "relay_profile",
+		Name:         displayRelayName(profile),
+		BaseURL:      effectiveUpstreamBaseURL(profile),
+		APIKey:       strings.TrimSpace(profile.APIKey),
+		ProxyEnabled: profile.ProxyEnabled,
+		ProxyURL:     profile.ProxyURL,
+	}
+	models, sourceStatus := fetchModelsFromSource(ctx, source)
+	model := strings.TrimSpace(profile.Model)
+	if slug, _, ok := parseModelSuffix(model); ok {
+		model = slug
+	}
+	defaultModel := ""
+	if containsString(models, model) {
+		defaultModel = model
+	} else if len(models) > 0 {
+		defaultModel = models[0]
+	}
+	status := "not_configured"
+	if len(models) > 0 {
+		status = "ok"
+	} else if stringFromAny(sourceStatus["status"]) == "failed" {
+		status = "failed"
+	}
+	return map[string]any{
+		"status":         status,
+		"path":           filepath.Join(codexHomeDir(), "config.toml"),
+		"model":          model,
+		"default_model":  defaultModel,
+		"model_provider": strings.TrimSpace(profile.ID),
+		"provider_name":  displayRelayName(profile),
+		"models":         models,
+		"sources":        []any{sourceStatus},
+		"responses_api":  responsesAPIStatus("unknown", "", ""),
 	}
 }
 
@@ -356,7 +410,14 @@ func fetchModelsFromSource(ctx context.Context, source codexModelSource) ([]stri
 	if strings.TrimSpace(source.APIKey) != "" {
 		req.Header.Set("authorization", "Bearer "+strings.TrimSpace(source.APIKey))
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client, err := relayHTTPClient(relayProfile{ProxyEnabled: source.ProxyEnabled, ProxyURL: source.ProxyURL})
+	if err != nil {
+		status["status"] = "failed"
+		status["message"] = err.Error()
+		status["models"] = 0
+		return nil, status
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		status["status"] = "failed"
 		status["message"] = err.Error()

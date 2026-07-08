@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -201,6 +202,31 @@ func TestProviderSwitchForcesCompleteEnhancementMode(t *testing.T) {
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("provider switch text should not mention compatibility default: %q", forbidden)
+		}
+	}
+}
+
+func TestRelayProfileHTTPProxyUIAndStateAreWired(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
+	if err != nil {
+		t.Fatalf("read App.tsx failed: %v", err)
+	}
+	source := string(data)
+	for _, expected := range []string{
+		`proxyEnabled: boolean;`,
+		`proxyUrl: string;`,
+		`proxyEnabled: false,`,
+		`proxyUrl: "",`,
+		`"proxyEnabled",`,
+		`"proxyUrl",`,
+		`启用 HTTP 代理`,
+		`代理 URL`,
+		`http://127.0.0.1:7890`,
+		`LOCAL_RELAY_PROXY_BASE_URL`,
+		`profile.proxyEnabled && profile.proxyUrl.trim() !== ""`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("relay profile HTTP proxy UI/state should include %q", expected)
 		}
 	}
 }
@@ -737,6 +763,30 @@ func TestSettingsPreserveAggregateRelayAndMobileControl(t *testing.T) {
 	}
 	if !activeRelayUsesProtocolProxy(loaded) {
 		t.Fatal("aggregate relay should use protocol proxy")
+	}
+}
+
+func TestRelayProfileHTTPProxyDefaultsAndNormalization(t *testing.T) {
+	defaultProfile := defaultRelayProfile()
+	if defaultProfile.ProxyEnabled {
+		t.Fatal("default relay profile should not enable HTTP proxy")
+	}
+	if defaultProfile.ProxyURL != "" {
+		t.Fatalf("default relay proxy URL should be empty, got %q", defaultProfile.ProxyURL)
+	}
+
+	settings := normalizeSettings(backendSettings{RelayProfiles: []relayProfile{{
+		ID:           "relay",
+		Name:         "Relay",
+		RelayMode:    "pureApi",
+		Protocol:     "responses",
+		BaseURL:      "https://api.example.com/v1",
+		APIKey:       "sk-test",
+		ProxyEnabled: true,
+		ProxyURL:     "  http://127.0.0.1:7890  ",
+	}}})
+	if got := settings.RelayProfiles[0].ProxyURL; got != "http://127.0.0.1:7890" {
+		t.Fatalf("normalizeSettings should trim relay proxy URL, got %q", got)
 	}
 }
 
@@ -3379,6 +3429,218 @@ func TestRelayProxyBaseURLKeepsExistingResponsesPath(t *testing.T) {
 	if baseURL != "https://api.example.com/openai" {
 		t.Fatalf("responses relay should preserve existing paths, got %q", baseURL)
 	}
+}
+
+func TestEffectiveBaseURLUsesLocalProxyWhenHTTPProxyEnabledForResponses(t *testing.T) {
+	profile := relayProfile{
+		ID:           "relay",
+		Name:         "Relay",
+		RelayMode:    "pureApi",
+		Protocol:     "responses",
+		BaseURL:      "https://api.example.com/v1",
+		APIKey:       "sk-test",
+		ProxyEnabled: true,
+		ProxyURL:     "http://127.0.0.1:7890",
+	}
+
+	if got, want := effectiveBaseURL(profile), fmt.Sprintf("http://127.0.0.1:%d/v1", localRelayProxyPort); got != want {
+		t.Fatalf("responses relay with HTTP proxy should write local relay base URL, got %q want %q", got, want)
+	}
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{profile}
+	settings.ActiveRelayID = profile.ID
+	if !activeRelayNeedsLocalProxy(settings) {
+		t.Fatal("HTTP proxy enabled relay should start the local relay proxy")
+	}
+}
+
+func TestRelayHTTPClientRejectsInvalidProxyURL(t *testing.T) {
+	_, err := relayHTTPClient(relayProfile{ProxyEnabled: true, ProxyURL: "socks5://127.0.0.1:1080"})
+	if err == nil {
+		t.Fatal("relayHTTPClient should reject non-http proxy URLs")
+	}
+	if !strings.Contains(err.Error(), "HTTP 代理地址无效") {
+		t.Fatalf("invalid proxy error should be explicit, got %v", err)
+	}
+}
+
+func TestTestRelayProfileReportsInvalidProxyURL(t *testing.T) {
+	result := (&server{}).testRelayProfile(context.Background(), map[string]any{"profile": relayProfile{
+		ID:           "relay",
+		Name:         "Relay",
+		RelayMode:    "pureApi",
+		Protocol:     "responses",
+		BaseURL:      "https://api.example.com/v1",
+		APIKey:       "sk-test",
+		ProxyEnabled: true,
+		ProxyURL:     "ftp://127.0.0.1:21",
+	}})
+
+	if result["status"] != "failed" {
+		t.Fatalf("invalid proxy URL should fail relay profile test: %#v", result)
+	}
+	if !strings.Contains(stringFromAny(result["message"]), "HTTP 代理地址无效") {
+		t.Fatalf("invalid proxy failure should mention proxy URL, got %#v", result)
+	}
+}
+
+func TestRelayProxyAttemptUsesConfiguredHTTPProxy(t *testing.T) {
+	upstreamPath := ""
+	proxyHits := 0
+	upstream, proxy := newForwardingProxyPair(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		upstreamPath = req.URL.Path
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp"}`))
+	}), func() { proxyHits++ })
+	defer upstream.Close()
+	defer proxy.Close()
+
+	profile := relayProfile{
+		ID:           "relay",
+		Name:         "Relay",
+		RelayMode:    "pureApi",
+		Protocol:     "responses",
+		BaseURL:      upstream.URL + "/v1",
+		APIKey:       "sk-test",
+		ProxyEnabled: true,
+		ProxyURL:     proxy.URL,
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:57323/v1/responses", strings.NewReader(`{"input":"hi"}`))
+	rec := httptest.NewRecorder()
+
+	if !forwardRelayProxyAttempt(defaultSettings(), rec, req, []byte(`{"input":"hi"}`), profile, 1, 1) {
+		t.Fatal("relay proxy attempt should complete after successful upstream response")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relay proxy should return upstream status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if proxyHits != 1 {
+		t.Fatalf("configured HTTP proxy should be used exactly once, got %d hits", proxyHits)
+	}
+	if upstreamPath != "/v1/responses" {
+		t.Fatalf("upstream path mismatch: %q", upstreamPath)
+	}
+}
+
+func TestFetchModelsFromSourceUsesConfiguredHTTPProxy(t *testing.T) {
+	upstreamPath := ""
+	proxyHits := 0
+	upstream, proxy := newForwardingProxyPair(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		upstreamPath = req.URL.Path
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"model-a"}]}`))
+	}), func() { proxyHits++ })
+	defer upstream.Close()
+	defer proxy.Close()
+
+	models, status := fetchModelsFromSource(context.Background(), codexModelSource{
+		ID:           "relay-profile:relay",
+		Type:         "relay_profile",
+		Name:         "Relay",
+		BaseURL:      upstream.URL + "/v1",
+		APIKey:       "sk-test",
+		ProxyEnabled: true,
+		ProxyURL:     proxy.URL,
+	})
+
+	if stringFromAny(status["status"]) != "ok" {
+		t.Fatalf("model fetch should succeed through proxy: %#v", status)
+	}
+	if len(models) != 1 || models[0] != "model-a" {
+		t.Fatalf("model fetch parsed wrong models: %#v", models)
+	}
+	if proxyHits != 1 {
+		t.Fatalf("configured HTTP proxy should be used for model fetch, got %d hits", proxyHits)
+	}
+	if upstreamPath != "/v1/models" {
+		t.Fatalf("upstream model path mismatch: %q", upstreamPath)
+	}
+}
+
+func TestAggregateRelayUsesSelectedMemberHTTPProxy(t *testing.T) {
+	clearRelayRotationSelector()
+	t.Cleanup(clearRelayRotationSelector)
+	proxyHits := 0
+	upstream, proxy := newForwardingProxyPair(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp"}`))
+	}), func() { proxyHits++ })
+	defer upstream.Close()
+	defer proxy.Close()
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{
+		{
+			ID:           "member",
+			Name:         "Member",
+			RelayMode:    "pureApi",
+			Protocol:     "responses",
+			BaseURL:      upstream.URL + "/v1",
+			APIKey:       "sk-test",
+			ProxyEnabled: true,
+			ProxyURL:     proxy.URL,
+		},
+		{ID: "agg", Name: "Agg", RelayMode: "aggregate", Protocol: "responses"},
+	}
+	settings.ActiveRelayID = "agg"
+	settings.ActiveAggregateRelayID = "agg"
+	settings.AggregateRelayProfiles = []aggregateRelayProfile{{
+		ID:       "agg",
+		Name:     "Agg",
+		Strategy: "failover",
+		Members:  []aggregateRelayMember{{RelayID: "member", Weight: 1}},
+	}}
+	runtime := &launcherRuntime{settings: settings}
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:57321/v1/responses", strings.NewReader(`{"input":"hi"}`))
+	rec := httptest.NewRecorder()
+
+	runtime.forwardRelayProxy(rec, req, []byte(`{"input":"hi"}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("aggregate relay should return upstream status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if proxyHits != 1 {
+		t.Fatalf("aggregate selected member HTTP proxy should be used, got %d hits", proxyHits)
+	}
+}
+
+func newForwardingProxyPair(t *testing.T, upstreamHandler http.Handler, onProxy func()) (*httptest.Server, *httptest.Server) {
+	t.Helper()
+	upstream := httptest.NewServer(upstreamHandler)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if onProxy != nil {
+			onProxy()
+		}
+		forwardProxyRequest(t, upstream.URL, w, req)
+	}))
+	return upstream, proxy
+}
+
+func forwardProxyRequest(t *testing.T, upstreamRawURL string, w http.ResponseWriter, req *http.Request) {
+	t.Helper()
+	if req.URL.Scheme == "" || req.URL.Host == "" {
+		t.Fatalf("proxy should receive absolute-form upstream URL, got %q", req.URL.String())
+	}
+	upstreamURL, err := url.Parse(upstreamRawURL)
+	if err != nil {
+		t.Fatalf("parse upstream URL failed: %v", err)
+	}
+	forwarded := req.Clone(req.Context())
+	forwarded.URL.Scheme = upstreamURL.Scheme
+	forwarded.URL.Host = upstreamURL.Host
+	forwarded.Host = upstreamURL.Host
+	forwarded.RequestURI = ""
+	resp, err := http.DefaultTransport.RoundTrip(forwarded)
+	if err != nil {
+		t.Fatalf("proxy upstream round trip failed: %v", err)
+	}
+	defer resp.Body.Close()
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func TestSetRelayProxyUserAgentForwardsCodexClientAgent(t *testing.T) {

@@ -862,7 +862,7 @@ func effectiveBaseURL(relay relayProfile) string {
 	if relay.Protocol == "chatCompletions" || relay.RelayMode == "aggregate" {
 		return protocolProxyBaseURL
 	}
-	if relay.Protocol == "responses" && (disablesImageGeneration(relay) || usesSeparateImageGenerationAPI(relay)) {
+	if relay.Protocol == "responses" && (disablesImageGeneration(relay) || usesSeparateImageGenerationAPI(relay) || relayProfileUsesHTTPProxy(relay)) {
 		return fmt.Sprintf("http://127.0.0.1:%d/v1", localRelayProxyPort)
 	}
 	return strings.TrimSpace(relay.BaseURL)
@@ -1039,7 +1039,11 @@ func (s *server) testRelayProfile(ctx context.Context, args map[string]any) comm
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("authorization", "Bearer "+profile.APIKey)
-	resp, err := http.DefaultClient.Do(req)
+	client, err := relayHTTPClient(profile)
+	if err != nil {
+		return failed("测试「"+displayRelayName(profile)+"」失败："+err.Error(), map[string]any{"httpStatus": 0, "endpoint": endpoint, "responsePreview": ""})
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return failed("测试「"+displayRelayName(profile)+"」失败："+err.Error(), map[string]any{"httpStatus": 0, "endpoint": endpoint, "responsePreview": ""})
 	}
@@ -1054,7 +1058,15 @@ func (s *server) testRelayProfile(ctx context.Context, args map[string]any) comm
 	if strings.TrimSpace(preview) != "" {
 		detail = "响应：" + strings.TrimSpace(preview)
 	}
-	return commandResult{"status": status, "message": fmt.Sprintf("已向「%s」用模型「%s」发送 hi，HTTP %d。%s", displayRelayName(profile), model, resp.StatusCode, detail), "httpStatus": resp.StatusCode, "endpoint": endpoint, "responsePreview": preview}
+	proxyNote := ""
+	if profile.ProxyEnabled {
+		if strings.TrimSpace(profile.ProxyURL) == "" {
+			proxyNote = " HTTP 代理已启用但代理 URL 为空，已按直连测试。"
+		} else {
+			proxyNote = " 已通过 HTTP 代理测试。"
+		}
+	}
+	return commandResult{"status": status, "message": fmt.Sprintf("已向「%s」用模型「%s」发送 hi，HTTP %d。%s%s", displayRelayName(profile), model, resp.StatusCode, detail, proxyNote), "httpStatus": resp.StatusCode, "endpoint": endpoint, "responsePreview": preview}
 }
 
 func relayTestPayload(profile relayProfile, model string) (string, map[string]any) {
