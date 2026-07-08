@@ -1067,6 +1067,24 @@ body {
   min-height: calc(100vh - 188px);
 }
 
+.support-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 188px);
+}
+
+.support-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.support-content .toolbar {
+  flex: 0 0 auto;
+  margin-top: 12px;
+}
+
 .panel-head {
   display: flex;
   flex-direction: row;
@@ -2166,6 +2184,7 @@ body {
 .toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 12px;
 }
@@ -2230,13 +2249,16 @@ body {
 }
 
 .log-view.tall {
-  min-height: calc(100vh - 260px);
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
 }
 
 .log-lines {
   display: grid;
   align-content: start;
-  max-height: calc(100vh - 250px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   border: 1px solid hsl(var(--border));
   border-radius: 20px;

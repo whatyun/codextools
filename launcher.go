@@ -38,10 +38,6 @@ func shouldRunLauncher(args []string) bool {
 func runLauncher(args []string) error {
 	settings := loadSettings()
 	options := parseLaunchRequest(args)
-	appPath := resolveCodexApp(options.appPath)
-	if appPath == "" {
-		appPath = resolveCodexApp(settings.CodexAppPath)
-	}
 	debugPort := options.debugPort
 	if debugPort == 0 {
 		debugPort = 9229
@@ -50,8 +46,30 @@ func runLauncher(args []string) error {
 	if helperPort == 0 {
 		helperPort = 57321
 	}
+	appPath := resolveLaunchableCodexApp(options.appPath)
 	if appPath == "" {
-		err := errors.New("未找到 Codex 安装目录，请先在管理器中设置 Codex App 路径")
+		appPath = resolveLaunchableCodexApp(settings.CodexAppPath)
+	}
+	if appPath == "" && runtime.GOOS == "windows" {
+		writeLaunchRestartingStatus("未找到可直接启动的 Codex.exe，正在自动下载/解包镜像包。", debugPort, helperPort, nil)
+		selected, repairPayload, repairErr := installWindowsCodexMirror(context.Background())
+		if repairErr == nil && selected != "" {
+			appPath = selected
+			settings.CodexAppPath = selected
+			if err := saveSettings(settings); err != nil {
+				appendDiagnosticLog("launcher.codex_app_auto_repair_save_failed", map[string]any{"codex_app": selected, "error": err.Error()})
+			}
+			appendDiagnosticLog("launcher.codex_app_auto_repaired", map[string]any{"codex_app": selected, "repair": repairPayload})
+		} else {
+			detail := map[string]any{"debug_port": debugPort, "helper_port": helperPort, "repair": repairPayload}
+			if repairErr != nil {
+				detail["error"] = repairErr.Error()
+			}
+			appendDiagnosticLog("launcher.codex_app_auto_repair_failed", detail)
+		}
+	}
+	if appPath == "" {
+		err := errors.New("未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；请在修复工具自动下载/解包镜像包，或手动选择解包目录中的 app\\Codex.exe")
 		writeLaunchFailureStatus("启动 Codex 失败："+err.Error(), debugPort, helperPort, nil)
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
@@ -494,9 +512,9 @@ func windowsProtectedMSIXLaunchError(appPath, executable string) error {
 	}
 	appUserModelID := packagedWindowsAppUserModelID(appPath)
 	if appUserModelID != "" {
-		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex（%s），Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“新手引导”安装镜像版 Codex，或在“修复工具”选择可直接执行的 Codex.exe。已跳过：%s", appUserModelID, target)
+		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex（%s），Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“修复工具”自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe。已跳过：%s", appUserModelID, target)
 	}
-	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex，Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“新手引导”安装镜像版 Codex，或在“修复工具”选择可直接执行的 Codex.exe。已跳过：%s", target)
+	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex，Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“修复工具”自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe。已跳过：%s", target)
 }
 
 func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs []string) *windowsPackagedActivation {
@@ -523,7 +541,7 @@ func windowsPackagedExplorerCommand(appUserModelID string, args []string) []stri
 }
 
 func packagedCodexDebugPortError(appUserModelID string, debugPort uint16, method string) error {
-	return fmt.Errorf("%s 已请求激活 Windows Store/MSIX Codex %s，但未检测到调试端口 %d；该安装形态可能不接受 --remote-debugging-port。请在管理工具中选择可直接执行的 Codex.exe，或先安装/修复镜像版 Codex 后重试", method, appUserModelID, debugPort)
+	return fmt.Errorf("%s 已请求激活 Windows Store/MSIX Codex %s，但未检测到调试端口 %d；该安装形态可能不接受 --remote-debugging-port。请在修复工具自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe 后重试", method, appUserModelID, debugPort)
 }
 
 func launchFailureDetail(appPath string, debugPort, helperPort uint16, err error) map[string]any {
@@ -533,7 +551,7 @@ func launchFailureDetail(appPath string, debugPort, helperPort uint16, err error
 		"helper_port":        helperPort,
 		"error":              err.Error(),
 		"cdp_port_available": cdpTargetsAvailable(debugPort, 800*time.Millisecond),
-		"recommended_action": "在管理工具中选择可直接执行的 Codex.exe，或先安装/修复镜像版 Codex；Windows Store/MSIX 版可能无法接收 --remote-debugging-port。",
+		"recommended_action": "在修复工具自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe；Windows Store/MSIX 版不能作为 Codex++ 启动目标。",
 	}
 	if runtime.GOOS == "windows" {
 		if activation := buildWindowsPackagedActivation(appPath, debugPort, nil); activation != nil {
@@ -735,6 +753,24 @@ func safeCommandForLog(command []string) []string {
 
 func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, helperPort uint16) error {
 	err := launch.wait()
+	if cdpTargetsAvailable(debugPort, 1200*time.Millisecond) {
+		status := launchStatus{
+			Status:      "running",
+			Message:     "Codex 主窗口仍在运行，Codex++ helper 继续驻留。",
+			StartedAtMS: uint64(time.Now().UnixMilli()),
+			DebugPort:   &debugPort,
+			HelperPort:  &helperPort,
+			CodexApp:    &appPath,
+		}
+		_ = atomicWriteJSON(latestStatusPath(), status)
+		detail := map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath}
+		if err != nil {
+			detail["child_error"] = err.Error()
+		}
+		appendDiagnosticLog("launcher.child_exited_cdp_still_running", detail)
+		waitForCDPPortClosed(debugPort)
+		err = nil
+	}
 	message := "Codex exited."
 	statusText := "exited"
 	if err != nil {
@@ -752,6 +788,12 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 	_ = atomicWriteJSON(latestStatusPath(), status)
 	appendDiagnosticLog("launcher."+statusText, map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "message": message})
 	return err
+}
+
+func waitForCDPPortClosed(debugPort uint16) {
+	for tcpPortAccepting(debugPort) {
+		time.Sleep(time.Second)
+	}
 }
 
 func helperNeeded(settings backendSettings) bool {

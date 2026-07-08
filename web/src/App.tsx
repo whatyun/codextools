@@ -484,6 +484,10 @@ type SettingsResult = CommandResult<{
   user_scripts: UserScriptInventory;
   envConflicts?: EnvConflict[];
   pendingProviderImport?: ProviderImportRequest | null;
+  codexInstallUrl?: string;
+  codexMirrorLatestReleaseUrl?: string;
+  codexMirrorProjectUrl?: string;
+  repairCandidates?: string[];
 }>;
 
 type SettingsBackfillResult = CommandResult<{
@@ -1420,7 +1424,12 @@ export function App() {
       setSettings(result);
       setSettingsForm(normalized);
       setLaunchForm((current) => ({ ...current, appPath: "" }));
-      showNotice("Codex 程序修复", result.message, result.status);
+      const installUrl = result.codexInstallUrl || result.codexMirrorLatestReleaseUrl || result.codexMirrorProjectUrl;
+      const shouldOpenInstaller = !isSuccessStatus(result.status) && Boolean(installUrl);
+      showNotice("Codex 程序修复", shouldOpenInstaller ? `${result.message} 正在打开手动下载页。` : result.message, result.status);
+      if (shouldOpenInstaller && installUrl) {
+        await openExternalUrl(installUrl);
+      }
       await refreshOverview(true);
       await refreshInstallGuideStatus(true);
     }
@@ -2780,8 +2789,9 @@ function InstallGuideScreen({
   const [selectedProfileId, setSelectedProfileId] = useState(normalized.activeRelayId);
   const guideProfile = normalized.relayProfiles.find((profile) => profile.id === selectedProfileId) || active;
   const platformGuide = platformGuideFor(status);
-  const guideCompleted = installGuideCompletedForCurrentPlatform(status, settings?.settings ?? normalized);
-  const codexInstalled = status?.codexApp.status === "found";
+  const codexDetected = status?.codexApp.status === "found";
+  const codexLaunchReady = status?.codexLaunch?.ready === true;
+  const guideCompleted = installGuideCompletedForCurrentPlatform(status, settings?.settings ?? normalized) && codexLaunchReady;
   const ccsInstalled = status?.ccs.installed === true;
   const importedProviderCount = normalized.relayProfiles.filter((profile) => profile.id.startsWith("ccs-")).length;
 
@@ -2842,7 +2852,7 @@ function InstallGuideScreen({
 
   const guideSteps: Array<{ id: GuideStep; title: string; done: boolean }> = [
     { id: "platform", title: "识别系统", done: !!status },
-    { id: "codex", title: "安装 Codex", done: codexInstalled },
+    { id: "codex", title: "安装 Codex", done: codexLaunchReady },
     { id: "ccs", title: "导入 CCSwitch", done: !ccsInstalled || importedProviderCount > 0 },
     { id: "mode", title: "选择模式", done: selectedMode === active.relayMode && active.id === modeProfile.id },
     { id: "finish", title: "启动 Codex++", done: guideCompleted },
@@ -2859,7 +2869,7 @@ function InstallGuideScreen({
         </div>
         <div className="onboarding-summary">
           <Metric label="系统" value={platformSummary(status)} />
-          <Metric label="Codex" value={codexInstalled ? "已安装" : "未检测到"} />
+          <Metric label="Codex" value={codexLaunchReady ? "可启动" : codexDetected ? "已安装但需解包" : "未检测到"} />
           <Metric label="引导" value={guideCompleted ? `已完成 · ${platformGuide.platformLabel}` : "待完成"} />
           <Metric label="当前模式" value={relayModeLabel(active.relayMode)} />
         </div>
@@ -2903,7 +2913,7 @@ function InstallGuideScreen({
               <GuideCodexStep
                 status={status}
                 platformGuide={platformGuide}
-                installed={codexInstalled}
+                installed={codexLaunchReady}
                 onInstall={openInstall}
                 onChoosePath={(mode) => void actions.chooseCodexAppPath(mode)}
                 onRepair={() => void actions.repairCodexApp()}
@@ -3014,18 +3024,22 @@ function GuideCodexStep({
   const isWindows = status?.platform === "windows";
   const isSupportedDesktop = status?.platform === "windows" || status?.platform === "darwin";
   const launchStatus = status?.codexLaunch;
-  const detectionMessage = status?.codexDetection?.message || (installed ? "已检测到 Codex 应用。" : "自动检测暂未找到 Codex。");
+  const detected = status?.codexApp.status === "found";
+  const needsRepair = detected && !installed;
+  const detectionMessage = status?.codexDetection?.message || (detected ? "已检测到 Codex 应用。" : "自动检测暂未找到 Codex。");
   const detectionHints = status?.codexDetection?.candidates ?? [];
   const executableLabel = launchStatus?.method === "packaged_activation"
     ? launchStatus.appUserModelId || status?.codexApp.appUserModelId || status?.codexDetection?.appUserModelId || "MSIX 应用激活"
     : launchStatus?.executable || status?.codexApp.executable || status?.codexDetection?.executable || "未找到";
+  const primaryAction = isWindows && !installed ? onRepair : onInstall;
+  const primaryLabel = isWindows && !installed ? "自动下载并解包" : platformGuide.installActionLabel;
   return (
     <div className="guide-pane">
       <div className="guide-pane-head">
         {installed ? <CheckCircle2 className="h-5 w-5" /> : <Download className="h-5 w-5" />}
         <div>
-          <h3>{installed ? "Codex 已安装" : platformGuide.installTitle}</h3>
-          <p>{installed ? launchStatus?.message || status?.codexApp.path || detectionMessage : detectionMessage || platformGuide.installDescription}</p>
+          <h3>{installed ? "Codex 可启动" : needsRepair ? "Codex 已安装但需要解包" : platformGuide.installTitle}</h3>
+          <p>{installed || needsRepair ? launchStatus?.message || status?.codexApp.path || detectionMessage : detectionMessage || platformGuide.installDescription}</p>
         </div>
       </div>
       {!installed && isSupportedDesktop ? (
@@ -3042,12 +3056,12 @@ function GuideCodexStep({
       ) : null}
       <div className="install-card">
         <div>
-          <strong>{installed ? "当前 Codex" : platformGuide.installTitle}</strong>
-          <span>{installed ? status?.codexVersion ?? "版本未读取" : installDownloadText(download)}</span>
+          <strong>{detected ? "当前 Codex" : platformGuide.installTitle}</strong>
+          <span>{installed ? status?.codexVersion ?? "版本未读取" : needsRepair ? "MSIX 已安装，但还不能作为 Codex++ 启动目标" : installDownloadText(download)}</span>
         </div>
-        <Button disabled={installed} onClick={onInstall}>
-          <ExternalLink className="h-4 w-4" />
-          {platformGuide.installActionLabel}
+        <Button disabled={installed} onClick={primaryAction}>
+          {isWindows && !installed ? <Wrench className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
+          {primaryLabel}
         </Button>
       </div>
       <div className="guide-facts">
@@ -3087,7 +3101,7 @@ function GuideCodexStep({
         ) : null}
         <Button onClick={onRefresh} variant="secondary">
           <RefreshCw className="h-4 w-4" />
-          我已安装，重新检测
+          重新检测
         </Button>
         <Button disabled={!installed} onClick={onNext}>下一步</Button>
       </Toolbar>
@@ -4084,7 +4098,7 @@ function MaintenanceScreen({
   const isWindows = watcherPlatform === "windows";
   const isMac = watcherPlatform === "darwin";
   const appPathPlaceholder = isWindows
-    ? "选择镜像版 Codex.exe 或解包安装目录"
+    ? "选择解包后的 app\\Codex.exe 或解包目录"
     : isMac
       ? "选择 Codex.app 或所在应用目录"
       : "选择 Codex 应用路径";
@@ -4430,9 +4444,9 @@ function SettingsScreen({
 function LogsScreen({ logs, actions }: { logs: LogsResult | null; actions: Actions }) {
   const lines = splitLogLines(logs?.text ?? "");
   return (
-    <Panel fill>
+    <Panel fill className="support-panel">
       <CardHead title="最近日志" detail={logs?.path ?? ""} />
-      <CardContent>
+      <CardContent className="support-content">
         <div className="log-lines">
           {lines.length ? (
             lines.map((line, index) => (
@@ -4458,9 +4472,9 @@ function LogsScreen({ logs, actions }: { logs: LogsResult | null; actions: Actio
 
 function DiagnosticsScreen({ diagnostics, actions }: { diagnostics: DiagnosticsResult | null; actions: Actions }) {
   return (
-    <Panel fill>
+    <Panel fill className="support-panel">
       <CardHead title="诊断报告" detail="包含版本、路径、设置和平台信息" />
-      <CardContent>
+      <CardContent className="support-content">
         <Textarea className="log-view tall" readOnly value={diagnostics?.report ?? "尚未生成诊断报告。"} />
         <Toolbar>
           <Button onClick={() => void actions.refreshDiagnostics()}>重新生成</Button>
@@ -6309,15 +6323,15 @@ function platformGuideFor(status: InstallGuideStatusResult | null): PlatformGuid
       systemDescription: "Windows 会检查 Codex.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。",
       desktopRuntime: status?.desktopRuntime || "Windows WebView2 桌面窗口",
       desktopRuntimeDescription: "Windows 使用 WebView2 桌面窗口运行管理器。",
-      installTitle: "Windows 镜像 / MSIX 安装包",
-      installActionLabel: "获取最新版安装包",
+      installTitle: "Windows 镜像包解包",
+      installActionLabel: "打开镜像下载页",
       installSourceLabel: "镜像项目",
-      installDescription: "Windows 优先使用镜像项目里的当前架构安装包；已安装但无权限读取时可手动选择。",
-      manualPrimaryLabel: "手动选择 Codex.exe",
+      installDescription: "Windows Store/MSIX 版不能作为 Codex++ 启动目标；请用修复工具自动下载并解包镜像包，或手动选择解包后的 Codex.exe。",
+      manualPrimaryLabel: "选择解包后的 Codex.exe",
       manualPrimaryMode: "file",
-      manualSecondaryLabel: "选择应用目录",
+      manualSecondaryLabel: "选择解包目录",
       manualSecondaryMode: "folder",
-      detectionNote: "不要选择 Program Files\\WindowsApps 包目录；请安装镜像版 Codex，或选择镜像版/解包版里可直接执行的 Codex.exe。",
+      detectionNote: "不要选择 Program Files\\WindowsApps 包目录；请点击“修复 Codex 程序”自动解包镜像包，或选择解包目录中的 app\\Codex.exe。",
       pathHint: "C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe",
       launchTargetLabel: "Codex.exe",
     };

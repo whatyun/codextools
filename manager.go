@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"database/sql"
@@ -244,7 +245,7 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 	case "uninstall_codextools":
 		return s.uninstallCodexTools(args)
 	case "repair_codex_app":
-		return s.repairCodexApp()
+		return s.repairCodexApp(ctx)
 	case "repair_backend":
 		return settingsPayload("后端已修复；Go 管理器当前复用设置文件，命令包装器仍由 Rust core 处理。")
 	case "load_watcher_state":
@@ -339,11 +340,32 @@ func (s *server) loadOverview() commandResult {
 	return ok("概览已加载。", payload)
 }
 
-func (s *server) repairCodexApp() commandResult {
+func (s *server) repairCodexApp(ctx context.Context) commandResult {
 	settings := loadSettings()
 	candidates := codexAppRepairCandidates(settings.CodexAppPath)
+	var mirrorRepair map[string]any
+	mirrorInstalled := false
+	if len(candidates) == 0 && runtime.GOOS == "windows" {
+		selected, repairPayload, err := installWindowsCodexMirror(ctx)
+		mirrorRepair = repairPayload
+		if err == nil && selected != "" {
+			candidates = []string{selected}
+			mirrorInstalled = true
+		} else {
+			payload := settingsPayloadValue(settings)
+			attachCodexMirrorRepairPayload(payload, candidates, mirrorRepair)
+			message := "未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；自动下载/解包镜像版失败"
+			if err != nil {
+				message += "：" + err.Error()
+			}
+			message += "。请手动下载镜像包并解包，然后选择解包目录中的 app\\Codex.exe。"
+			return failed(message, payload)
+		}
+	}
 	if len(candidates) == 0 {
-		return failed("未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；请在新手引导安装镜像版 Codex，或手动选择镜像版/解包版 Codex.exe。", settingsPayloadValue(settings))
+		payload := settingsPayloadValue(settings)
+		attachCodexMirrorRepairPayload(payload, candidates, mirrorRepair)
+		return failed("未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；请下载镜像包并解包，或手动选择解包目录中的 app\\Codex.exe。", payload)
 	}
 	selected := candidates[0]
 	settings.CodexAppPath = selected
@@ -353,7 +375,359 @@ func (s *server) repairCodexApp() commandResult {
 	payload := settingsPayloadValue(loadSettings())
 	payload["codexApp"] = codexPathState(resolveCodexApp(selected))
 	payload["repairCandidates"] = candidates
+	if mirrorRepair != nil {
+		payload["codexMirrorRepair"] = mirrorRepair
+	}
+	if mirrorInstalled {
+		return ok("已下载并解包镜像版 Codex，程序路径已设置为："+selected, payload)
+	}
 	return ok("已修复 Codex 程序路径："+selected, payload)
+}
+
+func attachCodexMirrorRepairPayload(payload map[string]any, candidates []string, mirrorRepair map[string]any) {
+	payload["codexInstallUrl"] = codexAppMirrorReleaseURL
+	payload["codexMirrorLatestReleaseUrl"] = codexAppMirrorReleaseURL
+	payload["codexMirrorProjectUrl"] = codexAppMirrorProjectURL
+	payload["repairCandidates"] = candidates
+	if mirrorRepair != nil {
+		payload["codexMirrorRepair"] = mirrorRepair
+	}
+}
+
+func installWindowsCodexMirror(ctx context.Context) (string, map[string]any, error) {
+	payload := map[string]any{
+		"status":     "checking",
+		"projectUrl": codexAppMirrorProjectURL,
+		"releaseUrl": codexAppMirrorReleaseURL,
+	}
+	if runtime.GOOS != "windows" {
+		payload["status"] = "skipped"
+		return "", payload, errors.New("当前平台不支持自动解包 Windows Codex 镜像")
+	}
+	download := latestCodexDownload(ctx, runtime.GOOS, runtime.GOARCH)
+	payload["codexLatestDownload"] = download
+	payload["releaseUrl"] = codexMirrorLatestReleaseURL(download)
+	downloadURL := stringFromAny(download["downloadUrl"])
+	if stringFromAny(download["status"]) != "available" || downloadURL == "" {
+		message := stringFromAny(download["message"])
+		if message == "" {
+			message = "镜像项目没有返回当前架构的安装包"
+		}
+		payload["status"] = "failed"
+		payload["message"] = message
+		return "", payload, errors.New(message)
+	}
+	payload["downloadUrl"] = downloadURL
+	payload["assetName"] = stringFromAny(download["assetName"])
+	var data []byte
+	if localPackage := existingCodexMirrorPackage(stringFromAny(download["assetName"])); localPackage != "" {
+		payload["packagePath"] = localPackage
+		payload["packageSource"] = "local_downloads"
+		localData, err := os.ReadFile(localPackage)
+		if err == nil {
+			data = localData
+		} else {
+			payload["localPackageError"] = err.Error()
+		}
+	}
+	if len(data) == 0 {
+		payload["packageSource"] = "download"
+		downloadData, err := getBytes(ctx, downloadURL)
+		if err != nil {
+			payload["status"] = "failed"
+			payload["message"] = "下载镜像包失败：" + err.Error()
+			return "", payload, fmt.Errorf("下载镜像包失败：%w", err)
+		}
+		data = downloadData
+	}
+	installRoot := windowsCodexMirrorInstallRoot()
+	packageName := codexMirrorPackageDirName(download)
+	target := filepath.Join(installRoot, packageName)
+	tmp := filepath.Join(installRoot, "."+packageName+".tmp-"+strconv.Itoa(os.Getpid()))
+	payload["installRoot"] = installRoot
+	payload["extractPath"] = target
+	_ = os.RemoveAll(tmp)
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		payload["status"] = "failed"
+		payload["message"] = "创建解包目录失败：" + err.Error()
+		return "", payload, fmt.Errorf("创建解包目录失败：%w", err)
+	}
+	defer os.RemoveAll(tmp)
+	if err := extractCodexMirrorArchive(data, tmp); err != nil {
+		payload["status"] = "failed"
+		payload["message"] = "解包镜像包失败：" + err.Error()
+		return "", payload, fmt.Errorf("解包镜像包失败：%w", err)
+	}
+	if findExtractedCodexAppDir(tmp) == "" {
+		if err := expandNestedCodexMirrorArchive(tmp); err != nil {
+			payload["status"] = "failed"
+			payload["message"] = "解包镜像包后未找到 Codex.exe：" + err.Error()
+			return "", payload, fmt.Errorf("解包镜像包后未找到 Codex.exe：%w", err)
+		}
+	}
+	if appDir := findExtractedCodexAppDir(tmp); appDir == "" {
+		payload["status"] = "failed"
+		payload["message"] = "解包镜像包后未找到 Codex.exe"
+		return "", payload, errors.New("解包镜像包后未找到 Codex.exe")
+	}
+	if err := os.MkdirAll(installRoot, 0o755); err != nil {
+		payload["status"] = "failed"
+		payload["message"] = "创建安装目录失败：" + err.Error()
+		return "", payload, fmt.Errorf("创建安装目录失败：%w", err)
+	}
+	_ = os.RemoveAll(target)
+	if err := os.Rename(tmp, target); err != nil {
+		payload["status"] = "failed"
+		payload["message"] = "写入解包目录失败：" + err.Error()
+		return "", payload, fmt.Errorf("写入解包目录失败：%w", err)
+	}
+	selected := findExtractedCodexAppDir(target)
+	if selected == "" {
+		payload["status"] = "failed"
+		payload["message"] = "写入解包目录后未找到 Codex.exe"
+		return "", payload, errors.New("写入解包目录后未找到 Codex.exe")
+	}
+	if !windowsCodexPathSupportsDirectLaunch(selected) {
+		payload["status"] = "failed"
+		payload["message"] = "解包后的 Codex.exe 仍不可直接启动"
+		return "", payload, errors.New("解包后的 Codex.exe 仍不可直接启动")
+	}
+	payload["status"] = "installed"
+	payload["message"] = "已下载并解包镜像版 Codex。"
+	payload["selectedPath"] = selected
+	payload["executable"] = buildCodexExecutable(selected)
+	return selected, payload, nil
+}
+
+func windowsCodexMirrorInstallRoot() string {
+	for _, root := range []string{os.Getenv("LOCALAPPDATA"), filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")} {
+		root = strings.TrimSpace(root)
+		if root != "" {
+			return filepath.Join(root, "CodexTools", "CodexAppMirror")
+		}
+	}
+	return filepath.Join(stateDir(), "codex-app-mirror")
+}
+
+func existingCodexMirrorPackage(assetName string) string {
+	name := filepath.Base(strings.TrimSpace(assetName))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	candidates := []string{filepath.Join(downloadsDir(), name)}
+	lowerName := strings.ToLower(name)
+	for _, ext := range []string{".msix", ".msixbundle", ".appx", ".appxbundle", ".zip"} {
+		if strings.HasSuffix(lowerName, ext) {
+			base := name[:len(name)-len(ext)]
+			titleExt := ext
+			if len(ext) > 2 {
+				titleExt = "." + strings.ToUpper(ext[1:2]) + ext[2:]
+			}
+			candidates = append(candidates, filepath.Join(downloadsDir(), base+strings.ToLower(ext)))
+			candidates = append(candidates, filepath.Join(downloadsDir(), base+titleExt))
+		}
+	}
+	for _, candidate := range candidates {
+		if fileExists(candidate) && !isDir(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func codexMirrorPackageDirName(download map[string]any) string {
+	for _, key := range []string{"assetName", "tagName", "releaseName"} {
+		if name := safePathComponent(stringFromAny(download[key])); name != "" {
+			name = trimCodexArchiveExtension(name)
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return "codex-app-mirror"
+}
+
+func safePathComponent(value string) string {
+	value = strings.TrimSpace(filepath.Base(value))
+	var out strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			out.WriteRune(r)
+		case r == '.', r == '-', r == '_':
+			out.WriteRune(r)
+		default:
+			out.WriteByte('-')
+		}
+	}
+	return strings.Trim(out.String(), ".- ")
+}
+
+func trimCodexArchiveExtension(name string) string {
+	for _, ext := range []string{".msixbundle", ".appxbundle", ".msix", ".appx", ".zip"} {
+		if strings.HasSuffix(strings.ToLower(name), ext) {
+			return name[:len(name)-len(ext)]
+		}
+	}
+	return name
+}
+
+func extractCodexMirrorArchive(data []byte, dest string) error {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return err
+	}
+	cleanDest := filepath.Clean(dest)
+	for _, entry := range reader.File {
+		name := strings.ReplaceAll(entry.Name, `\`, `/`)
+		if !safeArchiveEntryName(name) {
+			return fmt.Errorf("压缩包包含不安全路径：%s", entry.Name)
+		}
+		cleanName := pathpkg.Clean("/" + name)
+		cleanName = strings.TrimPrefix(cleanName, "/")
+		if cleanName == "." || cleanName == "" {
+			continue
+		}
+		target := filepath.Join(cleanDest, filepath.FromSlash(cleanName))
+		if !pathInsideDir(cleanDest, target) {
+			return fmt.Errorf("压缩包路径越界：%s", entry.Name)
+		}
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		src, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		mode := entry.FileInfo().Mode()
+		if mode == 0 {
+			mode = 0o644
+		}
+		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+		if err != nil {
+			_ = src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(dst, src)
+		closeErr := dst.Close()
+		_ = src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
+func safeArchiveEntryName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || pathpkg.IsAbs(name) || strings.Contains(name, ":") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func pathInsideDir(dir, path string) bool {
+	dir = filepath.Clean(dir)
+	path = filepath.Clean(path)
+	if strings.EqualFold(dir, path) {
+		return true
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
+}
+
+func expandNestedCodexMirrorArchive(root string) error {
+	nested := findNestedCodexMirrorArchive(root)
+	if nested == "" {
+		return errors.New("没有可继续解包的嵌套 MSIX/APPX/ZIP")
+	}
+	data, err := os.ReadFile(nested)
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(root, "_codex_app")
+	_ = os.RemoveAll(dest)
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	return extractCodexMirrorArchive(data, dest)
+}
+
+func findNestedCodexMirrorArchive(root string) string {
+	var matches []string
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		lower := strings.ToLower(entry.Name())
+		if strings.HasSuffix(lower, ".msix") || strings.HasSuffix(lower, ".msixbundle") || strings.HasSuffix(lower, ".appx") || strings.HasSuffix(lower, ".appxbundle") || strings.HasSuffix(lower, ".zip") {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	sort.SliceStable(matches, func(i, j int) bool {
+		return codexAssetScore(filepath.Base(matches[i]), runtime.GOARCH) > codexAssetScore(filepath.Base(matches[j]), runtime.GOARCH)
+	})
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
+func findExtractedCodexAppDir(root string) string {
+	var matches []string
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(entry.Name(), "Codex.exe") || strings.EqualFold(entry.Name(), "codex.exe") {
+			matches = append(matches, filepath.Dir(path))
+		}
+		return nil
+	})
+	sort.SliceStable(matches, func(i, j int) bool {
+		return extractedCodexAppDirScore(root, matches[i]) > extractedCodexAppDirScore(root, matches[j])
+	})
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
+func extractedCodexAppDirScore(root, dir string) int {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		rel = dir
+	}
+	lower := strings.ToLower(filepath.ToSlash(rel))
+	score := 1000 - len(lower)
+	if strings.HasSuffix(lower, "/app") || lower == "app" {
+		score += 300
+	}
+	if strings.Contains(lower, "/vfs/programfilesx64/") {
+		score += 100
+	}
+	if strings.Contains(lower, "/program files/windowsapps/") {
+		score -= 500
+	}
+	return score
 }
 
 func codexAppRepairCandidates(saved string) []string {
@@ -394,6 +768,17 @@ func codexAppRepairCandidates(saved string) []string {
 		add(installed)
 	}
 	return candidates
+}
+
+func resolveLaunchableCodexApp(saved string) string {
+	if runtime.GOOS != "windows" {
+		return resolveCodexApp(saved)
+	}
+	candidates := codexAppRepairCandidates(saved)
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
 }
 
 func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
@@ -496,15 +881,15 @@ func installGuidePlatformGuide(goos string) map[string]any {
 		guide["title"] = "Windows 新手引导"
 		guide["systemDescription"] = "Windows 会检查 Codex.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。"
 		guide["desktopRuntimeDescription"] = "Windows 使用 WebView2 桌面窗口运行管理器。"
-		guide["installTitle"] = "Windows 镜像 / MSIX 安装包"
-		guide["installActionLabel"] = "获取最新版安装包"
+		guide["installTitle"] = "Windows 镜像包解包"
+		guide["installActionLabel"] = "打开镜像下载页"
 		guide["installSourceLabel"] = "镜像项目"
-		guide["installDescription"] = "Windows 优先使用镜像项目里的当前架构安装包；已安装但无权限读取时可手动选择。"
-		guide["manualPrimaryLabel"] = "手动选择 Codex.exe"
+		guide["installDescription"] = "Windows Store/MSIX 版不能作为 Codex++ 启动目标；请用修复工具自动下载并解包镜像包，或手动选择解包后的 Codex.exe。"
+		guide["manualPrimaryLabel"] = "选择解包后的 Codex.exe"
 		guide["manualPrimaryMode"] = "file"
-		guide["manualSecondaryLabel"] = "选择应用目录"
+		guide["manualSecondaryLabel"] = "选择解包目录"
 		guide["manualSecondaryMode"] = "folder"
-		guide["detectionNote"] = "不要选择 Program Files\\WindowsApps 包目录；请安装镜像版 Codex，或选择镜像版/解包版里可直接执行的 Codex.exe。"
+		guide["detectionNote"] = "不要选择 Program Files\\WindowsApps 包目录；请点击“修复 Codex 程序”自动解包镜像包，或选择解包目录中的 app\\Codex.exe。"
 		guide["pathHint"] = `C:\Users\你\AppData\Local\Programs\Codex\Codex.exe`
 		guide["launchMethodLabel"] = "启动方式"
 		guide["launchTargetLabel"] = "Codex.exe"
@@ -652,7 +1037,7 @@ func selectCodexMirrorAsset(assets []codexAppMirrorAsset, goos, goarch string) (
 		}
 		switch goos {
 		case "windows":
-			if strings.HasSuffix(name, ".msix") || strings.HasSuffix(name, ".appx") || strings.Contains(value, "windows") || strings.Contains(value, "win") {
+			if strings.HasSuffix(name, ".msix") || strings.HasSuffix(name, ".msixbundle") || strings.HasSuffix(name, ".appx") || strings.HasSuffix(name, ".appxbundle") || strings.Contains(value, "windows") || strings.Contains(value, "win") {
 				candidates = append(candidates, asset)
 			}
 		case "darwin":
@@ -683,7 +1068,7 @@ func codexAssetScore(name, goarch string) int {
 			score += 20
 		}
 	}
-	if strings.HasSuffix(lower, ".msix") || strings.HasSuffix(lower, ".dmg") {
+	if strings.HasSuffix(lower, ".msix") || strings.HasSuffix(lower, ".msixbundle") || strings.HasSuffix(lower, ".appx") || strings.HasSuffix(lower, ".appxbundle") || strings.HasSuffix(lower, ".dmg") {
 		score += 10
 	}
 	if strings.Contains(lower, "sha256") || strings.Contains(lower, "manifest") || strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".txt") || strings.HasSuffix(lower, ".json") {
@@ -1142,7 +1527,7 @@ func codexDetectionPayload(saved, resolved string) map[string]any {
 		}
 		if runtime.GOOS == "windows" && isWindowsProtectedCodexDirectLaunchPath(resolved, stringFromAny(payload["executable"])) {
 			payload["status"] = "limited"
-			payload["message"] = "已检测到 Windows Store/MSIX 版 Codex，但 Program Files\\WindowsApps 包目录不能作为 Codex++ 的直接启动路径。请安装镜像版 Codex，或在管理工具中选择可直接执行的 Codex.exe。"
+			payload["message"] = "已检测到 Windows Store/MSIX 版 Codex，但 Program Files\\WindowsApps 包目录不能作为 Codex++ 的直接启动路径。请用修复工具自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe。"
 		}
 		return payload
 	}
@@ -1183,7 +1568,7 @@ func codexLaunchPayload(appPath string) map[string]any {
 			if protectedPackage {
 				payload["method"] = "msix_unsupported"
 				payload["methodLabel"] = "MSIX 不支持"
-				payload["message"] = "检测到 Windows Store/MSIX 版 Codex；该包目录不能直接接收调试端口参数，请安装镜像版 Codex 或选择可直接执行的 Codex.exe。"
+				payload["message"] = "检测到 Windows Store/MSIX 版 Codex；该包目录不能直接接收调试端口参数，请用修复工具自动解包镜像包，或选择解包目录中的 app\\Codex.exe。"
 			} else {
 				payload["method"] = "packaged_activation"
 				payload["methodLabel"] = "MSIX 应用激活"

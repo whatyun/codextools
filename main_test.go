@@ -1,18 +1,24 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func contextWithCanceledNetwork() context.Context {
@@ -112,6 +118,66 @@ func TestWriteLaunchRestartingStatus(t *testing.T) {
 	}
 }
 
+func TestReapLauncherChildKeepsBackendAliveWhileCDPPortIsOpen(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/json" {
+			http.NotFound(w, req)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"codex","type":"page","url":"app://-/index.html","title":"Codex","webSocketDebuggerUrl":"ws://127.0.0.1/devtools/page/codex"}]`))
+	}))
+	parsed, err := url.Parse(cdp.URL)
+	if err != nil {
+		t.Fatalf("parse cdp URL failed: %v", err)
+	}
+	portValue, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatalf("parse cdp port failed: %v", err)
+	}
+	debugPort := uint16(portValue)
+	helperPort := uint16(57321)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- reapLauncherChild(fakeCodexLaunch{}, filepath.Join(home, "Codex.exe"), debugPort, helperPort)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("launcher reaper should keep running while CDP port is open, returned %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	cdp.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("launcher reaper returned error after CDP close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("launcher reaper should return after CDP port closes")
+	}
+
+	var status launchStatus
+	if err := readJSON(latestStatusPath(), &status); err != nil {
+		t.Fatalf("read latest status failed: %v", err)
+	}
+	if status.Status != "exited" {
+		t.Fatalf("final status should be exited after CDP closes, got %#v", status)
+	}
+}
+
+type fakeCodexLaunch struct{}
+
+func (fakeCodexLaunch) wait() error { return nil }
+
+func (fakeCodexLaunch) terminate() error { return nil }
+
+func (fakeCodexLaunch) logPayload() map[string]any { return map[string]any{"type": "fake"} }
+
 func TestProviderSwitchForcesCompleteEnhancementMode(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
 	if err != nil {
@@ -148,7 +214,8 @@ func TestWindowsUIDoesNotSuggestWindowsAppsLaunchPath(t *testing.T) {
 	for _, expected := range []string{
 		`不要选择 Program Files\\WindowsApps 包目录`,
 		`C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe`,
-		`选择镜像版 Codex.exe 或解包安装目录`,
+		`选择解包后的 app\\Codex.exe 或解包目录`,
+		`自动解包镜像包`,
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("Windows UI should guide users to runnable mirror Codex.exe; missing %q", expected)
@@ -237,6 +304,8 @@ func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
 		"directLaunchBlocked",
 		"isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])",
 		"windowsProtectedMSIXLaunchError(appPath, command[0])",
+		"installWindowsCodexMirror(context.Background())",
+		"launcher.codex_app_auto_repaired",
 		"Program Files\\\\WindowsApps 包目录不能作为 Codex++ 启动目标",
 	} {
 		if !strings.Contains(source, expected) {
@@ -265,6 +334,7 @@ func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
 		`if runtime.GOOS == "windows" && !windowsCodexPathSupportsDirectLaunch(path) {`,
 		`MSIX 版 Codex 不能作为 Codex++ 启动目标`,
 		`不要选择 Program Files\\WindowsApps 包目录`,
+		`installWindowsCodexMirror(ctx)`,
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("Windows manager should skip unsupported MSIX paths; missing %q", expected)
@@ -348,6 +418,86 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 	} {
 		if strings.Contains(rendererInjectScript, forbidden) {
 			t.Fatalf("renderer injection should not include ads or recommendations; found %q", forbidden)
+		}
+	}
+}
+
+func TestRendererInjectionUsesHTTPHelperFallbackForBackendRoutes(t *testing.T) {
+	for _, expected := range []string{
+		`async function fetchFromHelper(path, payload)`,
+		`const fallback = await fetchFromHelperOrFailure(path, payload);`,
+		`backend_helper_and_bridge_missing`,
+		`backend_helper_failed_using_bridge`,
+		`return await bridgeWithTimeout(path, payload`,
+	} {
+		if !strings.Contains(rendererInjectScript, expected) {
+			t.Fatalf("renderer injection should use HTTP helper fallback for backend routes; missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		`桥接不可用，请重启启动器`,
+		`bridge_missing_for_route`,
+	} {
+		if strings.Contains(rendererInjectScript, forbidden) {
+			t.Fatalf("renderer injection should not fail non-status routes only because CDP bridge is missing; found %q", forbidden)
+		}
+	}
+}
+
+func TestHelperHTTPServesBridgeBackendRoutes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runtime := &launcherRuntime{settings: defaultSettings()}
+
+	for _, path := range []string{"/backend/status", "/settings/get", "/user-scripts/list"} {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:57321"+path, strings.NewReader(`{}`))
+		rec := httptest.NewRecorder()
+		runtime.handleHelperHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s should be served by helper backend route, got HTTP %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("%s helper response should be JSON: %v body=%s", path, err, rec.Body.String())
+		}
+		if stringFromAny(payload["status"]) == "failed" {
+			t.Fatalf("%s helper route should not fail: %#v", path, payload)
+		}
+		if stringFromAny(payload["transport"]) != "http-helper" {
+			t.Fatalf("%s helper route should mark http-helper transport: %#v", path, payload)
+		}
+	}
+}
+
+func TestSupportScreensUseStableToolbarLayout(t *testing.T) {
+	appSource, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
+	if err != nil {
+		t.Fatalf("read App.tsx failed: %v", err)
+	}
+	cssSource, err := os.ReadFile(filepath.Join("web", "src", "styles.css"))
+	if err != nil {
+		t.Fatalf("read styles.css failed: %v", err)
+	}
+	app := string(appSource)
+	css := string(cssSource)
+	for _, expected := range []string{
+		`<Panel fill className="support-panel">`,
+		`<CardContent className="support-content">`,
+	} {
+		if !strings.Contains(app, expected) {
+			t.Fatalf("support screens should use stable support layout; missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		`.support-panel`,
+		`flex-direction: column;`,
+		`.support-content .toolbar`,
+		`.log-view.tall`,
+		`resize: none;`,
+	} {
+		if !strings.Contains(css, expected) {
+			t.Fatalf("support screen CSS should keep log/diagnostic toolbar stable; missing %q", expected)
 		}
 	}
 }
@@ -2459,6 +2609,25 @@ func writeTestFile(t *testing.T, path, contents string) {
 	}
 }
 
+func testZipArchive(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	for name, contents := range files {
+		entry, err := writer.Create(name)
+		if err != nil {
+			t.Fatalf("failed to create zip entry: %v", err)
+		}
+		if _, err := entry.Write([]byte(contents)); err != nil {
+			t.Fatalf("failed to write zip entry: %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close zip writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
 func stubCodexPluginCommands(t *testing.T, failures map[string]error, observers ...func([]string)) {
 	t.Helper()
 	original := runCodexPluginCommand
@@ -2865,18 +3034,39 @@ func TestProviderSyncRestoresMissingThreadRowsFromRollouts(t *testing.T) {
 	}
 }
 
-func TestCodexLaunchPayloadPrefersDirectExecutableWhenReadable(t *testing.T) {
+func TestCodexLaunchPayloadRejectsProtectedWindowsAppsEvenWhenReadable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows protected package handling only applies on Windows")
+	}
+	appDir := filepath.Join(t.TempDir(), "Program Files", "WindowsApps", "OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
+	exe := filepath.Join(appDir, "Codex.exe")
+	writeTestFile(t, exe, "binary")
+
+	payload := codexLaunchPayload(appDir)
+
+	if boolFromAny(payload["ready"]) {
+		t.Fatalf("protected WindowsApps package should not be launch-ready: %#v", payload)
+	}
+	if got := stringFromAny(payload["method"]); got != "msix_unsupported" {
+		t.Fatalf("protected WindowsApps package should be rejected, got %q payload=%#v", got, payload)
+	}
+	if got := stringFromAny(payload["executable"]); got != exe {
+		t.Fatalf("executable mismatch: %q", got)
+	}
+}
+
+func TestCodexLaunchPayloadAcceptsUnpackedCodexExecutable(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows executable preference only applies on Windows")
 	}
-	appDir := filepath.Join(t.TempDir(), "OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
+	appDir := filepath.Join(t.TempDir(), "CodexAppMirror", "OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
 	exe := filepath.Join(appDir, "Codex.exe")
 	writeTestFile(t, exe, "binary")
 
 	payload := codexLaunchPayload(appDir)
 
 	if got := stringFromAny(payload["method"]); got != "executable" {
-		t.Fatalf("readable MSIX app dir should prefer direct executable launch: %#v", payload)
+		t.Fatalf("unpacked Codex app dir should prefer direct executable launch: %#v", payload)
 	}
 	if got := stringFromAny(payload["executable"]); got != exe {
 		t.Fatalf("executable mismatch: %q", got)
@@ -2924,7 +3114,7 @@ func TestLaunchFailureDetailIncludesRecommendedAction(t *testing.T) {
 	}
 }
 
-func TestCodexLaunchPayloadUsesPackagedActivationShape(t *testing.T) {
+func TestCodexLaunchPayloadRejectsProtectedPackagedActivationShape(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("packaged activation is only used on Windows")
 	}
@@ -2932,10 +3122,10 @@ func TestCodexLaunchPayloadUsesPackagedActivationShape(t *testing.T) {
 
 	payload := codexLaunchPayload(path)
 
-	if !boolFromAny(payload["ready"]) {
-		t.Fatalf("packaged app should be launch-ready: %#v", payload)
+	if boolFromAny(payload["ready"]) {
+		t.Fatalf("protected packaged app should not be launch-ready: %#v", payload)
 	}
-	if got := stringFromAny(payload["method"]); got != "packaged_activation" {
+	if got := stringFromAny(payload["method"]); got != "msix_unsupported" {
 		t.Fatalf("launch method mismatch: %q", got)
 	}
 	if got := stringFromAny(payload["appUserModelId"]); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
@@ -2959,6 +3149,51 @@ func TestFindLatestWindowsCodexAppDirPrefersHighestVersion(t *testing.T) {
 
 	if got := findLatestWindowsCodexAppDir(root); got != newApp {
 		t.Fatalf("latest app dir mismatch: %q", got)
+	}
+}
+
+func TestSelectCodexMirrorAssetPrefersMSIXBundleForWindows(t *testing.T) {
+	asset, ok := selectCodexMirrorAsset([]codexAppMirrorAsset{
+		{Name: "codex-windows-arm64.msixbundle", BrowserDownloadURL: "https://example.com/arm64.msixbundle"},
+		{Name: "codex-windows-x64.msixbundle", BrowserDownloadURL: "https://example.com/x64.msixbundle"},
+		{Name: "codex-windows-x64.sha256.txt", BrowserDownloadURL: "https://example.com/x64.sha256.txt"},
+	}, "windows", "amd64")
+
+	if !ok {
+		t.Fatal("expected a matching Codex mirror asset")
+	}
+	if asset.Name != "codex-windows-x64.msixbundle" {
+		t.Fatalf("selected wrong asset: %q", asset.Name)
+	}
+}
+
+func TestExtractCodexMirrorArchiveFindsAppExecutable(t *testing.T) {
+	root := t.TempDir()
+	data := testZipArchive(t, map[string]string{
+		"OpenAI.Codex/app/Codex.exe": "binary",
+		"OpenAI.Codex/readme.txt":    "readme",
+	})
+
+	if err := extractCodexMirrorArchive(data, root); err != nil {
+		t.Fatalf("extract mirror archive failed: %v", err)
+	}
+	want := filepath.Join(root, "OpenAI.Codex", "app")
+	if got := findExtractedCodexAppDir(root); got != want {
+		t.Fatalf("extracted app dir mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestExtractCodexMirrorArchiveRejectsUnsafePaths(t *testing.T) {
+	root := t.TempDir()
+	data := testZipArchive(t, map[string]string{
+		"../Codex.exe": "binary",
+	})
+
+	if err := extractCodexMirrorArchive(data, root); err == nil {
+		t.Fatal("extract mirror archive should reject unsafe paths")
+	}
+	if fileExists(filepath.Join(root, "..", "Codex.exe")) {
+		t.Fatal("unsafe archive path should not be written")
 	}
 }
 

@@ -102,9 +102,15 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 		"body_bytes": len(body),
 		"remote":     req.RemoteAddr,
 	})
+	if backendRouteKnown(req.URL.Path) {
+		payload := json.RawMessage(body)
+		if len(payload) == 0 {
+			payload = json.RawMessage(`{}`)
+		}
+		writeHelperJSON(w, http.StatusOK, r.handleHelperBackendRequest(req.URL.Path, payload))
+		return
+	}
 	switch req.URL.Path {
-	case "/backend/status", "/backend/repair":
-		writeHelperJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "后端已连接", "version": version, "transport": "http-helper"})
 	case "/overlay/image":
 		if req.Method != http.MethodGet {
 			writeHelperJSON(w, http.StatusMethodNotAllowed, map[string]any{"status": "failed", "message": "图片覆盖层只支持 GET"})
@@ -121,22 +127,36 @@ func (r *launcherRuntime) handleHelperHTTP(w http.ResponseWriter, req *http.Requ
 		r.writeAppServerStatus(w, req)
 	case "/app-server/rpc", "/app-server/ws":
 		r.proxyAppServerWebSocket(w, req)
-	case "/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
-		var payload map[string]any
-		_ = json.Unmarshal(body, &payload)
-		writeHelperJSON(w, http.StatusOK, handleSessionDataRoute(req.URL.Path, payload))
-	case "/diagnostics/log":
-		payload := json.RawMessage(body)
-		if len(payload) == 0 {
-			payload = json.RawMessage(`{}`)
-		}
-		r.logRendererDiagnostic(payload)
-		writeHelperJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "日志已记录"})
 	case "/v1/responses", "/responses", "/v1/responses/compact", "/responses/compact", "/v1/models", "/models":
 		r.forwardRelayProxy(w, req, body)
 	default:
 		writeHelperJSON(w, http.StatusNotFound, map[string]any{"status": "failed", "message": "未知后端路径"})
 	}
+}
+
+func backendRouteKnown(path string) bool {
+	switch path {
+	case "/backend/status", "/backend/repair",
+		"/settings/get", "/settings/set",
+		"/diagnostics/log",
+		"/user-scripts/list", "/user-scripts/set-enabled", "/user-scripts/set-script-enabled", "/user-scripts/reload", "/user-scripts/delete",
+		"/devtools/open", "/manager/open",
+		"/codex-model-catalog", "/codex-config-model",
+		"/zed-remote/status", "/zed-remote/resolve-host", "/zed-remote/fallback-request", "/zed-remote/open", "/zed-remote/projects", "/zed-remote/remember-project", "/zed-remote/forget-project",
+		"/upstream-worktree/status", "/upstream-worktree/defaults", "/upstream-worktree/prepare", "/upstream-worktree/create",
+		"/delete", "/undo", "/archived-thread", "/move-thread-workspace", "/move-thread-projectless", "/export-markdown", "/thread-sort-key", "/thread-sort-keys":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *launcherRuntime) handleHelperBackendRequest(path string, payload json.RawMessage) map[string]any {
+	result := r.handleBridgeRequest(path, payload)
+	if _, ok := result["transport"]; !ok {
+		result["transport"] = "http-helper"
+	}
+	return result
 }
 
 func (r *launcherRuntime) writeMobilePage(w http.ResponseWriter, req *http.Request) {

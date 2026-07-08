@@ -3752,87 +3752,86 @@
   }
 
   async function postJson(path, payload) {
-    if (!window.__codexSessionDeleteBridge) {
-      if (path === "/backend/status" || path === "/backend/repair") {
-        try {
-          const response = await fetch(`${helperBase}${path}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload || {}),
-          });
-          return await response.json();
-        } catch (error) {
-          return { status: "failed", message: "未连接" };
-        }
-      }
-      sendCodexPlusDiagnostic("bridge_missing_for_route", { path });
-      return { status: "failed", message: "桥接不可用，请重启启动器" };
-    }
-    function bridgeWithBackendTimeout(path, payload) {
-      return Promise.race([
-        window.__codexSessionDeleteBridge(path, payload),
-        new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "后端检查超时", timeout: true }), 2000)),
-      ]);
-    }
-    async function fetchBackendStatusFromHelper(path, payload) {
-      try {
-        const response = await fetch(`${helperBase}${path}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload || {}),
-        });
-        return await response.json();
-      } catch (error) {
-        return { status: "failed", message: "未连接" };
-      }
-    }
-    try {
-      if (path === "/backend/status" || path === "/backend/repair") {
-        const result = await bridgeWithBackendTimeout(path, payload);
-        if (result?.status === "ok") return result;
-        if (result?.timeout) sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
-        const fallback = await fetchBackendStatusFromHelper(path, payload);
-        if (fallback?.status === "ok") {
-          sendCodexPlusDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
-            path,
-            httpStatus: 200,
-            responseStatus: fallback.status || "",
-          });
-          return fallback;
-        }
-        sendCodexPlusDiagnostic("backend_status_bridge_and_http_failed", {
-          path,
-          errorName: "",
-          errorMessage: "",
-        });
-        return fallback;
-      }
-      return await window.__codexSessionDeleteBridge(path, payload);
-    } catch (error) {
-      sendCodexPlusDiagnostic("bridge_call_failed", {
-        path,
-        errorName: error?.name || "",
-        errorMessage: error?.message || String(error),
+    async function fetchFromHelper(path, payload) {
+      const response = await fetch(`${helperBase}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
       });
-      if (path === "/backend/status" || path === "/backend/repair") {
-        const fallback = await fetchBackendStatusFromHelper(path, payload);
-        if (fallback?.status === "ok") {
-          sendCodexPlusDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
-            path,
-            httpStatus: 200,
-            responseStatus: fallback.status || "",
-          });
-          return fallback;
-        }
-        sendCodexPlusDiagnostic("backend_status_bridge_and_http_failed", {
-          path,
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return {
+          status: "failed",
+          message: result?.message || `HTTP ${response.status}`,
+          httpStatus: response.status,
+        };
+      }
+      return result;
+    }
+    async function fetchFromHelperOrFailure(path, payload) {
+      try {
+        return await fetchFromHelper(path, payload);
+      } catch (error) {
+        return {
+          status: "failed",
+          message: "本地 helper 未连接",
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
-        });
+        };
+      }
+    }
+    function bridgeWithTimeout(path, payload, timeoutMs = 4000) {
+      return Promise.race([
+        window.__codexSessionDeleteBridge(path, payload),
+        new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "后端桥接超时", timeout: true }), timeoutMs)),
+      ]);
+    }
+    if (!window.__codexSessionDeleteBridge) {
+      const fallback = await fetchFromHelperOrFailure(path, payload);
+      if (fallback?.status !== "failed" || path === "/backend/status" || path === "/backend/repair" || !fallback?.httpStatus) {
         return fallback;
       }
-      throw error;
+      sendCodexPlusDiagnostic("backend_helper_and_bridge_missing", {
+        path,
+        message: fallback?.message || "",
+        errorName: fallback?.errorName || "",
+        errorMessage: fallback?.errorMessage || "",
+      });
+      return { status: "failed", message: "本地 helper 未连接，请重启 Codex++" };
     }
+    try {
+      const helperResult = await fetchFromHelper(path, payload);
+      if (helperResult?.status !== "failed" || path === "/backend/status" || path === "/backend/repair" || !helperResult?.httpStatus) {
+        return helperResult;
+      }
+      sendCodexPlusDiagnostic("backend_helper_returned_failed_using_bridge", {
+        path,
+        httpStatus: helperResult?.httpStatus || "",
+        message: helperResult?.message || "",
+      });
+    } catch (helperError) {
+      sendCodexPlusDiagnostic("backend_helper_failed_using_bridge", {
+        path,
+        errorName: helperError?.name || "",
+        errorMessage: helperError?.message || String(helperError),
+      });
+      try {
+        const bridgeResult = await bridgeWithTimeout(path, payload, path === "/backend/status" || path === "/backend/repair" ? 2000 : 4000);
+        if (bridgeResult?.timeout) sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
+        return bridgeResult;
+      } catch (bridgeError) {
+        sendCodexPlusDiagnostic("backend_bridge_call_failed", {
+          path,
+          errorName: bridgeError?.name || "",
+          errorMessage: bridgeError?.message || String(bridgeError),
+        });
+        return {
+          status: "failed",
+          message: path === "/backend/status" || path === "/backend/repair" ? "未连接" : "本地 helper 和桥接都不可用，请重启 Codex++",
+        };
+      }
+    }
+    return await bridgeWithTimeout(path, payload, path === "/backend/status" || path === "/backend/repair" ? 2000 : 4000);
   }
 
   function downloadMarkdown(filename, markdown) {
