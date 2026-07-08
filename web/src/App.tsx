@@ -4084,11 +4084,11 @@ function MaintenanceScreen({
   const isWindows = watcherPlatform === "windows";
   const isMac = watcherPlatform === "darwin";
   const appPathPlaceholder = isWindows
-    ? "选择 Codex.exe、app 目录或安装解包目录"
+    ? "选择镜像版 Codex.exe 或解包安装目录"
     : isMac
       ? "选择 Codex.app 或所在应用目录"
       : "选择 Codex 应用路径";
-  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "例如 C:\\Program Files\\WindowsApps\\OpenAI.Codex...\\app" : "/Applications/Codex.app");
+  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "例如 C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe" : "/Applications/Codex.app");
   return (
     <>
       <Panel>
@@ -6317,9 +6317,9 @@ function platformGuideFor(status: InstallGuideStatusResult | null): PlatformGuid
       manualPrimaryMode: "file",
       manualSecondaryLabel: "选择应用目录",
       manualSecondaryMode: "folder",
-      detectionNote: "Windows 的 Microsoft Store / MSIX 安装目录可能限制读取权限。已安装但未识别时，选择 Codex.exe、app 目录或安装解包目录即可。",
-      pathHint: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_...\\app",
-      launchTargetLabel: "Codex.exe / AppUserModelID",
+      detectionNote: "不要选择 Program Files\\WindowsApps 包目录；请安装镜像版 Codex，或选择镜像版/解包版里可直接执行的 Codex.exe。",
+      pathHint: "C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe",
+      launchTargetLabel: "Codex.exe",
     };
   }
   return { ...base, unsupported: true };

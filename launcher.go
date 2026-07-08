@@ -435,6 +435,9 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 	command := buildCodexLaunchCommandForSettings(appPath, debugPort, settings.CodexExtraArgs, settings)
 	if runtime.GOOS == "windows" {
 		directLaunchBlocked := len(command) > 0 && isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])
+		if directLaunchBlocked {
+			return nil, windowsProtectedMSIXLaunchError(appPath, command[0])
+		}
 		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) && !directLaunchBlocked {
 			handle, err := startCodexProcess(command)
 			if err == nil {
@@ -461,9 +464,6 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 				})
 				return nil, err
 			}
-			if directLaunchBlocked {
-				return nil, fmt.Errorf("MSIX 激活 %s 失败：%v；已跳过直接启动 %s，因为 Program Files\\WindowsApps 包目录会被 Windows 拒绝直接执行。请安装镜像版 Codex，或在管理工具中选择可直接执行的 Codex.exe", activation.appUserModelID, activationErr, command[0])
-			}
 			if len(command) == 0 || strings.TrimSpace(command[0]) == "" || !fileExists(command[0]) {
 				return nil, fmt.Errorf("无法激活 Windows Codex 应用 %s：%w；未找到可直接执行的 Codex.exe，已跳过 explorer 兜底以避免把调试参数作为网页打开", activation.appUserModelID, activationErr)
 			}
@@ -485,6 +485,18 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 		return nil, err
 	}
 	return handle, nil
+}
+
+func windowsProtectedMSIXLaunchError(appPath, executable string) error {
+	target := strings.TrimSpace(executable)
+	if target == "" {
+		target = strings.TrimSpace(appPath)
+	}
+	appUserModelID := packagedWindowsAppUserModelID(appPath)
+	if appUserModelID != "" {
+		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex（%s），Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“新手引导”安装镜像版 Codex，或在“修复工具”选择可直接执行的 Codex.exe。已跳过：%s", appUserModelID, target)
+	}
+	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex，Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“新手引导”安装镜像版 Codex，或在“修复工具”选择可直接执行的 Codex.exe。已跳过：%s", target)
 }
 
 func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs []string) *windowsPackagedActivation {

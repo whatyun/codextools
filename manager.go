@@ -343,7 +343,7 @@ func (s *server) repairCodexApp() commandResult {
 	settings := loadSettings()
 	candidates := codexAppRepairCandidates(settings.CodexAppPath)
 	if len(candidates) == 0 {
-		return failed("未找到可启动的 Codex 程序。请确认 Microsoft Store 中的 Codex 已安装，或手动选择 Codex.exe / Codex 安装目录。", settingsPayloadValue(settings))
+		return failed("未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；请在新手引导安装镜像版 Codex，或手动选择镜像版/解包版 Codex.exe。", settingsPayloadValue(settings))
 	}
 	selected := candidates[0]
 	settings.CodexAppPath = selected
@@ -361,6 +361,9 @@ func codexAppRepairCandidates(saved string) []string {
 	add := func(path string) {
 		path = strings.TrimSpace(path)
 		if path == "" {
+			return
+		}
+		if runtime.GOOS == "windows" && !windowsCodexPathSupportsDirectLaunch(path) {
 			return
 		}
 		for _, existing := range candidates {
@@ -501,10 +504,10 @@ func installGuidePlatformGuide(goos string) map[string]any {
 		guide["manualPrimaryMode"] = "file"
 		guide["manualSecondaryLabel"] = "选择应用目录"
 		guide["manualSecondaryMode"] = "folder"
-		guide["detectionNote"] = "Windows 的 Microsoft Store / MSIX 安装目录可能限制读取权限。已安装但未识别时，选择 Codex.exe、app 目录或安装解包目录即可。"
-		guide["pathHint"] = `C:\Program Files\WindowsApps\OpenAI.Codex_...\app`
+		guide["detectionNote"] = "不要选择 Program Files\\WindowsApps 包目录；请安装镜像版 Codex，或选择镜像版/解包版里可直接执行的 Codex.exe。"
+		guide["pathHint"] = `C:\Users\你\AppData\Local\Programs\Codex\Codex.exe`
 		guide["launchMethodLabel"] = "启动方式"
-		guide["launchTargetLabel"] = "Codex.exe / AppUserModelID"
+		guide["launchTargetLabel"] = "Codex.exe"
 	default:
 		guide["title"] = platformDisplayName(goos) + " 受限引导"
 		guide["systemDescription"] = "当前平台只提供基础状态检查；完整新手引导重点支持 macOS 和 Windows。"
@@ -1175,13 +1178,15 @@ func codexLaunchPayload(appPath string) map[string]any {
 			return payload
 		}
 		if appUserModelID := packagedWindowsAppUserModelID(appPath); appUserModelID != "" {
-			payload["method"] = "packaged_activation"
-			payload["methodLabel"] = "MSIX 应用激活"
 			payload["appUserModelId"] = appUserModelID
 			payload["executable"] = executable
 			if protectedPackage {
+				payload["method"] = "msix_unsupported"
+				payload["methodLabel"] = "MSIX 不支持"
 				payload["message"] = "检测到 Windows Store/MSIX 版 Codex；该包目录不能直接接收调试端口参数，请安装镜像版 Codex 或选择可直接执行的 Codex.exe。"
 			} else {
+				payload["method"] = "packaged_activation"
+				payload["methodLabel"] = "MSIX 应用激活"
 				payload["ready"] = true
 				payload["message"] = "将通过 AppUserModelID 激活 Windows Store/MSIX 版。"
 			}
@@ -1401,10 +1406,10 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 
 func managerLaunchAppPath(requested string, settings backendSettings) string {
 	appPath := normalizeCodexAppPath(requested)
-	if runtime.GOOS != "windows" || appPath == "" {
+	if runtime.GOOS != "windows" {
 		return appPath
 	}
-	if windowsCodexPathSupportsDirectLaunch(appPath) {
+	if appPath != "" && windowsCodexPathSupportsDirectLaunch(appPath) {
 		return appPath
 	}
 	if saved := normalizeCodexAppPath(settings.CodexAppPath); saved != "" && windowsCodexPathSupportsDirectLaunch(saved) {

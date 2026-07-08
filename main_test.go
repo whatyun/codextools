@@ -139,6 +139,26 @@ func TestProviderSwitchForcesCompleteEnhancementMode(t *testing.T) {
 	}
 }
 
+func TestWindowsUIDoesNotSuggestWindowsAppsLaunchPath(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
+	if err != nil {
+		t.Fatalf("read App.tsx failed: %v", err)
+	}
+	source := string(data)
+	for _, expected := range []string{
+		`不要选择 Program Files\\WindowsApps 包目录`,
+		`C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe`,
+		`选择镜像版 Codex.exe 或解包安装目录`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("Windows UI should guide users to runnable mirror Codex.exe; missing %q", expected)
+		}
+	}
+	if strings.Contains(source, `C:\\Program Files\\WindowsApps\\OpenAI.Codex_...\\app`) {
+		t.Fatal("Windows UI must not suggest Program Files\\WindowsApps as a launch path")
+	}
+}
+
 func TestBuildCodexLaunchCommandKeepsDebugArgumentsForExecutable(t *testing.T) {
 	command := buildCodexLaunchCommand(filepath.Join(t.TempDir(), "Codex.exe"), 9229, []string{"--force_high_performance_gpu"})
 
@@ -216,12 +236,42 @@ func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
 	for _, expected := range []string{
 		"directLaunchBlocked",
 		"isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])",
-		"已跳过直接启动",
-		"Program Files\\\\WindowsApps 包目录会被 Windows 拒绝直接执行",
+		"windowsProtectedMSIXLaunchError(appPath, command[0])",
+		"Program Files\\\\WindowsApps 包目录不能作为 Codex++ 启动目标",
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("launcher should guard protected MSIX direct fallback; missing %q", expected)
 		}
+	}
+	blockIndex := strings.Index(source, "if directLaunchBlocked {\n\t\t\treturn nil, windowsProtectedMSIXLaunchError(appPath, command[0])\n\t\t}")
+	activationIndex := strings.Index(source, "activateWindowsPackagedAppWithEnvironment")
+	if blockIndex < 0 || activationIndex < 0 || blockIndex > activationIndex {
+		t.Fatal("protected MSIX paths must be rejected before attempting MSIX activation")
+	}
+	if strings.Contains(source, "MSIX 激活 %s 失败：%v；已跳过直接启动") {
+		t.Fatal("protected MSIX failure must not report an activation error")
+	}
+}
+
+func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
+	data, err := os.ReadFile("manager.go")
+	if err != nil {
+		t.Fatalf("read manager.go failed: %v", err)
+	}
+	source := string(data)
+	for _, expected := range []string{
+		`if runtime.GOOS != "windows" {`,
+		`if appPath != "" && windowsCodexPathSupportsDirectLaunch(appPath) {`,
+		`if runtime.GOOS == "windows" && !windowsCodexPathSupportsDirectLaunch(path) {`,
+		`MSIX 版 Codex 不能作为 Codex++ 启动目标`,
+		`不要选择 Program Files\\WindowsApps 包目录`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("Windows manager should skip unsupported MSIX paths; missing %q", expected)
+		}
+	}
+	if strings.Contains(source, `runtime.GOOS != "windows" || appPath == ""`) {
+		t.Fatal("Windows launch path selection must fall back to saved/detected executable when request path is empty")
 	}
 }
 
