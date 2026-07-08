@@ -713,9 +713,14 @@ func pathState(path string) map[string]any {
 func codexPathState(path string) map[string]any {
 	state := pathState(path)
 	if path != "" && runtime.GOOS == "windows" {
-		state["executable"] = buildCodexExecutable(path)
+		executable := buildCodexExecutable(path)
+		state["executable"] = executable
 		if appUserModelID := packagedWindowsAppUserModelID(path); appUserModelID != "" {
 			state["appUserModelId"] = appUserModelID
+		}
+		if isWindowsProtectedCodexDirectLaunchPath(path, executable) {
+			state["status"] = "limited"
+			state["message"] = "Windows Store/MSIX 包目录不能作为 Codex++ 的直接启动路径。"
 		}
 	}
 	return state
@@ -920,14 +925,15 @@ func isWindowsAppsExecutionAlias(path string) bool {
 }
 
 func isWindowsProtectedAppPackagePath(path string) bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
-	normalized := strings.ToLower(filepath.ToSlash(path))
+	normalized := strings.ToLower(strings.ReplaceAll(filepath.ToSlash(strings.TrimSpace(path)), `\`, `/`))
 	return strings.Contains(normalized, "/program files/windowsapps/openai.codex_") ||
 		strings.Contains(normalized, "/program files/windowsapps/openai.codexbeta_") ||
 		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codex_") ||
 		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codexbeta_")
+}
+
+func isWindowsProtectedCodexDirectLaunchPath(appPath, executable string) bool {
+	return isWindowsProtectedAppPackagePath(appPath) || isWindowsProtectedAppPackagePath(executable)
 }
 
 func normalizeWindowsPackageAppPath(path string) string {
@@ -1131,6 +1137,10 @@ func codexDetectionPayload(saved, resolved string) map[string]any {
 		if appUserModelID := packagedWindowsAppUserModelID(resolved); appUserModelID != "" {
 			payload["appUserModelId"] = appUserModelID
 		}
+		if runtime.GOOS == "windows" && isWindowsProtectedCodexDirectLaunchPath(resolved, stringFromAny(payload["executable"])) {
+			payload["status"] = "limited"
+			payload["message"] = "已检测到 Windows Store/MSIX 版 Codex，但 Program Files\\WindowsApps 包目录不能作为 Codex++ 的直接启动路径。请安装镜像版 Codex，或在管理工具中选择可直接执行的 Codex.exe。"
+		}
 		return payload
 	}
 	if runtime.GOOS == "windows" {
@@ -1154,7 +1164,9 @@ func codexLaunchPayload(appPath string) map[string]any {
 		return payload
 	}
 	if runtime.GOOS == "windows" {
-		if executable := buildCodexExecutable(appPath); strings.TrimSpace(executable) != "" && fileExists(executable) {
+		executable := buildCodexExecutable(appPath)
+		protectedPackage := isWindowsProtectedCodexDirectLaunchPath(appPath, executable)
+		if strings.TrimSpace(executable) != "" && fileExists(executable) && !protectedPackage {
 			payload["ready"] = true
 			payload["method"] = "executable"
 			payload["methodLabel"] = "可执行文件启动"
@@ -1163,12 +1175,16 @@ func codexLaunchPayload(appPath string) map[string]any {
 			return payload
 		}
 		if appUserModelID := packagedWindowsAppUserModelID(appPath); appUserModelID != "" {
-			payload["ready"] = true
 			payload["method"] = "packaged_activation"
 			payload["methodLabel"] = "MSIX 应用激活"
 			payload["appUserModelId"] = appUserModelID
-			payload["executable"] = buildCodexExecutable(appPath)
-			payload["message"] = "将通过 AppUserModelID 激活 Windows Store/MSIX 版。"
+			payload["executable"] = executable
+			if protectedPackage {
+				payload["message"] = "检测到 Windows Store/MSIX 版 Codex；该包目录不能直接接收调试端口参数，请安装镜像版 Codex 或选择可直接执行的 Codex.exe。"
+			} else {
+				payload["ready"] = true
+				payload["message"] = "将通过 AppUserModelID 激活 Windows Store/MSIX 版。"
+			}
 			return payload
 		}
 	}
@@ -1405,6 +1421,9 @@ func windowsCodexPathSupportsDirectLaunch(appPath string) bool {
 		return strings.TrimSpace(buildCodexExecutable(appPath)) != ""
 	}
 	executable := buildCodexExecutable(appPath)
+	if isWindowsProtectedCodexDirectLaunchPath(appPath, executable) {
+		return false
+	}
 	return strings.TrimSpace(executable) != "" && fileExists(executable)
 }
 

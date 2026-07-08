@@ -137,6 +137,14 @@ type LaunchStatus = {
   detail?: Record<string, unknown>;
 };
 
+type TaskProgress = {
+  id: "restart" | "relaySwitch";
+  label: string;
+  detail: string;
+  percent: number;
+  status: "running" | "ok" | "failed";
+};
+
 type OverviewResult = CommandResult<{
   codex_app: PathState;
   codex_version: string | null;
@@ -876,8 +884,12 @@ export function App() {
     helperPort: "57321",
   });
   const [settingsForm, setSettingsForm] = useState<BackendSettings>({ ...defaultSettings });
+  const [restartProgress, setRestartProgress] = useState<TaskProgress | null>(null);
+  const [relaySwitchProgress, setRelaySwitchProgress] = useState<TaskProgress | null>(null);
   const [removeOwnedData, setRemoveOwnedData] = useState(false);
   const currentLanguage = normalizeLanguage(settingsForm.language);
+  const restartInProgress = restartProgress?.status === "running";
+  const relaySwitchInProgress = relaySwitchProgress?.status === "running";
   const languageRef = useRef(currentLanguage);
   languageRef.current = currentLanguage;
   const tr = (value: string) => translateText(value, languageRef.current);
@@ -1265,11 +1277,118 @@ export function App() {
   };
 
   const restart = async () => {
+    if (restartInProgress) return;
+    setRestartProgress({
+      id: "restart",
+      label: "重启 Codex",
+      detail: "正在提交重启请求。",
+      percent: 10,
+      status: "running",
+    });
     const result = await launchCommand("restart_codex_plus");
-    if (result) {
-      showNotice("重启 Codex", result.message, result.status);
-      await refreshOverview(true);
+    if (!result) {
+      setRestartProgress({
+        id: "restart",
+        label: "重启 Codex",
+        detail: "重启请求没有返回结果，请查看日志。",
+        percent: 100,
+        status: "failed",
+      });
+      return;
     }
+    showNotice("重启 Codex", result.message, result.status);
+    if (!isSuccessStatus(result.status)) {
+      setRestartProgress({
+        id: "restart",
+        label: "重启 Codex",
+        detail: result.message || "重启请求失败。",
+        percent: 100,
+        status: "failed",
+      });
+      await refreshOverview(true);
+      return;
+    }
+    setRestartProgress({
+      id: "restart",
+      label: "重启 Codex",
+      detail: "正在等待旧实例退出并释放端口。",
+      percent: 35,
+      status: "running",
+    });
+    await trackRestartProgress();
+  };
+
+  const trackRestartProgress = async () => {
+    const deadline = Date.now() + 65000;
+    let bestPercent = 35;
+    while (Date.now() < deadline) {
+      await delay(900);
+      const current = await refreshOverview(true);
+      const latest = current?.latest_launch ?? null;
+      const latestStatus = latest?.status || "";
+      if (latestStatus === "failed") {
+        setRestartProgress({
+          id: "restart",
+          label: "重启 Codex",
+          detail: latest?.message || "重启失败，请查看日志。",
+          percent: 100,
+          status: "failed",
+        });
+        return;
+      }
+      if (latestStatus === "running" || latestStatus === "degraded") {
+        setRestartProgress({
+          id: "restart",
+          label: "重启 Codex",
+          detail: latestStatus === "degraded" ? "Codex 已启动，增强注入正在后台重试。" : "Codex 已重新启动。",
+          percent: 100,
+          status: "ok",
+        });
+        window.setTimeout(() => {
+          setRestartProgress((current) => current?.id === "restart" && current.status === "ok" ? null : current);
+        }, 2400);
+        return;
+      }
+      if (latestStatus === "starting") {
+        bestPercent = Math.max(bestPercent, 70);
+        setRestartProgress({
+          id: "restart",
+          label: "重启 Codex",
+          detail: latest?.message || "新实例正在启动并等待注入。",
+          percent: bestPercent,
+          status: "running",
+        });
+        continue;
+      }
+      if (latestStatus === "restarting") {
+        bestPercent = Math.max(bestPercent, 45);
+        setRestartProgress({
+          id: "restart",
+          label: "重启 Codex",
+          detail: latest?.message || "正在关闭旧实例并释放端口。",
+          percent: bestPercent,
+          status: "running",
+        });
+        continue;
+      }
+      if (latestStatus === "accepted") {
+        bestPercent = Math.max(bestPercent, 55);
+        setRestartProgress({
+          id: "restart",
+          label: "重启 Codex",
+          detail: latest?.message || "启动任务已进入后台。",
+          percent: bestPercent,
+          status: "running",
+        });
+      }
+    }
+    setRestartProgress({
+      id: "restart",
+      label: "重启 Codex",
+      detail: "重启仍在后台启动，可打开日志确认最新状态。",
+      percent: Math.max(bestPercent, 70),
+      status: "failed",
+    });
   };
 
   const launchCommand = async (command: "launch_codex_plus" | "restart_codex_plus") => {
@@ -1692,7 +1811,7 @@ export function App() {
   const switchOfficialMode = async () => {
     const switched = await clearRelayInjection(false);
     if (!switched) return;
-    const result = await saveLaunchMode("relay", true);
+    const result = await saveLaunchMode("patch", true);
     if (result && !isSuccessStatus(result.status)) showNotice("页面增强模式", result.message, result.status);
   };
 
@@ -1704,25 +1823,50 @@ export function App() {
   };
 
   const switchRelayProfile = async (next: BackendSettings) => {
+    if (relaySwitchInProgress) return false;
+    const setSwitchProgress = (percent: number, detail: string, status: TaskProgress["status"] = "running") => {
+      setRelaySwitchProgress({
+        id: "relaySwitch",
+        label: "供应商切换",
+        detail,
+        percent,
+        status,
+      });
+    };
+    const failSwitch = (detail: string) => {
+      setSwitchProgress(100, detail, "failed");
+      return false;
+    };
+    setSwitchProgress(8, "正在准备当前配置快照。");
     if (!next.relayProfilesEnabled) {
+      setSwitchProgress(25, "供应商配置切换已关闭，正在保存设置。");
       const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: next }));
       if (settingsResult) {
         setSettings(settingsResult);
         setSettingsForm(normalizeSettings(settingsResult.settings));
         showNotice("供应商切换", "供应商配置切换已关闭：已保存设置，但没有写入当前 Codex 配置文件。", settingsResult.status);
+        setSwitchProgress(100, settingsResult.message, isSuccessStatus(settingsResult.status) ? "ok" : "failed");
+        if (isSuccessStatus(settingsResult.status)) {
+          window.setTimeout(() => {
+            setRelaySwitchProgress((current) => current?.id === "relaySwitch" && current.status === "ok" ? null : current);
+          }, 2200);
+        }
+      } else {
+        return failSwitch("保存供应商设置失败。");
       }
       return false;
     }
     const nextWithSnapshot = await snapshotActiveRelayFilesBeforeSwitch(prepareRelaySettingsForSwitch(next));
-    if (!nextWithSnapshot) return false;
+    if (!nextWithSnapshot) return failSwitch("读取当前配置快照失败，已停止切换。");
 
     const selectedBeforeSave = activeRelayProfile(nextWithSnapshot);
     const validationError = relayProfileSwitchValidation(selectedBeforeSave);
     if (validationError) {
       showNotice("供应商配置可能不正确", validationError, "failed");
-      return false;
+      return failSwitch(validationError);
     }
 
+    setSwitchProgress(35, "正在保存供应商设置。");
     let selectedSettings = nextWithSnapshot;
     const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: nextWithSnapshot }));
     if (settingsResult) {
@@ -1731,30 +1875,41 @@ export function App() {
       setSettingsForm(selectedSettings);
       if (!isSuccessStatus(settingsResult.status)) {
         showNotice("供应商切换", settingsResult.message, settingsResult.status);
-        return false;
+        return failSwitch(settingsResult.message);
       }
     } else {
-      return false;
+      return failSwitch("保存供应商设置失败。");
     }
 
+    setSwitchProgress(60, "正在写入供应商配置。");
     const selectedAfterSave = activeRelayProfile(selectedSettings);
     const command = relayProfileSwitchCommand(selectedAfterSave);
     const result = await run(() => call<RelayResult>(command));
-    if (!result) return false;
+    if (!result) return failSwitch("写入供应商配置失败。");
 
     setRelay(result);
     await refreshRelayFiles(true);
     if (!isSuccessStatus(result.status)) {
       showNotice("供应商切换", result.message || relayProfileReadinessText(selectedAfterSave, result), result.status);
-      return false;
+      return failSwitch(result.message || relayProfileReadinessText(selectedAfterSave, result));
     }
 
+    setSwitchProgress(82, "正在切换到完整增强。");
     const currentSelected = activeRelayProfile(selectedSettings);
-    const launchMode = currentSelected.relayMode === "pureApi" || currentSelected.relayMode === "aggregate" ? "patch" : "relay";
-    const modeResult = await saveLaunchMode(launchMode, true, selectedSettings);
+    const modeResult = await saveLaunchMode("patch", true, selectedSettings);
+    if (!modeResult) return failSwitch("完整增强设置保存失败。");
     await refreshInstallGuideStatus(true);
+    setSwitchProgress(94, "正在刷新连接状态。");
     await refreshRelay(true);
-    if (modeResult) showNotice("供应商切换", relayProfileModeSwitchedText(currentSelected, result), modeResult.status);
+    if (!isSuccessStatus(modeResult.status)) {
+      showNotice("供应商切换", modeResult.message, modeResult.status);
+      return failSwitch(modeResult.message);
+    }
+    setSwitchProgress(100, "供应商已切换，页面增强已设为完整增强。", "ok");
+    window.setTimeout(() => {
+      setRelaySwitchProgress((current) => current?.id === "relaySwitch" && current.status === "ok" ? null : current);
+    }, 2200);
+    showNotice("供应商切换", relayProfileModeSwitchedText(currentSelected, result), modeResult.status);
     return true;
   };
 
@@ -1995,7 +2150,7 @@ export function App() {
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
       confirm: confirmMessage,
     }),
-    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects],
+    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects, restartInProgress, relaySwitchInProgress],
   );
 
   return (
@@ -2055,10 +2210,13 @@ export function App() {
             >
               {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
-            <Button onClick={() => void actions.restart()} title="重启 Codex" variant="outline">
-              <Rocket className="h-4 w-4" />
-              重启
-            </Button>
+            <div className="topbar-task">
+              <Button disabled={restartInProgress} onClick={() => void actions.restart()} title="重启 Codex" variant="outline">
+                <Rocket className="h-4 w-4" />
+                {restartInProgress ? "重启中" : "重启"}
+              </Button>
+              {restartProgress ? <InlineTaskProgress compact progress={restartProgress} /> : null}
+            </div>
             <Button onClick={() => void actions.refreshCurrent()} size="icon" title="刷新当前页面" variant="outline">
               <RefreshCw className="h-4 w-4" />
             </Button>
@@ -2093,6 +2251,7 @@ export function App() {
               ccsProviders={ccsProviders}
               form={settingsForm}
               onFormChange={setSettingsForm}
+              switchProgress={relaySwitchProgress}
               actions={actions}
             />
           ) : null}
@@ -3240,6 +3399,7 @@ function RelayScreen({
   ccsProviders,
   form,
   onFormChange,
+  switchProgress,
   actions,
 }: {
   settings: SettingsResult | null;
@@ -3248,11 +3408,14 @@ function RelayScreen({
   ccsProviders: CcsProvidersResult | null;
   form: BackendSettings;
   onFormChange: (value: BackendSettings) => void;
+  switchProgress: TaskProgress | null;
   actions: Actions;
 }) {
   const normalized = normalizeSettings(form);
   const active = activeRelayProfile(normalized);
+  const switching = switchProgress?.status === "running";
   const switchActiveMode = (relayMode: RelayMode) => {
+    if (switching) return;
     const nextProfile = withGeneratedRelayFiles({
       ...active,
       relayMode,
@@ -3340,9 +3503,11 @@ function RelayScreen({
             <ShieldCheck className="h-4 w-4" />
             <span>{relayProfileReadinessText(active, relay)}</span>
           </div>
+          {switchProgress ? <InlineTaskProgress progress={switchProgress} /> : null}
           <div className="mode-switch-panel" aria-label="切换当前模式">
             <button
               className={`mode-switch-button ${active.relayMode === "official" ? "active" : ""}`}
+              disabled={switching}
               onClick={() => switchActiveMode("official")}
               type="button"
             >
@@ -3351,6 +3516,7 @@ function RelayScreen({
             </button>
             <button
               className={`mode-switch-button ${active.relayMode === "mixedApi" ? "active" : ""}`}
+              disabled={switching}
               onClick={() => switchActiveMode("mixedApi")}
               type="button"
             >
@@ -3359,6 +3525,7 @@ function RelayScreen({
             </button>
             <button
               className={`mode-switch-button ${active.relayMode === "pureApi" ? "active" : ""}`}
+              disabled={switching}
               onClick={() => switchActiveMode("pureApi")}
               type="button"
             >
@@ -3367,6 +3534,7 @@ function RelayScreen({
             </button>
             <button
               className={`mode-switch-button ${active.relayMode === "aggregate" ? "active" : ""}`}
+              disabled={switching}
               onClick={() => switchActiveMode("aggregate")}
               type="button"
             >
@@ -3459,6 +3627,7 @@ function RelayScreen({
               setDetailProfileId(profileId);
             }}
             onFormChange={saveRelaySettings}
+            switching={switching}
             actions={actions}
           />
         </CardContent>
@@ -4308,11 +4477,13 @@ function RelayProfileList({
   form,
   onFormChange,
   onEdit,
+  switching,
   actions,
 }: {
   form: BackendSettings;
   onFormChange: (value: BackendSettings) => void;
   onEdit: (id: string) => void;
+  switching: boolean;
   actions: Actions;
 }) {
   const sensors = useSensors(
@@ -4342,6 +4513,7 @@ function RelayProfileList({
               onEdit={onEdit}
               onFormChange={onFormChange}
               profile={profile}
+              switching={switching}
             />
           ))}
         </div>
@@ -4377,6 +4549,7 @@ function SortableRelayProfileCard({
   index,
   onFormChange,
   onEdit,
+  switching,
   actions,
 }: {
   form: BackendSettings;
@@ -4384,6 +4557,7 @@ function SortableRelayProfileCard({
   index: number;
   onFormChange: (value: BackendSettings) => void;
   onEdit: (id: string) => void;
+  switching: boolean;
   actions: Actions;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: profile.id });
@@ -4433,8 +4607,10 @@ function SortableRelayProfileCard({
       <span className="relay-card-actions">
         <Button
           className={`relay-use-button ${active ? "active" : ""}`}
+          disabled={switching}
           onClick={(event) => {
             event.stopPropagation();
+            if (switching) return;
             const next = syncLegacyRelayFields({ ...form, activeRelayId: profile.id });
             void actions.switchRelayProfile(next);
           }}
@@ -5792,7 +5968,7 @@ function ModeSelector({ launchMode, actions }: { launchMode: LaunchMode; actions
         type="button"
       >
         <strong>兼容增强</strong>
-        <span>适合官方登录或官方混合 API；启用会话删除、导出、项目移动、Timeline 和用户脚本。</span>
+        <span>手动兜底选项；使用更保守的页面注入路径，仍保留删除、导出、项目移动、Timeline 和用户脚本。</span>
       </button>
       <button
         className={`mode-option ${launchMode === "patch" ? "active" : ""}`}
@@ -5800,7 +5976,7 @@ function ModeSelector({ launchMode, actions }: { launchMode: LaunchMode; actions
         type="button"
       >
         <strong>完整增强</strong>
-        <span>适合中转 API；启用会话删除、导出、项目移动等全部页面能力。</span>
+        <span>供应商切换后的默认模式；启用会话删除、导出、项目移动等全部页面能力。</span>
       </button>
     </div>
   );
@@ -5856,6 +6032,22 @@ function GuideList({ items }: { items: string[] }) {
           <p>{item}</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function InlineTaskProgress({ progress, compact = false }: { progress: TaskProgress; compact?: boolean }) {
+  const value = Math.max(0, Math.min(100, Math.round(progress.percent)));
+  return (
+    <div className={`task-progress ${compact ? "compact" : ""} ${progress.status}`} aria-label={`${progress.label} ${value}%`}>
+      <div className="task-progress-copy">
+        <span>{progress.label}</span>
+        <strong>{value}%</strong>
+      </div>
+      <div className="task-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value}>
+        <span style={{ width: `${value}%` }} />
+      </div>
+      <small>{progress.detail}</small>
     </div>
   );
 }
@@ -6029,6 +6221,7 @@ function providerInitial(name: string) {
 function statusLabel(status: string) {
   const labels: Record<string, string> = {
     found: "已找到",
+    limited: "受限",
     missing: "缺失",
     installed: "已安装",
     available: "可用",
@@ -6476,7 +6669,7 @@ function relayProfileModeHelp(profile: RelayProfile): string {
     return "此供应商会切回官方登录模式，使用它绑定的 ChatGPT 官方账号，不写入 API Key。";
   }
   if (profile.relayMode === "mixedApi") {
-    return "此供应商会使用它绑定的官方账号，并把请求混入当前 API Key；页面增强仍使用兼容模式。";
+    return "此供应商会使用它绑定的官方账号，并把请求混入当前 API Key；切换后页面增强会设为完整增强。";
   }
   if (profile.relayMode === "pureApi") {
     return "此供应商会按中转 API 模式写入 config.toml，并保留现有 auth.json 登录状态。";
@@ -6575,8 +6768,8 @@ function relayProfileModeSwitchedText(profile: RelayProfile, relay?: RelayResult
     : profile.relayMode === "aggregate"
       ? "已按此聚合供应商切换到轮转代理；页面增强已设为完整增强。"
     : profile.relayMode === "mixedApi"
-      ? "已按此供应商使用官方登录，并混入 API Key；页面增强已设为兼容增强。"
-      : "已按此供应商切回官方登录；页面增强已设为兼容增强。";
+      ? "已按此供应商使用官方登录，并混入 API Key；页面增强已设为完整增强。"
+      : "已按此供应商切回官方登录；页面增强已设为完整增强。";
   const repairMessage = relay?.pluginRepair?.message?.trim();
   return repairMessage ? `${base} ${repairMessage}` : base;
 }
@@ -6951,6 +7144,10 @@ function decodeJwtEmail(token: string): string {
 function numberOrDefault(value: string, fallback: number) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 }
 
 function splitLogLines(text: string) {

@@ -56,6 +56,7 @@ func runLauncher(args []string) error {
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
 	}
+	restartPrepared := false
 	instanceLock, acquired, err := acquireLauncherSingleInstanceLock(debugPort)
 	if err != nil {
 		writeLaunchFailureStatus("启动 Codex++ 单实例锁失败："+err.Error(), debugPort, helperPort, &appPath)
@@ -63,25 +64,49 @@ func runLauncher(args []string) error {
 		return err
 	}
 	if !acquired {
-		appendDiagnosticLog("launcher.already_running", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
-		return nil
+		if options.restart {
+			appendDiagnosticLog("launcher.restart_existing_launcher", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
+			if err := prepareFullRestartBeforeLaunch(appPath, debugPort, helperPort, true); err != nil {
+				message := "重启 Codex 失败：" + err.Error()
+				writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
+				appendDiagnosticLog("launcher.restart_existing_launcher_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
+				return errors.New(message)
+			}
+			restartPrepared = true
+			instanceLock, acquired, err = waitForLauncherSingleInstanceLock(debugPort, 15*time.Second)
+			if err != nil {
+				message := "重启 Codex 失败：重新获取 Codex++ 单实例锁失败：" + err.Error()
+				writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
+				appendDiagnosticLog("launcher.restart_guard_reacquire_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
+				return errors.New(message)
+			}
+			if !acquired {
+				message := fmt.Sprintf("重启 Codex 失败：旧 Codex++ 后端未退出，端口 %d 仍被占用", launcherGuardPort)
+				writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
+				appendDiagnosticLog("launcher.restart_guard_still_busy", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
+				return errors.New(message)
+			}
+		} else {
+			appendDiagnosticLog("launcher.already_running", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
+			return nil
+		}
+	}
+	if instanceLock == nil {
+		err := errors.New("Codex++ 单实例锁不可用")
+		writeLaunchFailureStatus("启动 Codex++ 失败："+err.Error(), debugPort, helperPort, &appPath)
+		appendDiagnosticLog("launcher.guard_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
+		return err
 	}
 	defer instanceLock.release()
 	if fallbackLockPath := instanceLock.fallbackPath(); fallbackLockPath != "" {
 		appendDiagnosticLog("launcher.guard_fallback", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "requested_guard_port": launcherGuardPort, "fallback_lock_path": fallbackLockPath})
 	}
-	if runtime.GOOS == "windows" && options.restart && cdpTargetsAvailable(debugPort, 800*time.Millisecond) {
-		appendDiagnosticLog("launcher.restart_running_codex", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath})
-		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
-			writeLaunchFailureStatus("重启 Codex 失败："+err.Error(), debugPort, helperPort, &appPath)
-			appendDiagnosticLog("launcher.restart_running_codex_failed", map[string]any{"debug_port": debugPort, "error": err.Error()})
-			return err
-		}
-		if helperNeeded(settings) {
-			waitForTCPPortFree(helperPort, 5*time.Second)
-		}
-		if activeRelayNeedsLocalProxy(settings) {
-			waitForTCPPortFree(localRelayProxyPort, 5*time.Second)
+	if options.restart && !restartPrepared {
+		if err := prepareFullRestartBeforeLaunch(appPath, debugPort, helperPort, false); err != nil {
+			message := "重启 Codex 失败：" + err.Error()
+			writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
+			appendDiagnosticLog("launcher.restart_prepare_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
+			return errors.New(message)
 		}
 	}
 	runtimeState := &launcherRuntime{settings: settings, debugPort: debugPort, codexAppPath: appPath}
@@ -221,6 +246,86 @@ func writeLaunchFailureStatus(message string, debugPort, helperPort uint16, appP
 	_ = atomicWriteJSON(latestStatusPath(), failure)
 }
 
+func writeLaunchRestartingStatus(message string, debugPort, helperPort uint16, appPath *string) {
+	status := launchStatus{
+		Status:      "restarting",
+		Message:     message,
+		StartedAtMS: uint64(time.Now().UnixMilli()),
+		DebugPort:   &debugPort,
+		HelperPort:  &helperPort,
+		CodexApp:    appPath,
+	}
+	_ = atomicWriteJSON(latestStatusPath(), status)
+}
+
+func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16, waitForGuard bool) error {
+	writeLaunchRestartingStatus("正在关闭旧 Codex++ 后端并释放端口。", debugPort, helperPort, &appPath)
+	appendDiagnosticLog("launcher.restart_prepare", map[string]any{
+		"codex_app":      appPath,
+		"debug_port":     debugPort,
+		"helper_port":    helperPort,
+		"relay_port":     localRelayProxyPort,
+		"guard_port":     launcherGuardPort,
+		"wait_for_guard": waitForGuard,
+	})
+	if cdpTargetsAvailable(debugPort, 800*time.Millisecond) {
+		appendDiagnosticLog("launcher.restart_close_cdp", map[string]any{"debug_port": debugPort, "codex_app": appPath})
+		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
+			return fmt.Errorf("关闭旧 Codex 调试端口失败：%w", err)
+		}
+	}
+	if runtime.GOOS == "darwin" && macOSAppRunning(appPath) {
+		appendDiagnosticLog("launcher.restart_quit_macos_app", map[string]any{"codex_app": appPath})
+		if err := quitMacOSApp(appPath); err != nil {
+			appendDiagnosticLog("launcher.restart_quit_macos_app_failed", map[string]any{"codex_app": appPath, "error": err.Error()})
+		}
+		if !waitForMacOSAppExit(appPath, 8*time.Second) {
+			appendDiagnosticLog("launcher.restart_force_kill_macos_app", map[string]any{"codex_app": appPath})
+			_ = forceKillMacOSApp(appPath)
+			if !waitForMacOSAppExit(appPath, 4*time.Second) {
+				return errors.New("旧 Codex 应用未退出")
+			}
+		}
+	}
+	if err := waitForRequiredTCPPortFree(debugPort, "调试", 12*time.Second); err != nil {
+		return err
+	}
+	if err := waitForRequiredTCPPortFree(helperPort, "Helper", 12*time.Second); err != nil {
+		return err
+	}
+	if err := waitForRequiredTCPPortFree(localRelayProxyPort, "本地中转代理", 12*time.Second); err != nil {
+		return err
+	}
+	if waitForGuard {
+		if err := waitForRequiredTCPPortFree(launcherGuardPort, "Codex++ 后端单实例", 12*time.Second); err != nil {
+			return err
+		}
+	}
+	writeLaunchRestartingStatus("旧 Codex++ 后端已退出，正在启动新实例。", debugPort, helperPort, &appPath)
+	return nil
+}
+
+func waitForRequiredTCPPortFree(port uint16, label string, timeout time.Duration) error {
+	if port == 0 {
+		return nil
+	}
+	if waitForTCPPortFree(port, timeout) {
+		return nil
+	}
+	return fmt.Errorf("%s端口 %d 未释放，可能仍被旧后端占用", label, port)
+}
+
+func waitForLauncherSingleInstanceLock(debugPort uint16, timeout time.Duration) (launcherSingleInstanceLock, bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		lock, acquired, err := acquireLauncherSingleInstanceLock(debugPort)
+		if err != nil || acquired || time.Now().After(deadline) {
+			return lock, acquired, err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func parseLaunchRequest(args []string) launchRequest {
 	var request launchRequest
 	for i := 0; i < len(args); i++ {
@@ -329,7 +434,8 @@ func buildCodexExecutable(appPath string) string {
 func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (codexLaunchHandle, error) {
 	command := buildCodexLaunchCommandForSettings(appPath, debugPort, settings.CodexExtraArgs, settings)
 	if runtime.GOOS == "windows" {
-		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) {
+		directLaunchBlocked := len(command) > 0 && isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])
+		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) && !directLaunchBlocked {
 			handle, err := startCodexProcess(command)
 			if err == nil {
 				return handle, nil
@@ -354,6 +460,9 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 					"error":          err.Error(),
 				})
 				return nil, err
+			}
+			if directLaunchBlocked {
+				return nil, fmt.Errorf("MSIX 激活 %s 失败：%v；已跳过直接启动 %s，因为 Program Files\\WindowsApps 包目录会被 Windows 拒绝直接执行。请安装镜像版 Codex，或在管理工具中选择可直接执行的 Codex.exe", activation.appUserModelID, activationErr, command[0])
 			}
 			if len(command) == 0 || strings.TrimSpace(command[0]) == "" || !fileExists(command[0]) {
 				return nil, fmt.Errorf("无法激活 Windows Codex 应用 %s：%w；未找到可直接执行的 Codex.exe，已跳过 explorer 兜底以避免把调试参数作为网页打开", activation.appUserModelID, activationErr)

@@ -61,6 +61,84 @@ func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
 	}
 }
 
+func TestLauncherRestartBusyLockUsesFullRestartFlow(t *testing.T) {
+	data, err := os.ReadFile("launcher.go")
+	if err != nil {
+		t.Fatalf("read launcher.go failed: %v", err)
+	}
+	source := string(data)
+	for _, expected := range []string{
+		"if !acquired {\n\t\tif options.restart {",
+		"prepareFullRestartBeforeLaunch(appPath, debugPort, helperPort, true)",
+		"waitForLauncherSingleInstanceLock(debugPort, 15*time.Second)",
+		"launcher.restart_existing_launcher",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("restart busy-lock flow missing %q", expected)
+		}
+	}
+	if strings.Contains(source, `runtime.GOOS == "windows" && options.restart`) {
+		t.Fatal("restart must not use the old Windows-only partial restart shortcut")
+	}
+}
+
+func TestWriteLaunchRestartingStatus(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	debugPort := uint16(9229)
+	helperPort := uint16(57321)
+	appPath := filepath.Join(home, "Codex.app")
+
+	writeLaunchRestartingStatus("正在关闭旧 Codex++ 后端并释放端口。", debugPort, helperPort, &appPath)
+
+	var status launchStatus
+	if err := readJSON(latestStatusPath(), &status); err != nil {
+		t.Fatalf("restart status should be readable: %v", err)
+	}
+	if status.Status != "restarting" {
+		t.Fatalf("status mismatch: %q", status.Status)
+	}
+	if status.Message != "正在关闭旧 Codex++ 后端并释放端口。" {
+		t.Fatalf("message mismatch: %q", status.Message)
+	}
+	if status.DebugPort == nil || *status.DebugPort != debugPort {
+		t.Fatalf("debug port mismatch: %#v", status.DebugPort)
+	}
+	if status.HelperPort == nil || *status.HelperPort != helperPort {
+		t.Fatalf("helper port mismatch: %#v", status.HelperPort)
+	}
+	if status.CodexApp == nil || *status.CodexApp != appPath {
+		t.Fatalf("codex app mismatch: %#v", status.CodexApp)
+	}
+}
+
+func TestProviderSwitchForcesCompleteEnhancementMode(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
+	if err != nil {
+		t.Fatalf("read App.tsx failed: %v", err)
+	}
+	source := string(data)
+	for _, expected := range []string{
+		`const modeResult = await saveLaunchMode("patch", true, selectedSettings);`,
+		`const result = await saveLaunchMode("patch", true);`,
+		`供应商已切换，页面增强已设为完整增强。`,
+		`已按此供应商切回官方登录；页面增强已设为完整增强。`,
+		`已按此供应商使用官方登录，并混入 API Key；页面增强已设为完整增强。`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("provider switch should force complete enhancement; missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		`页面增强已设为兼容增强。`,
+		`适合官方登录或官方混合 API`,
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("provider switch text should not mention compatibility default: %q", forbidden)
+		}
+	}
+}
+
 func TestBuildCodexLaunchCommandKeepsDebugArgumentsForExecutable(t *testing.T) {
 	command := buildCodexLaunchCommand(filepath.Join(t.TempDir(), "Codex.exe"), 9229, []string{"--force_high_performance_gpu"})
 
@@ -102,6 +180,48 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 
 	if got := managerLaunchAppPath(exe, defaultSettings()); got != appDir {
 		t.Fatalf("direct executable override should be normalized and kept, got %q", got)
+	}
+}
+
+func TestWindowsProtectedPackagePathDetectionIsPathBased(t *testing.T) {
+	packageApp := `C:\Program Files\WindowsApps\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0\app`
+	packageExe := packageApp + `\Codex.exe`
+
+	if !isWindowsProtectedAppPackagePath(packageApp) {
+		t.Fatalf("package app dir should be treated as protected: %q", packageApp)
+	}
+	if !isWindowsProtectedAppPackagePath(packageExe) {
+		t.Fatalf("package executable should be treated as protected: %q", packageExe)
+	}
+	if !isWindowsProtectedCodexDirectLaunchPath(packageApp, packageExe) {
+		t.Fatal("protected app/executable pair should block direct launch")
+	}
+
+	alias := `C:\Users\Alice\AppData\Local\Microsoft\WindowsApps\Codex.exe`
+	localRuntime := `C:\Users\Alice\AppData\Local\Programs\Codex\Codex.exe`
+	if isWindowsProtectedAppPackagePath(alias) {
+		t.Fatalf("execution alias should not be treated as protected package path: %q", alias)
+	}
+	if isWindowsProtectedAppPackagePath(localRuntime) {
+		t.Fatalf("local runtime should not be treated as protected package path: %q", localRuntime)
+	}
+}
+
+func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
+	data, err := os.ReadFile("launcher.go")
+	if err != nil {
+		t.Fatalf("read launcher.go failed: %v", err)
+	}
+	source := string(data)
+	for _, expected := range []string{
+		"directLaunchBlocked",
+		"isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])",
+		"已跳过直接启动",
+		"Program Files\\\\WindowsApps 包目录会被 Windows 拒绝直接执行",
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("launcher should guard protected MSIX direct fallback; missing %q", expected)
+		}
 	}
 }
 
