@@ -42,6 +42,12 @@ func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
 	}
 }
 
+func TestRuntimeVersionMatchesMacOSTestBuild(t *testing.T) {
+	if version != "1.2.1" {
+		t.Fatalf("runtime version should identify the macOS test build, got %q", version)
+	}
+}
+
 func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
 	command := buildManagerLauncherCommand(`C:\Tools\codextools-launcher.exe`, `C:\Codex\app`, 9229, 57321, true)
 
@@ -65,6 +71,53 @@ func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
 	}
 	if got := stringFromAny(payload["launcher_path"]); !strings.Contains(strings.ToLower(got), "codextools-launcher") {
 		t.Fatalf("launcher path should reference codextools-launcher, got %q", got)
+	}
+}
+
+func TestPreferredMacOSLauncherPathPrefersSiblingLauncherApp(t *testing.T) {
+	root := t.TempDir()
+	managerExecutable := filepath.Join(root, "Codex++ 管理工具.app", "Contents", "MacOS", "codextools")
+	managerNestedLauncher := filepath.Join(root, "Codex++ 管理工具.app", "Contents", "MacOS", "codextools-launcher")
+	launcherExecutable := filepath.Join(root, "Codex++.app", "Contents", "MacOS", "codextools-launcher")
+	for _, path := range []string{managerExecutable, managerNestedLauncher, launcherExecutable} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir failed: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write executable failed: %v", err)
+		}
+	}
+
+	got := preferredMacOSAppExecutableFromCandidates(
+		managerNestedLauncher,
+		[]string{filepath.Join(root, "Codex++.app")},
+		"Codex++.app",
+		[]string{"codextools-launcher", "CodexPlusPlus"},
+	)
+	if got != launcherExecutable {
+		t.Fatalf("manager launch should use standalone launcher app:\n got: %q\nwant: %q", got, launcherExecutable)
+	}
+}
+
+func TestPreferredMacOSLauncherPathRejectsManagerBundleFallback(t *testing.T) {
+	root := t.TempDir()
+	managerNestedLauncher := filepath.Join(root, "Codex++ 管理工具.app", "Contents", "MacOS", "codextools-launcher")
+	if err := os.MkdirAll(filepath.Dir(managerNestedLauncher), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err := os.WriteFile(managerNestedLauncher, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write executable failed: %v", err)
+	}
+	expectedMissingStandalone := filepath.Join(root, "Codex++.app", "Contents", "MacOS", "codextools-launcher")
+
+	got := preferredMacOSAppExecutableFromCandidates(
+		managerNestedLauncher,
+		[]string{filepath.Join(root, "Codex++.app")},
+		"Codex++.app",
+		[]string{"codextools-launcher", "CodexPlusPlus"},
+	)
+	if got != expectedMissingStandalone {
+		t.Fatalf("manager bundle launcher fallback should be rejected:\n got: %q\nwant: %q", got, expectedMissingStandalone)
 	}
 }
 
@@ -168,6 +221,10 @@ func TestReapLauncherChildKeepsBackendAliveWhileCDPPortIsOpen(t *testing.T) {
 	}
 	if status.Status != "exited" {
 		t.Fatalf("final status should be exited after CDP closes, got %#v", status)
+	}
+	logs := readFile(diagnosticLogPath())
+	if !strings.Contains(logs, "launcher.child_exited_cdp_alive") {
+		t.Fatalf("launcher reaper should log CDP-alive child exit, logs=%s", logs)
 	}
 }
 
@@ -448,25 +505,49 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 	}
 }
 
-func TestRendererInjectionUsesHTTPHelperFallbackForBackendRoutes(t *testing.T) {
+func TestRendererInjectionPrefersBridgeAndKeepsHTTPHelperFallback(t *testing.T) {
 	for _, expected := range []string{
 		`async function fetchFromHelper(path, payload)`,
+		`const backendStatusRoute = path === "/backend/status" || path === "/backend/repair";`,
+		`if (window.__codexSessionDeleteBridge)`,
+		`const bridgeResult = await bridgeWithTimeout(path, payload`,
+		`backend_status_bridge_failed_http_fallback_ok`,
 		`const fallback = await fetchFromHelperOrFailure(path, payload);`,
 		`backend_helper_and_bridge_missing`,
-		`backend_helper_failed_using_bridge`,
-		`return await bridgeWithTimeout(path, payload`,
 	} {
 		if !strings.Contains(rendererInjectScript, expected) {
-			t.Fatalf("renderer injection should use HTTP helper fallback for backend routes; missing %q", expected)
+			t.Fatalf("renderer injection should prefer bridge while keeping HTTP helper fallback; missing %q", expected)
 		}
 	}
 	for _, forbidden := range []string{
 		`桥接不可用，请重启启动器`,
 		`bridge_missing_for_route`,
+		`backend_helper_failed_using_bridge`,
 	} {
 		if strings.Contains(rendererInjectScript, forbidden) {
 			t.Fatalf("renderer injection should not fail non-status routes only because CDP bridge is missing; found %q", forbidden)
 		}
+	}
+}
+
+func TestRendererInjectionServiceTierMissingAssetsAreNonFatal(t *testing.T) {
+	for _, expected := range []string{
+		`function isCodexServiceTierUnavailableError(error)`,
+		`function markCodexServiceTierUnavailable(error)`,
+		`service_tier_unavailable`,
+		`codexAppAssetUrl("vscode-api-")`,
+		`window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion`,
+	} {
+		if !strings.Contains(rendererInjectScript, expected) {
+			t.Fatalf("renderer injection should downgrade missing service tier assets; missing %q", expected)
+		}
+	}
+}
+
+func TestRendererInjectionExtendsThreadSortKeysTimeout(t *testing.T) {
+	expected := `postJson("/thread-sort-keys", { sessions: refs }, { timeoutMs: 15000 })`
+	if !strings.Contains(rendererInjectScript, expected) {
+		t.Fatalf("thread sort key bridge call should have an extended timeout; missing %q", expected)
 	}
 }
 
@@ -493,6 +574,38 @@ func TestHelperHTTPServesBridgeBackendRoutes(t *testing.T) {
 		if stringFromAny(payload["transport"]) != "http-helper" {
 			t.Fatalf("%s helper route should mark http-helper transport: %#v", path, payload)
 		}
+		if got := rec.Header().Get("access-control-allow-private-network"); got != "true" {
+			t.Fatalf("%s helper route should allow private network CORS, got %q", path, got)
+		}
+	}
+}
+
+func TestManagerOpenRequiresExplicitCodexMenuSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	called := 0
+	original := openManagerAppFunc
+	openManagerAppFunc = func() error {
+		called++
+		return nil
+	}
+	defer func() { openManagerAppFunc = original }()
+	runtime := &launcherRuntime{}
+
+	blocked := runtime.handleBridgeRequest("/manager/open", json.RawMessage(`{}`))
+	if blocked["status"] != "failed" {
+		t.Fatalf("manager open without source should fail: %#v", blocked)
+	}
+	if called != 0 {
+		t.Fatalf("manager should not open without explicit source, called %d times", called)
+	}
+
+	allowed := runtime.handleBridgeRequest("/manager/open", json.RawMessage(`{"source":"codex_plus_menu"}`))
+	if allowed["status"] != "ok" {
+		t.Fatalf("manager open from menu should succeed: %#v", allowed)
+	}
+	if called != 1 {
+		t.Fatalf("manager should open once from menu source, called %d times", called)
 	}
 }
 
@@ -589,6 +702,8 @@ func TestMacOSReleasePackageForcesApplicationsInstallLocation(t *testing.T) {
 	for _, forbidden := range []string{
 		`cp -R "$launcher_app_dir" "$pkg_root/Applications/"`,
 		`cp -R "$app_dir" "$pkg_root/Applications/"`,
+		`cp "$arch_build/codextools-launcher" "$app_dir/Contents/MacOS/codextools-launcher"`,
+		`cp "$arch_build/codextools" "$launcher_app_dir/Contents/MacOS/codextools"`,
 	} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("macOS pkg script should stage app bundles with ditto --norsrc, found %q", forbidden)
@@ -3035,6 +3150,45 @@ func TestProviderSyncRestoresThreadSourceForLegacyRows(t *testing.T) {
 	}
 	if got := int64FromFlexible(row["has_user_event"]); got != 1 {
 		t.Fatalf("has_user_event should be restored, got %#v", row["has_user_event"])
+	}
+}
+
+func TestProviderSyncRemovesStaleLockAndContinues(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+	lockDir := filepath.Join(home, "tmp", "provider-sync.lock")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatalf("failed to create stale lock: %v", err)
+	}
+	writeTestFile(t, filepath.Join(lockDir, "owner.json"), fmt.Sprintf(`{"pid":99999999,"startedAt":%d}`, time.Now().Add(-providerSyncLockTTL-time.Minute).Unix()))
+
+	result := runProviderSync(home)
+
+	if result.Status != "synced" {
+		t.Fatalf("sync should continue after stale lock removal: %#v", result)
+	}
+	if isDir(lockDir) {
+		t.Fatalf("stale lock should be removed after sync: %s", lockDir)
+	}
+}
+
+func TestProviderSyncKeepsActiveLockSkipped(t *testing.T) {
+	home := t.TempDir()
+	writeTestFile(t, filepath.Join(home, "config.toml"), `model_provider = "CodexPlusPlus"`+"\n")
+	lockDir := filepath.Join(home, "tmp", "provider-sync.lock")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatalf("failed to create active lock: %v", err)
+	}
+	writeTestFile(t, filepath.Join(lockDir, "owner.json"), fmt.Sprintf(`{"pid":%d,"startedAt":%d}`, os.Getpid(), time.Now().Unix()))
+	defer os.RemoveAll(lockDir)
+
+	result := runProviderSync(home)
+
+	if result.Status != "skipped" || !strings.Contains(result.Message, "Provider sync lock exists") {
+		t.Fatalf("active lock should skip sync: %#v", result)
+	}
+	if !isDir(lockDir) {
+		t.Fatalf("active lock should remain: %s", lockDir)
 	}
 }
 

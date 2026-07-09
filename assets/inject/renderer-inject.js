@@ -1278,6 +1278,7 @@
     if (codexPlusBackendStatus.status === "checking") return { tier: "loading", label: "...", disabled: true, title: "服务模式：正在检查后端连接" };
     if (codexPlusBackendStatus.status && codexPlusBackendStatus.status !== "ok") return { tier: "failed", label: "未连接", disabled: true, title: "服务模式：后端未连接，无法切换" };
     if (codexServiceTierState.status === "loading") return { tier: "loading", label: "...", title: "服务模式：正在读取" };
+    if (codexServiceTierState.status === "unavailable") return { tier: "failed", label: "N/A", disabled: true, title: "服务模式：当前 Codex 版本不支持" };
     if (codexServiceTierState.status === "failed") return { tier: "failed", label: "?", title: "服务模式：读取失败" };
     const effectiveMode = codexServiceTierState.effectiveMode || "standard";
     const scope = codexServiceTierState.controlMode === "custom" && codexServiceTierState.threadMode !== "inherit"
@@ -1307,37 +1308,38 @@
     syncCodexServiceTierEffectiveState();
     const backendConnected = codexPlusBackendStatus.status === "ok";
     const backendChecking = codexPlusBackendStatus.status === "checking";
+    const serviceTierReady = backendConnected && codexServiceTierState.status === "ok";
     document.querySelectorAll("[data-codex-service-tier-status]").forEach((node) => {
       node.dataset.status = backendConnected ? (codexServiceTierState.status || "loading") : (backendChecking ? "loading" : "failed");
       node.textContent = backendConnected ? (codexServiceTierState.message || "未读取") : (backendChecking ? "正在检查后端…" : "未连接");
     });
     document.querySelectorAll("[data-codex-service-tier-inherit]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "inherit");
     });
     document.querySelectorAll("[data-codex-service-tier-standard]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "global-standard");
     });
     document.querySelectorAll("[data-codex-service-tier-fast]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "global-fast");
     });
     document.querySelectorAll("[data-codex-service-tier-custom]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "custom");
     });
     document.querySelectorAll("[data-codex-service-tier-thread-inherit]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "custom" && codexServiceTierState.threadMode === "inherit");
       button.title = `当前 thread 不单独覆盖，继承自定义默认 ${codexServiceTierState.defaultMode || "inherit"}`;
     });
     document.querySelectorAll("[data-codex-service-tier-thread-standard]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "custom" && codexServiceTierState.threadMode === "standard");
     });
     document.querySelectorAll("[data-codex-service-tier-thread-fast]").forEach((button) => {
-      button.disabled = !backendConnected || codexServiceTierState.status === "loading";
+      button.disabled = !serviceTierReady;
       button.dataset.active = String(codexServiceTierState.controlMode === "custom" && codexServiceTierState.threadMode === "fast");
     });
     refreshCodexServiceTierBadges();
@@ -1355,6 +1357,11 @@
         message: serviceTierGlobalStatusMessage(serviceTier),
       };
     } catch (error) {
+      if (isCodexServiceTierUnavailableError(error)) {
+        markCodexServiceTierUnavailable(error);
+        refreshCodexServiceTierControls();
+        return;
+      }
       codexServiceTierState = {
         ...codexServiceTierState,
         status: "failed",
@@ -1367,6 +1374,27 @@
     } finally {
       refreshCodexServiceTierControls();
     }
+  }
+
+  function isCodexServiceTierUnavailableError(error) {
+    const message = String(error?.message || error || "");
+    return message.includes("Codex App asset") ||
+      message.includes("dynamically imported module") ||
+      message.includes("Codex 状态 API 不可用");
+  }
+
+  function markCodexServiceTierUnavailable(error) {
+    codexServiceTierState = {
+      ...codexServiceTierState,
+      status: "unavailable",
+      message: "当前 Codex 版本不支持",
+    };
+    if (window.__codexServiceTierUnavailableLogged) return;
+    window.__codexServiceTierUnavailableLogged = true;
+    sendCodexPlusDiagnostic("service_tier_unavailable", {
+      errorName: error?.name || "",
+      errorMessage: error?.message || String(error),
+    });
   }
 
   function setCodexThreadServiceTierMode(mode) {
@@ -1527,6 +1555,14 @@
         sendCodexPlusDiagnostic("service_tier_dispatcher_patch_installed", {});
       } catch (error) {
         window.__codexServiceTierRequestOverrideInstalling = "";
+        if (isCodexServiceTierUnavailableError(error)) {
+          window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
+          window.__codexServiceTierDispatcherPatchRetryAfterMs = 0;
+          clearTimeout(window.__codexServiceTierDispatcherPatchRetryTimer);
+          markCodexServiceTierUnavailable(error);
+          refreshCodexServiceTierControls();
+          return;
+        }
         const now = Date.now();
         const lastLogged = window.__codexServiceTierDispatcherPatchFailureLoggedAt || 0;
         if (now - lastLogged > 30000) {
@@ -1652,7 +1688,7 @@
   }
 
   async function openManagerFromCodex() {
-    const result = await postJson("/manager/open", {});
+    const result = await postJson("/manager/open", { source: "codex_plus_menu" });
     if (result.status === "ok") {
       showToast("管理工具已打开", null);
     } else {
@@ -3751,7 +3787,7 @@
     document.addEventListener("visibilitychange", window.__codexThreadScrollVisibilityHandler, true);
   }
 
-  async function postJson(path, payload) {
+  async function postJson(path, payload, options = {}) {
     async function fetchFromHelper(path, payload) {
       const response = await fetch(`${helperBase}${path}`, {
         method: "POST",
@@ -3786,7 +3822,36 @@
         new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "后端桥接超时", timeout: true }), timeoutMs)),
       ]);
     }
-    if (!window.__codexSessionDeleteBridge) {
+    const backendStatusRoute = path === "/backend/status" || path === "/backend/repair";
+    const bridgeTimeoutMs = Number.isFinite(options?.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : (backendStatusRoute ? 2000 : 4000);
+    if (window.__codexSessionDeleteBridge) {
+      try {
+        const bridgeResult = await bridgeWithTimeout(path, payload, bridgeTimeoutMs);
+        if (bridgeResult?.timeout) sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
+        if (backendStatusRoute && bridgeResult?.status !== "ok") {
+          const fallback = await fetchFromHelperOrFailure(path, payload);
+          if (fallback?.status === "ok") {
+            sendCodexPlusDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
+              path,
+              httpStatus: 200,
+              responseStatus: fallback.status || "",
+            });
+            return fallback;
+          }
+        }
+        return bridgeResult;
+      } catch (bridgeError) {
+        sendCodexPlusDiagnostic("backend_bridge_call_failed", {
+          path,
+          errorName: bridgeError?.name || "",
+          errorMessage: bridgeError?.message || String(bridgeError),
+        });
+        if (!backendStatusRoute) {
+          return { status: "failed", message: "本地桥接不可用，请重启 Codex++" };
+        }
+      }
+    }
+    if (!window.__codexSessionDeleteBridge || backendStatusRoute) {
       const fallback = await fetchFromHelperOrFailure(path, payload);
       if (fallback?.status !== "failed" || path === "/backend/status" || path === "/backend/repair" || !fallback?.httpStatus) {
         return fallback;
@@ -3799,39 +3864,7 @@
       });
       return { status: "failed", message: "本地 helper 未连接，请重启 Codex++" };
     }
-    try {
-      const helperResult = await fetchFromHelper(path, payload);
-      if (helperResult?.status !== "failed" || path === "/backend/status" || path === "/backend/repair" || !helperResult?.httpStatus) {
-        return helperResult;
-      }
-      sendCodexPlusDiagnostic("backend_helper_returned_failed_using_bridge", {
-        path,
-        httpStatus: helperResult?.httpStatus || "",
-        message: helperResult?.message || "",
-      });
-    } catch (helperError) {
-      sendCodexPlusDiagnostic("backend_helper_failed_using_bridge", {
-        path,
-        errorName: helperError?.name || "",
-        errorMessage: helperError?.message || String(helperError),
-      });
-      try {
-        const bridgeResult = await bridgeWithTimeout(path, payload, path === "/backend/status" || path === "/backend/repair" ? 2000 : 4000);
-        if (bridgeResult?.timeout) sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
-        return bridgeResult;
-      } catch (bridgeError) {
-        sendCodexPlusDiagnostic("backend_bridge_call_failed", {
-          path,
-          errorName: bridgeError?.name || "",
-          errorMessage: bridgeError?.message || String(bridgeError),
-        });
-        return {
-          status: "failed",
-          message: path === "/backend/status" || path === "/backend/repair" ? "未连接" : "本地 helper 和桥接都不可用，请重启 Codex++",
-        };
-      }
-    }
-    return await bridgeWithTimeout(path, payload, path === "/backend/status" || path === "/backend/repair" ? 2000 : 4000);
+    return { status: "failed", message: "本地桥接不可用，请重启 Codex++" };
   }
 
   function downloadMarkdown(filename, markdown) {
@@ -3884,7 +3917,8 @@
   let chatsSortLastFetchAt = 0;
 
   async function codexStateApi() {
-    codexStateApiPromise = codexStateApiPromise || import("./assets/vscode-api-Dc9pX2Bc.js");
+    const url = codexAppAssetUrl("vscode-api-") || "./assets/vscode-api-Dc9pX2Bc.js";
+    codexStateApiPromise = codexStateApiPromise || import(url);
     const api = await codexStateApiPromise;
     if (typeof api.n !== "function") throw new Error("Codex 状态 API 不可用");
     return api.n;
@@ -4968,7 +5002,7 @@
     chatsSortInFlight = true;
     try {
       if (shouldRefreshSortKeys) {
-        const result = await postJson("/thread-sort-keys", { sessions: refs }).catch(() => ({ status: "failed", sort_keys: [] }));
+        const result = await postJson("/thread-sort-keys", { sessions: refs }, { timeoutMs: 15000 }).catch(() => ({ status: "failed", sort_keys: [] }));
         chatsSortLastFetchAt = Date.now();
         const byId = new Map();
         if (result?.status === "ok" && Array.isArray(result?.sort_keys)) {

@@ -793,7 +793,8 @@ func (r *launcherRuntime) logRendererDiagnostic(raw json.RawMessage) {
 func writeCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("access-control-allow-origin", "*")
 	w.Header().Set("access-control-allow-methods", "GET, POST, OPTIONS")
-	w.Header().Set("access-control-allow-headers", "Content-Type, Authorization, X-Requested-With")
+	w.Header().Set("access-control-allow-headers", "Content-Type, Authorization, X-Requested-With, Access-Control-Request-Private-Network")
+	w.Header().Set("access-control-allow-private-network", "true")
 }
 
 func writeHelperJSON(w http.ResponseWriter, status int, value any) {

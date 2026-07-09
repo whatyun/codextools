@@ -78,7 +78,13 @@ func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessa
 	case "/devtools/open":
 		result = r.openDevTools()
 	case "/manager/open":
-		if err := openManagerApp(); err != nil {
+		source := strings.TrimSpace(stringFromAny(payloadMap["source"]))
+		appendDiagnosticLog("launcher.manager_open_requested", map[string]any{"source": source, "allowed": source == "codex_plus_menu"})
+		if source != "codex_plus_menu" {
+			result = map[string]any{"status": "failed", "message": "只允许从 Codex++ 菜单手动打开管理工具"}
+			break
+		}
+		if err := openManagerAppFunc(); err != nil {
 			result = map[string]any{"status": "failed", "message": "打开管理工具失败：" + err.Error()}
 		} else {
 			result = map[string]any{"status": "ok", "message": "管理工具已打开"}

@@ -29,6 +29,11 @@ type codexCommandOutput struct {
 var runCodexPluginCommand = defaultRunCodexPluginCommand
 var currentRuntimeGOOS = func() string { return runtime.GOOS }
 
+const (
+	providerSyncLockTTL             = 30 * time.Minute
+	providerSyncUnknownOwnerLockTTL = 2 * time.Minute
+)
+
 func (s *server) syncProvidersNow() commandResult {
 	result := runProviderSync(codexHomeDir())
 	repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
@@ -706,8 +711,20 @@ func runProviderSync(home string) providerSyncResult {
 	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
 		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider}
 	}
+	lockAcquired := false
 	if err := os.Mkdir(lockDir, 0o755); err != nil {
-		return providerSyncResult{Status: "skipped", Message: "Provider sync lock exists: " + lockDir, TargetProvider: targetProvider}
+		if stale, reason := providerSyncLockStale(lockDir, time.Now()); stale {
+			appendDiagnosticLog("provider_sync.stale_lock_removed", map[string]any{"lock": lockDir, "reason": reason})
+			_ = os.RemoveAll(lockDir)
+			if retryErr := os.Mkdir(lockDir, 0o755); retryErr == nil {
+				lockAcquired = true
+			}
+		}
+		if !lockAcquired {
+			return providerSyncResult{Status: "skipped", Message: "Provider sync lock exists: " + lockDir, TargetProvider: targetProvider}
+		}
+	} else {
+		lockAcquired = true
 	}
 	defer os.RemoveAll(lockDir)
 	_ = os.WriteFile(filepath.Join(lockDir, "owner.json"), []byte(fmt.Sprintf(`{"pid":%d,"startedAt":%d}`, os.Getpid(), time.Now().Unix())), 0o644)
@@ -745,6 +762,52 @@ func runProviderSync(home string) providerSyncResult {
 	}
 	pruneProviderSyncBackups(home)
 	return providerSyncResult{Status: "synced", Message: "Provider sync complete", TargetProvider: targetProvider, BackupDir: &backupDir, ChangedSessionFiles: len(rewriteChanges), SQLiteRowsUpdated: sqliteRows}
+}
+
+func providerSyncLockStale(lockDir string, now time.Time) (bool, string) {
+	var owner struct {
+		PID       int   `json:"pid"`
+		StartedAt int64 `json:"startedAt"`
+	}
+	if err := readJSON(filepath.Join(lockDir, "owner.json"), &owner); err == nil {
+		if owner.PID <= 0 && owner.StartedAt <= 0 {
+			return providerSyncUnknownOwnerLockStale(lockDir, now, "owner_invalid")
+		}
+		startedAt := time.Unix(owner.StartedAt, 0)
+		if owner.StartedAt > 0 && now.Sub(startedAt) > providerSyncLockTTL {
+			return true, "owner_timeout"
+		}
+		if owner.PID > 0 && !providerSyncOwnerProcessRunning(owner.PID) {
+			return true, "owner_process_missing"
+		}
+		return false, "owner_active"
+	}
+	return providerSyncUnknownOwnerLockStale(lockDir, now, "owner_missing")
+}
+
+func providerSyncUnknownOwnerLockStale(lockDir string, now time.Time, reason string) (bool, string) {
+	info, err := os.Stat(lockDir)
+	if err != nil {
+		return true, "lock_stat_failed"
+	}
+	if now.Sub(info.ModTime()) > providerSyncUnknownOwnerLockTTL {
+		return true, reason + "_timeout"
+	}
+	return false, reason + "_recent"
+}
+
+func providerSyncOwnerProcessRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if pid == os.Getpid() {
+		return true
+	}
+	if currentRuntimeGOOS() == "windows" {
+		return true
+	}
+	cmd := exec.Command("kill", "-0", strconv.Itoa(pid))
+	return cmd.Run() == nil
 }
 
 func readCurrentProvider(path string) string {

@@ -767,9 +767,15 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 		if err != nil {
 			detail["child_error"] = err.Error()
 		}
-		appendDiagnosticLog("launcher.child_exited_cdp_still_running", detail)
+		appendDiagnosticLog("launcher.child_exited_cdp_alive", detail)
 		waitForCDPPortClosed(debugPort)
 		err = nil
+	} else {
+		detail := map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath}
+		if err != nil {
+			detail["child_error"] = err.Error()
+		}
+		appendDiagnosticLog("launcher.child_exited_cdp_missing", detail)
 	}
 	message := "Codex exited."
 	statusText := "exited"

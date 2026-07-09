@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="$ROOT/dist/releases"
 BUILD="$ROOT/dist/build/macos"
-VERSION="${VERSION:-1.2.0}"
+VERSION="${VERSION:-1.2.1}"
 TARGET_ARCHES="${TARGET_ARCHES:-arm64 amd64}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 export COPYFILE_DISABLE=1
@@ -207,8 +207,6 @@ build_arch() {
   create_app "$app_dir" "$APP_NAME" "codextools" "$arch_build/codextools" "com.hereww.codextools" "false"
   create_app "$launcher_app_dir" "$LAUNCHER_NAME" "codextools-launcher" "$arch_build/codextools-launcher" "com.hereww.codextools.launcher" "true"
 
-  cp "$arch_build/codextools-launcher" "$app_dir/Contents/MacOS/codextools-launcher"
-  cp "$arch_build/codextools" "$launcher_app_dir/Contents/MacOS/codextools"
   verify_macos_deployment_target "$app_dir"
   verify_macos_deployment_target "$launcher_app_dir"
   copy_app_bundle "$launcher_app_dir" "$package_dir/$LAUNCHER_NAME.app"

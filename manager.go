@@ -68,9 +68,9 @@ func runManager() error {
 
 func openManagerApp() error {
 	if runtime.GOOS == "darwin" {
-		app := entrypointPath(true)
+		app := preferredMacOSManagerAppPath()
 		if fileExists(app) {
-			cmd := exec.Command("open", "-a", app)
+			cmd := exec.Command("open", app)
 			hideSubprocessWindow(cmd)
 			return cmd.Start()
 		}
@@ -79,6 +79,8 @@ func openManagerApp() error {
 	hideSubprocessWindow(cmd)
 	return cmd.Start()
 }
+
+var openManagerAppFunc = openManagerApp
 
 func (s *server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1743,10 +1745,7 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	appPath := managerLaunchAppPath(stringArg(request, "appPath"), loadSettings())
 	debugPort := uint16Arg(request, "debugPort", 9229)
 	helperPort := uint16Arg(request, "helperPort", 57321)
-	launcher := companionBinaryPath(silentBinary)
-	if runtime.GOOS == "windows" {
-		launcher += ".exe"
-	}
+	launcher := managerLauncherBinaryPath()
 	command := buildManagerLauncherCommand(launcher, appPath, debugPort, helperPort, restart)
 	launcherPayload := managerLauncherPayload(launcher, command, appPath, debugPort, helperPort)
 	if !fileExists(launcher) {
@@ -1870,6 +1869,107 @@ func managerLauncherPayload(launcher string, command []string, appPath string, d
 		payload["codex_app"] = appPath
 	}
 	return payload
+}
+
+func managerLauncherBinaryPath() string {
+	launcher := companionBinaryPath(silentBinary)
+	switch runtime.GOOS {
+	case "windows":
+		return launcher + ".exe"
+	case "darwin":
+		executable, _ := os.Executable()
+		return preferredMacOSLauncherBinaryPath(launcher, executable)
+	default:
+		return launcher
+	}
+}
+
+func preferredMacOSLauncherBinaryPath(fallback, currentExecutable string) string {
+	return preferredMacOSAppExecutableFromCandidates(
+		fallback,
+		macOSCompanionAppCandidates(currentExecutable, silentName+".app"),
+		silentName+".app",
+		[]string{silentBinary, "CodexPlusPlus"},
+	)
+}
+
+func preferredMacOSManagerAppPath() string {
+	executable, _ := os.Executable()
+	for _, candidate := range macOSCompanionAppCandidates(executable, managerName+".app") {
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return entrypointPath(true)
+}
+
+func preferredMacOSAppExecutableFromCandidates(fallback string, appCandidates []string, targetAppBundleName string, executableNames []string) string {
+	for _, appPath := range appCandidates {
+		if executable := firstExistingMacOSAppExecutable(appPath, executableNames); executable != "" {
+			return executable
+		}
+	}
+	if fallback != "" {
+		if bundle := macOSAppBundleForPath(fallback); bundle != "" && !strings.EqualFold(filepath.Base(bundle), targetAppBundleName) {
+			if len(appCandidates) > 0 && len(executableNames) > 0 {
+				return filepath.Join(appCandidates[0], "Contents", "MacOS", executableNames[0])
+			}
+		}
+		return fallback
+	}
+	if len(appCandidates) > 0 && len(executableNames) > 0 {
+		return filepath.Join(appCandidates[0], "Contents", "MacOS", executableNames[0])
+	}
+	return fallback
+}
+
+func firstExistingMacOSAppExecutable(appPath string, executableNames []string) string {
+	for _, name := range executableNames {
+		candidate := filepath.Join(appPath, "Contents", "MacOS", name)
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func macOSCompanionAppCandidates(currentExecutable, targetAppBundleName string) []string {
+	var candidates []string
+	seen := map[string]bool{}
+	add := func(path string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == "" {
+			return
+		}
+		key := strings.ToLower(path)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		candidates = append(candidates, path)
+	}
+	if currentApp := macOSAppBundleForPath(currentExecutable); currentApp != "" {
+		add(filepath.Join(filepath.Dir(currentApp), targetAppBundleName))
+	}
+	add(filepath.Join(defaultInstallRoot(), targetAppBundleName))
+	return candidates
+}
+
+func macOSAppBundleForPath(path string) string {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" {
+		return ""
+	}
+	for {
+		if strings.EqualFold(filepath.Ext(path), ".app") {
+			return path
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		path = parent
+	}
 }
 
 func cloneStringAnyMap(source map[string]any) map[string]any {
