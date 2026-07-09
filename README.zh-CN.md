@@ -1,4 +1,4 @@
-# CodexTools 中文说明
+# ChatGPT Codex Tools 中文说明
 
 中文项目介绍已经迁移到默认仓库首页：[README.md](./README.md)。
 

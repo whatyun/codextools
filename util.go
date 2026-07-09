@@ -25,7 +25,7 @@ func getJSONInto(ctx context.Context, rawURL string, out any) error {
 		return err
 	}
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("user-agent", "CodexPlusPlus-GoManager/"+version)
+	req.Header.Set("user-agent", "ChatGPTCodexTools-GoManager/"+version)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -42,7 +42,7 @@ func getBytes(ctx context.Context, rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("user-agent", "CodexPlusPlus-GoManager/"+version)
+	req.Header.Set("user-agent", "ChatGPTCodexTools-GoManager/"+version)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func windowsOpenDialogScript(title string, directory bool) string {
 	if directory {
 		return fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = '%s'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }`, escapedTitle)
 	}
-	return fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = '%s'; $dialog.Filter = 'Codex executable (Codex.exe)|Codex.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.FileName) }`, escapedTitle)
+	return fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title = '%s'; $dialog.Filter = 'ChatGPT executable (ChatGPT.exe)|ChatGPT.exe|Executables (*.exe)|*.exe|All files (*.*)|*.*'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.FileName) }`, escapedTitle)
 }
 
 func readJSON(path string, out any) error {

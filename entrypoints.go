@@ -52,7 +52,7 @@ func (s *server) uninstallEntrypoints(args map[string]any) commandResult {
 func (s *server) uninstallCodexTools(args map[string]any) commandResult {
 	payload := codexToolsUninstallPayload()
 	if runtime.GOOS != "windows" {
-		return failed("Codex++ 卸载功能仅支持 Windows 安装包。", payload)
+		return failed("ChatGPT Codex Tools 卸载功能仅支持 Windows 安装包。", payload)
 	}
 	options := mapArg(args, "options")
 	removeOwnedData := boolArg(options, "removeOwnedData")
@@ -64,7 +64,7 @@ func (s *server) uninstallCodexTools(args map[string]any) commandResult {
 	uninstaller := windowsCodexToolsUninstallerPath()
 	payload = codexToolsUninstallPayload()
 	if uninstaller == "" {
-		return ok("未找到 Windows 安装器卸载程序；已移除入口和 watcher。若使用便携版，请手动删除当前 CodexTools 文件夹。", payload)
+		return ok("未找到 Windows 安装器卸载程序；已移除入口和 watcher。若使用便携版，请手动删除当前 ChatGPT Codex Tools 文件夹。", payload)
 	}
 	if err := startWindowsCodexToolsUninstaller(uninstaller); err != nil {
 		return failed("启动 Windows 卸载程序失败："+err.Error(), payload)
@@ -91,23 +91,35 @@ func installEntrypoints() error {
 		if err := writeMacOSAppBundle(false); err != nil {
 			return err
 		}
-		return writeMacOSAppBundle(true)
-	case "windows":
-		if err := createWindowsShortcut(entrypointPath(false), companionBinaryPath(silentBinary+".exe"), "Launch Codex++ silently"); err != nil {
+		if err := writeMacOSAppBundle(true); err != nil {
 			return err
 		}
-		return createWindowsShortcut(entrypointPath(true), companionBinaryPath(managerBinary+".exe"), "Open Codex++ management tool")
+		cleanupLegacyEntrypoints()
+		return nil
+	case "windows":
+		if err := createWindowsShortcut(entrypointPath(false), companionBinaryPath(silentBinary+".exe"), "Launch ChatGPT Codex silently"); err != nil {
+			return err
+		}
+		if err := createWindowsShortcut(entrypointPath(true), companionBinaryPath(managerBinary+".exe"), "Open ChatGPT Codex management tool"); err != nil {
+			return err
+		}
+		cleanupLegacyEntrypoints()
+		return nil
 	default:
 		if err := writeDesktopEntry(false); err != nil {
 			return err
 		}
-		return writeDesktopEntry(true)
+		if err := writeDesktopEntry(true); err != nil {
+			return err
+		}
+		cleanupLegacyEntrypoints()
+		return nil
 	}
 }
 
 func uninstallEntrypoints() error {
 	var firstErr error
-	for _, path := range []string{entrypointPath(false), entrypointPath(true)} {
+	for _, path := range append([]string{entrypointPath(false), entrypointPath(true)}, legacyEntrypointPaths()...) {
 		if err := os.RemoveAll(path); err != nil && firstErr == nil && !errors.Is(err, os.ErrNotExist) {
 			firstErr = err
 		}
@@ -115,7 +127,40 @@ func uninstallEntrypoints() error {
 	return firstErr
 }
 
-const windowsCodexToolsUninstallKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexTools`
+func cleanupLegacyEntrypoints() {
+	for _, path := range legacyEntrypointPaths() {
+		_ = os.RemoveAll(path)
+	}
+}
+
+func legacyEntrypointPaths() []string {
+	root := defaultInstallRoot()
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{
+			filepath.Join(root, "Codex++.app"),
+			filepath.Join(root, "Codex++ 管理工具.app"),
+			filepath.Join(root, "CodexTools.app"),
+		}
+	case "windows":
+		return []string{
+			filepath.Join(root, "Codex++.lnk"),
+			filepath.Join(root, "Codex++ 管理工具.lnk"),
+			filepath.Join(root, "CodexTools.lnk"),
+		}
+	default:
+		return []string{
+			filepath.Join(root, "Codex++.desktop"),
+			filepath.Join(root, "Codex++ 管理工具.desktop"),
+			filepath.Join(root, "CodexTools.desktop"),
+		}
+	}
+}
+
+const (
+	windowsCodexToolsUninstallKey       = `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\ChatGPT Codex Tools`
+	legacyWindowsCodexToolsUninstallKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexTools`
+)
 
 func codexToolsUninstallPayload() map[string]any {
 	uninstaller := windowsCodexToolsUninstallerPath()
@@ -135,6 +180,9 @@ func cleanupWindowsCodexToolsEntrypoints() {
 	if startMenu := windowsCodexToolsStartMenuDir(); startMenu != "" {
 		_ = os.RemoveAll(startMenu)
 	}
+	if legacyStartMenu := legacyWindowsCodexToolsStartMenuDir(); legacyStartMenu != "" {
+		_ = os.RemoveAll(legacyStartMenu)
+	}
 }
 
 func removeWindowsWatcherInstall() {
@@ -148,6 +196,14 @@ func removeWindowsWatcherInstall() {
 }
 
 func windowsCodexToolsStartMenuDir() string {
+	appdata := os.Getenv("APPDATA")
+	if appdata == "" {
+		return ""
+	}
+	return filepath.Join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "ChatGPT Codex Tools")
+}
+
+func legacyWindowsCodexToolsStartMenuDir() string {
 	appdata := os.Getenv("APPDATA")
 	if appdata == "" {
 		return ""
@@ -170,13 +226,16 @@ func windowsCodexToolsUninstallerPath() string {
 		add(filepath.Join(filepath.Dir(executable), "Uninstall.exe"))
 	}
 	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+		add(filepath.Join(localAppData, "ChatGPT Codex Tools", "Uninstall.exe"))
 		add(filepath.Join(localAppData, "CodexTools", "Uninstall.exe"))
 	}
-	if installLocation := windowsRegistryString(windowsCodexToolsUninstallKey, "InstallLocation"); installLocation != "" {
-		add(filepath.Join(strings.Trim(installLocation, `"`), "Uninstall.exe"))
-	}
-	if uninstallString := windowsRegistryString(windowsCodexToolsUninstallKey, "UninstallString"); uninstallString != "" {
-		add(windowsExecutableFromCommand(uninstallString))
+	for _, key := range []string{windowsCodexToolsUninstallKey, legacyWindowsCodexToolsUninstallKey} {
+		if installLocation := windowsRegistryString(key, "InstallLocation"); installLocation != "" {
+			add(filepath.Join(strings.Trim(installLocation, `"`), "Uninstall.exe"))
+		}
+		if uninstallString := windowsRegistryString(key, "UninstallString"); uninstallString != "" {
+			add(windowsExecutableFromCommand(uninstallString))
+		}
 	}
 	for _, candidate := range candidates {
 		if fileExists(candidate) {
@@ -234,7 +293,7 @@ func windowsExecutableFromCommand(command string) string {
 
 func startWindowsCodexToolsUninstaller(path string) error {
 	if runtime.GOOS != "windows" {
-		return errors.New("Codex++ 卸载程序只支持 Windows")
+		return errors.New("ChatGPT Codex Tools 卸载程序只支持 Windows")
 	}
 	cmd := exec.Command(path)
 	cmd.Dir = filepath.Dir(path)
@@ -253,12 +312,12 @@ func writeMacOSAppBundle(manager bool) error {
 		return err
 	}
 	displayName := silentName
-	executableName := "CodexPlusPlus"
+	executableName := "ChatGPTCodex"
 	binary := silentBinary
 	identifierSuffix := ""
 	if manager {
 		displayName = managerName
-		executableName = "CodexPlusPlusManager"
+		executableName = "ChatGPTCodexManager"
 		binary = managerBinary
 		identifierSuffix = ".manager"
 	}
@@ -289,7 +348,7 @@ func macOSInfoPlist(displayName, executableName, identifierSuffix string) string
   <key>CFBundleDisplayName</key>
   <string>%s</string>
   <key>CFBundleIdentifier</key>
-  <string>com.bigpizzav3.codexplusplus%s</string>
+	  <string>com.hereww.chatgptcodextools%s</string>
   <key>CFBundleVersion</key>
   <string>%s</string>
   <key>CFBundleShortVersionString</key>
@@ -449,7 +508,7 @@ func watcherStartupShortcutPath() string {
 func (s *server) installWatcher() commandResult {
 	payload := watcherPayload()
 	if runtime.GOOS != "windows" {
-		return failed("watcher 安装仅支持 Windows；macOS 只能手动从 Codex++ 入口启动并用启用/禁用控制本地标志。", payload)
+		return failed("watcher 安装仅支持 Windows；macOS 只能手动从 ChatGPT Codex 入口启动并用启用/禁用控制本地标志。", payload)
 	}
 	install := watcherInstallState()
 	if !fileExists(install.LauncherPath) {

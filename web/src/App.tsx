@@ -226,8 +226,6 @@ type InstallGuideStatusResult = CommandResult<{
   codexLaunch?: CodexLaunchStatus;
   codexInstallUrl: string;
   codexInstallSource: string;
-  codexMirrorProjectUrl: string;
-  codexMirrorLatestReleaseUrl: string;
   codexLatestDownload: CodexLatestDownload;
   ccs: {
     installed: boolean;
@@ -488,8 +486,6 @@ type SettingsResult = CommandResult<{
   envConflicts?: EnvConflict[];
   pendingProviderImport?: ProviderImportRequest | null;
   codexInstallUrl?: string;
-  codexMirrorLatestReleaseUrl?: string;
-  codexMirrorProjectUrl?: string;
   repairCandidates?: string[];
 }>;
 
@@ -1132,7 +1128,7 @@ export function App() {
     };
     setSettingsForm(next);
     const result = await saveSettingsValue(next, true);
-    if (result) showNotice("图片覆盖层", "图片路径已保存，重启或刷新 Codex 注入后生效。", result.status);
+    if (result) showNotice("图片覆盖层", "图片路径已保存，重启 ChatGPT 或刷新注入后生效。", result.status);
   };
 
   const resetImageOverlaySettings = async () => {
@@ -1195,7 +1191,7 @@ export function App() {
     await refreshWatcher(true);
     if (!silent) {
       const readyParts = [
-        overviewResult?.codex_app.status === "found" || guideResult?.codexLaunch?.ready ? "Codex 可启动" : "Codex 待修复",
+        overviewResult?.codex_app.status === "found" || guideResult?.codexLaunch?.ready ? "ChatGPT 可启动" : "ChatGPT 待修复",
         ccsResult?.providers?.length ? `CCSwitch ${ccsResult.providers.length} 个供应商` : guideResult?.ccs.installed ? "CCSwitch 已发现" : "CCSwitch 未发现",
         relayOfficialAuthenticated(relayResult ?? null) ? "官方账号已识别" : guideResult?.connection?.officialReady ? "官方绑定已识别" : "官方账号待绑定",
         relayResult?.configured || guideResult?.connection?.apiReady ? "服务器配置已识别" : "服务器配置待补充",
@@ -1289,7 +1285,7 @@ export function App() {
     if (restartInProgress) return;
     setRestartProgress({
       id: "restart",
-      label: "重启 Codex",
+      label: "重启 ChatGPT",
       detail: "正在提交重启请求。",
       percent: 10,
       status: "running",
@@ -1298,18 +1294,18 @@ export function App() {
     if (!result) {
       setRestartProgress({
         id: "restart",
-        label: "重启 Codex",
+        label: "重启 ChatGPT",
         detail: "重启请求没有返回结果，请查看日志。",
         percent: 100,
         status: "failed",
       });
       return;
     }
-    showNotice("重启 Codex", result.message, result.status);
+    showNotice("重启 ChatGPT", result.message, result.status);
     if (!isSuccessStatus(result.status)) {
       setRestartProgress({
         id: "restart",
-        label: "重启 Codex",
+        label: "重启 ChatGPT",
         detail: result.message || "重启请求失败。",
         percent: 100,
         status: "failed",
@@ -1319,7 +1315,7 @@ export function App() {
     }
     setRestartProgress({
       id: "restart",
-      label: "重启 Codex",
+      label: "重启 ChatGPT",
       detail: "正在等待旧实例退出并释放端口。",
       percent: 35,
       status: "running",
@@ -1338,7 +1334,7 @@ export function App() {
       if (latestStatus === "failed") {
         setRestartProgress({
           id: "restart",
-          label: "重启 Codex",
+          label: "重启 ChatGPT",
           detail: latest?.message || "重启失败，请查看日志。",
           percent: 100,
           status: "failed",
@@ -1348,8 +1344,8 @@ export function App() {
       if (latestStatus === "running" || latestStatus === "degraded") {
         setRestartProgress({
           id: "restart",
-          label: "重启 Codex",
-          detail: latestStatus === "degraded" ? "Codex 已启动，增强注入正在后台重试。" : "Codex 已重新启动。",
+          label: "重启 ChatGPT",
+          detail: latestStatus === "degraded" ? "ChatGPT 已启动，增强注入正在后台重试。" : "ChatGPT 已重新启动。",
           percent: 100,
           status: "ok",
         });
@@ -1362,7 +1358,7 @@ export function App() {
         bestPercent = Math.max(bestPercent, 70);
         setRestartProgress({
           id: "restart",
-          label: "重启 Codex",
+          label: "重启 ChatGPT",
           detail: latest?.message || "新实例正在启动并等待注入。",
           percent: bestPercent,
           status: "running",
@@ -1373,7 +1369,7 @@ export function App() {
         bestPercent = Math.max(bestPercent, 45);
         setRestartProgress({
           id: "restart",
-          label: "重启 Codex",
+          label: "重启 ChatGPT",
           detail: latest?.message || "正在关闭旧实例并释放端口。",
           percent: bestPercent,
           status: "running",
@@ -1384,7 +1380,7 @@ export function App() {
         bestPercent = Math.max(bestPercent, 55);
         setRestartProgress({
           id: "restart",
-          label: "重启 Codex",
+          label: "重启 ChatGPT",
           detail: latest?.message || "启动任务已进入后台。",
           percent: bestPercent,
           status: "running",
@@ -1393,7 +1389,7 @@ export function App() {
     }
     setRestartProgress({
       id: "restart",
-      label: "重启 Codex",
+      label: "重启 ChatGPT",
       detail: "重启仍在后台启动，可打开日志确认最新状态。",
       percent: Math.max(bestPercent, 70),
       status: "failed",
@@ -1429,9 +1425,9 @@ export function App() {
       setSettings(result);
       setSettingsForm(normalized);
       setLaunchForm((current) => ({ ...current, appPath: "" }));
-      const installUrl = result.codexInstallUrl || result.codexMirrorLatestReleaseUrl || result.codexMirrorProjectUrl;
+      const installUrl = result.codexInstallUrl;
       const shouldOpenInstaller = !isSuccessStatus(result.status) && Boolean(installUrl);
-      showNotice("Codex 程序修复", shouldOpenInstaller ? `${result.message} 正在打开手动下载页。` : result.message, result.status);
+      showNotice("ChatGPT 应用修复", shouldOpenInstaller ? `${result.message} 正在打开官方下载页。` : result.message, result.status);
       if (shouldOpenInstaller && installUrl) {
         await openExternalUrl(installUrl);
       }
@@ -1461,7 +1457,7 @@ export function App() {
   };
 
   const uninstallCodexTools = async () => {
-    if (!confirmMessage("将启动 Windows 卸载程序，并先移除 Codex++ 入口和 watcher。继续？")) return;
+    if (!confirmMessage("将启动 Windows 卸载程序，并先移除 ChatGPT Codex 入口和 watcher。继续？")) return;
     const result = await run(() =>
       call<CommandResult<Record<string, unknown>>>("uninstall_codextools", {
         options: { removeOwnedData },
@@ -1858,7 +1854,7 @@ export function App() {
       if (settingsResult) {
         setSettings(settingsResult);
         setSettingsForm(normalizeSettings(settingsResult.settings));
-        showNotice("供应商切换", "供应商配置切换已关闭：已保存设置，但没有写入当前 Codex 配置文件。", settingsResult.status);
+        showNotice("供应商切换", "供应商配置切换已关闭：已保存设置，但没有写入当前 ChatGPT Codex 配置文件。", settingsResult.status);
         setSwitchProgress(100, settingsResult.message, isSuccessStatus(settingsResult.status) ? "ok" : "failed");
         if (isSuccessStatus(settingsResult.status)) {
           window.setTimeout(() => {
@@ -2053,22 +2049,22 @@ export function App() {
       chooseCodexAppPath: async (mode: "folder" | "file") => {
         const selected = await openFileDialog(
           mode === "folder"
-            ? { directory: true, multiple: false, title: tr("选择 Codex 应用目录") }
+            ? { directory: true, multiple: false, title: tr("选择 ChatGPT 应用目录") }
             : {
                 directory: false,
                 multiple: false,
-                title: tr("选择 Codex.exe 或 Codex.app"),
-                filters: [{ name: tr("Codex 应用"), extensions: ["exe", "app"] }],
+                title: tr("选择 ChatGPT.exe"),
+                filters: [{ name: tr("ChatGPT 应用"), extensions: ["exe", "app"] }],
               },
         );
         if (typeof selected === "string" && selected.trim()) {
           const result = await saveCodexAppPath(selected.trim());
           if (result) {
-            showNotice("Codex 应用路径", "应用路径已保存，之后启动会自动复用。", result.status);
+            showNotice("ChatGPT 应用路径", "应用路径已保存，之后启动会自动复用。", result.status);
             await refreshInstallGuideStatus(true);
           }
         } else {
-          showNotice("Codex 应用路径", "未选择路径。", "not_checked");
+          showNotice("ChatGPT 应用路径", "未选择路径。", "not_checked");
         }
       },
       clearCodexAppPath: async () => {
@@ -2078,19 +2074,19 @@ export function App() {
           setSettings(result);
           setSettingsForm(normalizeSettings(result.settings));
           setLaunchForm((current) => ({ ...current, appPath: "" }));
-          showNotice("Codex 应用路径", "已清除保存路径，后续启动会回到自动探测。", result.status);
+          showNotice("ChatGPT 应用路径", "已清除保存路径，后续启动会回到自动探测。", result.status);
           await refreshOverview(true);
         }
       },
       saveManualCodexAppPath: async () => {
         const appPath = launchForm.appPath.trim();
         if (!appPath) {
-          showNotice("Codex 应用路径", "请先填写或选择应用路径。", "failed");
+          showNotice("ChatGPT 应用路径", "请先填写或选择应用路径。", "failed");
           return;
         }
         const result = await saveCodexAppPath(appPath);
         if (result) {
-          showNotice("Codex 应用路径", "应用路径已保存，之后启动会自动复用。", result.status);
+          showNotice("ChatGPT 应用路径", "应用路径已保存，之后启动会自动复用。", result.status);
         }
       },
       syncProvidersNow,
@@ -2175,7 +2171,7 @@ export function App() {
           <div className="brand-mark">C</div>
           <div className="brand-copy">
             <div className="brand-title-row">
-              <div className="brand-title">Codex++</div>
+              <div className="brand-title">ChatGPT Codex</div>
             </div>
             <div className="brand-subtitle">简单管理 Codex</div>
           </div>
@@ -2225,7 +2221,7 @@ export function App() {
               {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
             <div className="topbar-task">
-              <Button disabled={restartInProgress} onClick={() => void actions.restart()} title="重启 Codex" variant="outline">
+              <Button disabled={restartInProgress} onClick={() => void actions.restart()} title="重启 ChatGPT" variant="outline">
                 <Rocket className="h-4 w-4" />
                 {restartInProgress ? "重启中" : "重启"}
               </Button>
@@ -2337,7 +2333,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, AppErro
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("CodexTools UI render failed", error, info.componentStack);
+    console.error("ChatGPT Codex Tools UI render failed", error, info.componentStack);
   }
 
   render() {
@@ -2354,7 +2350,7 @@ function StartupErrorScreen({ error, onRetry }: { error: Error; onRetry: () => v
           <Bell className="h-6 w-6" />
         </div>
         <div>
-          <p className="home-kicker">CodexTools 启动保护</p>
+          <p className="home-kicker">ChatGPT Codex Tools 启动保护</p>
           <h1>界面初始化遇到异常</h1>
           <p>管理工具没有白屏退出。你可以重试，或把这段错误发给开发者排查。</p>
           <code>{error.message || String(error)}</code>
@@ -2473,7 +2469,7 @@ function ProviderImportDialog({ request, actions }: { request: ProviderImportReq
         <div className="modal-head">
           <div>
             <h2>确认导入供应商</h2>
-            <p>外部工具请求新增一个中转供应商，确认后会生成 CodexTools relay profile。</p>
+            <p>外部工具请求新增一个中转供应商，确认后会生成 ChatGPT Codex Tools relay profile。</p>
           </div>
           <UiBadge variant="secondary">Pending</UiBadge>
         </div>
@@ -2513,6 +2509,8 @@ function OverviewScreen({
   actions: Actions;
 }) {
   const launchMode = settings?.settings.launchMode ?? "patch";
+  const activeProfile = activeRelayProfile(settings?.settings ?? defaultSettings);
+  const mixedRelayEnhance = launchMode === "relay" && activeProfile.relayMode === "mixedApi";
   const apiMode = apiModeLabel(relay);
   const update = updateInfo ?? overview?.update ?? null;
   const codexApp = pathStateOrDefault(overview?.codex_app);
@@ -2528,7 +2526,7 @@ function OverviewScreen({
     <>
       <section className="home-hero" aria-label="快速启动">
         <div className="home-hero-main">
-          <div className="home-kicker">Codex++ 管理器</div>
+          <div className="home-kicker">ChatGPT Codex 管理器</div>
           <h2>{allReady ? "一切就绪，可以开始使用" : "先处理一个小问题，再启动"}</h2>
           <p>
             这里保留最常用的操作。普通使用只需要点击启动；连接服务、修复入口和查看日志都放在看得见的位置。
@@ -2536,11 +2534,11 @@ function OverviewScreen({
           <div className="home-command">
             <div>
               <span>推荐操作</span>
-              <strong>{guideCompleted ? allReady ? "打开 Codex++" : primaryIssue?.title ?? "检查状态" : "完成新手引导"}</strong>
+              <strong>{guideCompleted ? allReady ? "打开 ChatGPT Codex" : primaryIssue?.title ?? "检查状态" : "完成新手引导"}</strong>
               <small>
                 {guideCompleted
                   ? allReady
-                    ? "使用当前设置启动 Codex。"
+                    ? "使用当前设置启动 ChatGPT Codex。"
                     : primaryIssue?.detail ?? "刷新状态并查看需要处理的项目。"
                   : guideMismatch
                     ? `当前设置曾在 ${platformLabel(settings?.settings.onboardingCompletedPlatform || "unknown")} 完成，请重新检查 ${guidePlatform}。`
@@ -2580,7 +2578,7 @@ function OverviewScreen({
           </div>
           <div className="side-status">
             <span>界面功能</span>
-            <strong>{launchMode === "relay" ? "兼容模式" : "完整模式"}</strong>
+            <strong>{mixedRelayEnhance ? "混合增强" : launchMode === "relay" ? "兼容模式" : "完整模式"}</strong>
           </div>
         </div>
       </section>
@@ -2600,7 +2598,7 @@ function OverviewScreen({
         <HomeActionCard
           title="连接方式"
           value={apiMode}
-          detail={relayProfileReadinessText(activeRelayProfile(settings?.settings ?? defaultSettings), relay)}
+          detail={relayProfileReadinessText(activeProfile, relay)}
           tone={relay?.configured || relayOfficialAuthenticated(relay) ? "good" : "warn"}
           icon={KeyRound}
           actionLabel="管理连接"
@@ -2608,8 +2606,8 @@ function OverviewScreen({
         />
         <HomeActionCard
           title="界面功能"
-          value={launchMode === "relay" ? "兼容增强" : "完整增强"}
-          detail={settings?.settings.enhancementsEnabled === false ? "增强功能已关闭。" : "删除、导出、项目移动和脚本功能可用。"}
+          value={mixedRelayEnhance ? "混合增强" : launchMode === "relay" ? "兼容增强" : "完整增强"}
+          detail={settings?.settings.enhancementsEnabled === false ? "增强功能已关闭。" : mixedRelayEnhance ? "站点/插件市场、删除、导出、项目移动和脚本功能可用。" : "删除、导出、项目移动和脚本功能可用。"}
           tone={settings?.settings.enhancementsEnabled === false ? "warn" : "good"}
           icon={Hammer}
           actionLabel="查看功能"
@@ -2618,7 +2616,7 @@ function OverviewScreen({
         <HomeActionCard
           title="入口和路径"
           value={silentShortcut.status === "installed" ? "已安装" : "建议检查"}
-          detail={codexApp.path || "如果启动失败，先到修复工具选择 Codex 应用路径。"}
+          detail={codexApp.path || "如果启动失败，先到修复工具选择 ChatGPT 应用路径。"}
           tone={silentShortcut.status === "installed" && codexApp.status === "found" ? "good" : "warn"}
           icon={Wrench}
           actionLabel="修复工具"
@@ -2632,7 +2630,7 @@ function OverviewScreen({
           <CardContent>
             <GuideList
               items={[
-                guideCompleted ? "点击“立即启动”，用当前设置打开 Codex。" : `先进入“新手引导”，按 ${guidePlatform} 流程完成首次配置。`,
+                guideCompleted ? "点击“立即启动”，用当前设置打开 ChatGPT Codex。" : `先进入“新手引导”，按 ${guidePlatform} 流程完成首次配置。`,
                 "如果要使用 API，进入“连接服务”选择官方登录、官方混合 API 或中转 API。",
                 "如果桌面入口、路径或启动异常，进入“修复工具”检查。",
               ]}
@@ -2646,8 +2644,8 @@ function OverviewScreen({
               <div className={`health-item ${overview?.codex_version ? "ok" : "needs-fix"}`}>
                 {overview?.codex_version ? <CheckCircle2 className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
                 <div>
-                  <strong>Codex 版本</strong>
-                  <span>{overview?.codex_version ?? "未检测到 Codex 应用版本。"}</span>
+                  <strong>ChatGPT 版本</strong>
+                  <span>{overview?.codex_version ?? "未检测到 ChatGPT 应用版本。"}</span>
                 </div>
                 <Badge status={overview?.codex_version ? "ok" : "not_checked"} />
               </div>
@@ -2673,7 +2671,7 @@ function OverviewScreen({
           <Toolbar>
             <Button variant="secondary" onClick={() => void actions.restart()}>
               <Rocket className="h-4 w-4" />
-              重启 Codex
+              重启 ChatGPT
             </Button>
             <Button variant="ghost" onClick={() => void actions.goLogs()}>
               打开日志
@@ -2736,7 +2734,7 @@ function UpdateBanner({
         {available ? <Download className="h-5 w-5" /> : <RefreshCw className="h-5 w-5" />}
       </div>
       <div className="update-banner-copy">
-        <span>CodexTools 更新</span>
+        <span>ChatGPT Codex Tools 更新</span>
         <strong>
           {available
             ? `发现新版本 ${latestVersion}`
@@ -2814,7 +2812,7 @@ function InstallGuideScreen({
   const selectedProfileReady = relayProfileGuideReady(modeProfile, status?.connection, relay);
 
   const openInstall = async () => {
-    const url = status?.codexInstallUrl || (status?.platform === "darwin" ? "https://openai.com/codex/" : "https://github.com/Wangnov/codex-app-mirror/releases/latest");
+    const url = status?.codexInstallUrl || "https://chatgpt.com/download";
     await actions.openExternalUrl(url);
   };
 
@@ -2857,10 +2855,10 @@ function InstallGuideScreen({
 
   const guideSteps: Array<{ id: GuideStep; title: string; done: boolean }> = [
     { id: "platform", title: "识别系统", done: !!status },
-    { id: "codex", title: "安装 Codex", done: codexLaunchReady },
+    { id: "codex", title: "安装 ChatGPT", done: codexLaunchReady },
     { id: "ccs", title: "导入 CCSwitch", done: !ccsInstalled || importedProviderCount > 0 },
     { id: "mode", title: "选择模式", done: selectedMode === active.relayMode && active.id === modeProfile.id },
-    { id: "finish", title: "启动 Codex++", done: guideCompleted },
+    { id: "finish", title: "启动 ChatGPT Codex", done: guideCompleted },
   ];
   const completedStepCount = guideSteps.filter((item) => item.done).length;
   const guideProgress = Math.round((completedStepCount / guideSteps.length) * 100);
@@ -2870,11 +2868,11 @@ function InstallGuideScreen({
       <section className="onboarding-hero" aria-label="新手安装引导">
         <div className="onboarding-hero-copy">
           <h2>{platformGuide.title}</h2>
-          <p>{platformGuide.systemDescription} 从 Codex 安装、CCSwitch 导入到连接模式配置，按顺序完成后直接进入启动界面。</p>
+          <p>{platformGuide.systemDescription} 从 ChatGPT 安装、CCSwitch 导入到连接模式配置，按顺序完成后直接进入启动界面。</p>
         </div>
         <div className="onboarding-summary">
           <Metric label="系统" value={platformSummary(status)} />
-          <Metric label="Codex" value={codexLaunchReady ? "可启动" : codexDetected ? "已安装但需解包" : "未检测到"} />
+          <Metric label="ChatGPT" value={codexLaunchReady ? "可启动" : codexDetected ? "已安装但需选择可执行路径" : "未检测到"} />
           <Metric label="引导" value={guideCompleted ? `已完成 · ${platformGuide.platformLabel}` : "待完成"} />
           <Metric label="当前模式" value={relayModeLabel(active.relayMode)} />
         </div>
@@ -3031,19 +3029,19 @@ function GuideCodexStep({
   const launchStatus = status?.codexLaunch;
   const detected = status?.codexApp.status === "found";
   const needsRepair = detected && !installed;
-  const detectionMessage = status?.codexDetection?.message || (detected ? "已检测到 Codex 应用。" : "自动检测暂未找到 Codex。");
+  const detectionMessage = status?.codexDetection?.message || (detected ? "已检测到 ChatGPT 桌面应用。" : "自动检测暂未找到 ChatGPT。");
   const detectionHints = status?.codexDetection?.candidates ?? [];
   const executableLabel = launchStatus?.method === "packaged_activation"
     ? launchStatus.appUserModelId || status?.codexApp.appUserModelId || status?.codexDetection?.appUserModelId || "MSIX 应用激活"
     : launchStatus?.executable || status?.codexApp.executable || status?.codexDetection?.executable || "未找到";
-  const primaryAction = isWindows && !installed ? onRepair : onInstall;
-  const primaryLabel = isWindows && !installed ? "自动下载并解包" : platformGuide.installActionLabel;
+  const primaryAction = onInstall;
+  const primaryLabel = platformGuide.installActionLabel;
   return (
     <div className="guide-pane">
       <div className="guide-pane-head">
         {installed ? <CheckCircle2 className="h-5 w-5" /> : <Download className="h-5 w-5" />}
         <div>
-          <h3>{installed ? "Codex 可启动" : needsRepair ? "Codex 已安装但需要解包" : platformGuide.installTitle}</h3>
+          <h3>{installed ? "ChatGPT 可启动" : needsRepair ? "ChatGPT 已安装但需要选择可执行路径" : platformGuide.installTitle}</h3>
           <p>{installed || needsRepair ? launchStatus?.message || status?.codexApp.path || detectionMessage : detectionMessage || platformGuide.installDescription}</p>
         </div>
       </div>
@@ -3061,11 +3059,11 @@ function GuideCodexStep({
       ) : null}
       <div className="install-card">
         <div>
-          <strong>{detected ? "当前 Codex" : platformGuide.installTitle}</strong>
-          <span>{installed ? status?.codexVersion ?? "版本未读取" : needsRepair ? "MSIX 已安装，但还不能作为 Codex++ 启动目标" : installDownloadText(download)}</span>
+          <strong>{detected ? "当前 ChatGPT" : platformGuide.installTitle}</strong>
+          <span>{installed ? status?.codexVersion ?? "版本未读取" : needsRepair ? "已检测到受限安装形态，请选择可直接执行的 ChatGPT.exe" : installDownloadText(download)}</span>
         </div>
         <Button disabled={installed} onClick={primaryAction}>
-          {isWindows && !installed ? <Wrench className="h-4 w-4" /> : <ExternalLink className="h-4 w-4" />}
+          <ExternalLink className="h-4 w-4" />
           {primaryLabel}
         </Button>
       </div>
@@ -3074,7 +3072,7 @@ function GuideCodexStep({
         <Metric label={platformGuide.launchMethodLabel} value={launchStatus?.methodLabel || (isWindows ? "未检测" : "可执行文件启动")} />
         {isWindows ? <Metric label={launchStatus?.method === "packaged_activation" ? "AppUserModelID" : "启动文件"} value={executableLabel} /> : null}
         {!isWindows ? <Metric label={platformGuide.launchTargetLabel} value={status?.codexApp.path || platformGuide.pathHint || "未找到"} /> : null}
-        <Metric label="安装来源" value={platformGuide.installSourceLabel || (status?.codexInstallSource === "official" ? "官方页面" : "镜像项目")} />
+        <Metric label="安装来源" value={platformGuide.installSourceLabel || "官方页面"} />
         <Metric label="最新版本" value={download?.releaseName || download?.tagName || "未获取"} />
       </div>
       {!installed && isWindows && detectionHints.length > 0 ? (
@@ -3101,7 +3099,7 @@ function GuideCodexStep({
         {isSupportedDesktop ? (
           <Button onClick={onRepair} variant="secondary">
             <Wrench className="h-4 w-4" />
-            修复 Codex 程序
+            修复 ChatGPT 应用
           </Button>
         ) : null}
         <Button onClick={onRefresh} variant="secondary">
@@ -3137,7 +3135,7 @@ function GuideCcsStep({
         {installed ? <CheckCircle2 className="h-5 w-5" /> : <ArrowLeft className="h-5 w-5" />}
         <div>
           <h3>{installed ? "发现 CCSwitch" : "未发现 CCSwitch，跳过导入"}</h3>
-          <p>{installed ? "可以把 CCSwitch 里的 Codex 供应商导入到 Codex++，后续在中转通道里选择。" : "没有检测到 CCSwitch 数据库，不需要安装，直接进入下一步。"}</p>
+          <p>{installed ? "可以把 CCSwitch 里的 Codex 供应商导入到 ChatGPT Codex Tools，后续在中转通道里选择。" : "没有检测到 CCSwitch 数据库，不需要安装，直接进入下一步。"}</p>
         </div>
       </div>
       <div className="guide-facts">
@@ -3309,7 +3307,7 @@ function GuideFinishStep({
         <Rocket className="h-5 w-5" />
         <div>
           <h3>{platformGuide.completionLabel}</h3>
-          <p>配置已经写入并记录完成状态，可以用当前模式启动 Codex++。</p>
+          <p>配置已经写入并记录完成状态，可以用当前模式启动 ChatGPT Codex。</p>
         </div>
       </div>
       <div className="guide-facts">
@@ -3324,7 +3322,7 @@ function GuideFinishStep({
       <Toolbar>
         <Button onClick={() => void actions.launch()} size="lg">
           <Rocket className="h-4 w-4" />
-          启动 Codex++
+          启动 ChatGPT Codex
         </Button>
         <Button onClick={() => void actions.goRelay()} variant="secondary">
           查看连接服务
@@ -3341,7 +3339,7 @@ function guideModeTitle(mode: RelayMode) {
 }
 
 function guideModeDescription(mode: RelayMode) {
-  if (mode === "mixedApi") return "使用供应商绑定的官方号，再混入所选 API 通道。";
+  if (mode === "mixedApi") return "使用供应商绑定的官方号，再混入所选 API 通道；站点功能继续走官方登录能力。";
   if (mode === "pureApi") return "直接写入中转通道配置。";
   return "只使用供应商绑定的官方号。";
 }
@@ -3514,7 +3512,7 @@ function RelayScreen({
             <Metric label="当前供应商" value={active.name || "-"} />
             <Metric label="接入模式" value={relayModeLabel(active.relayMode)} />
             <Metric label="上游协议" value={relayProtocolLabel(active.protocol)} />
-            <Metric label="历史会话" value={relay?.configured ? "CodexPlusPlus" : "openai"} />
+            <Metric label="历史会话" value={relay?.configured ? "ChatGPT Codex Tools" : "openai"} />
             <Metric label="页面增强" value={normalized.launchMode === "relay" ? "兼容模式" : "完整模式"} />
             <Metric label="配置状态" value={relay?.configured ? "已写入" : "官方默认"} />
           </div>
@@ -3582,7 +3580,7 @@ function RelayScreen({
             />
             <span>
               <strong>启用供应商配置切换</strong>
-              <small>关闭后仍可保存配置，但不会从列表里切换写入当前 Codex 配置。</small>
+              <small>关闭后仍可保存配置，但不会从列表里切换写入当前 ChatGPT Codex 配置。</small>
             </span>
           </label>
           <label className="switch-row relay-link-switch">
@@ -3654,7 +3652,7 @@ function RelayScreen({
       <Panel>
         <CardHead title="配置文件" detail="当前环境仍只有一套 ~/.codex 文件；供应商详情里编辑的是各自独立快照" />
         <CardContent>
-          <div className="path-line loose">Codex++ 设置：{settings?.settings_path ?? "未加载设置文件。"}</div>
+          <div className="path-line loose">ChatGPT Codex 设置：{settings?.settings_path ?? "未加载设置文件。"}</div>
           <div className="path-line loose">Codex config.toml：{relayFiles?.configPath ?? "-"}</div>
           <div className="path-line loose">Codex auth.json：{relayFiles?.authPath ?? "-"}</div>
         </CardContent>
@@ -3717,6 +3715,9 @@ function EnhanceScreen({
   const setEnhanceFlag = (key: keyof BackendSettings, value: boolean) => onFormChange({ ...form, [key]: value });
   const masterEnabled = form.enhancementsEnabled;
   const patchMode = form.launchMode === "patch";
+  const activeMode = activeRelayProfile(form).relayMode;
+  const mixedRelayMode = form.launchMode === "relay" && activeMode === "mixedApi";
+  const pluginPatchAllowed = patchMode || mixedRelayMode;
   return (
     <>
       <Panel>
@@ -3729,7 +3730,7 @@ function EnhanceScreen({
               type="checkbox"
             />
             <span>
-              <strong>启用 Codex++ 页面增强</strong>
+              <strong>启用 ChatGPT Codex 页面增强</strong>
               <small>关闭后会停用删除、导出、项目移动、Timeline 和菜单位置增强。</small>
             </span>
           </label>
@@ -3737,18 +3738,18 @@ function EnhanceScreen({
           {form.launchMode === "relay" ? (
             <div className="hint-line">
               <ShieldCheck className="h-4 w-4" />
-              <span>当前为兼容增强模式：插件市场解锁、强制入口解锁和强制插件安装会保持关闭，其它页面功能仍可用。</span>
+              <span>{mixedRelayMode ? "当前为混合 API 增强：保留官方登录能力，站点/插件市场、自动展开和强制安装可继续使用。" : "当前为兼容增强模式：纯中转/聚合会关闭插件/站点市场解锁、强制入口解锁和强制安装，其它页面功能仍可用。"}</span>
             </div>
           ) : null}
           <div className="feature-switch-grid">
-            <FeatureToggle title="插件市场解锁" detail="API Key 模式下扩展插件市场请求，尽量显示完整插件列表。" checked={form.codexAppPluginMarketplaceUnlock} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginMarketplaceUnlock", value)} />
-            <FeatureToggle title="插件自动展开" detail="按上游新策略自动展开插件区域，不再依赖旧入口强制解锁。" checked={form.codexAppPluginAutoExpand} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppPluginAutoExpand", value)} />
-            <FeatureToggle title="特殊插件强制安装" detail="解除 App unavailable / 应用不可用导致的前端安装禁用。" checked={form.codexAppForcePluginInstall} disabled={!masterEnabled || !patchMode} onChange={(value) => setEnhanceFlag("codexAppForcePluginInstall", value)} />
+            <FeatureToggle title="插件/站点市场解锁" detail="API Key 或混合模式下扩展插件/站点市场请求，尽量显示完整列表。" checked={form.codexAppPluginMarketplaceUnlock} disabled={!masterEnabled || !pluginPatchAllowed} onChange={(value) => setEnhanceFlag("codexAppPluginMarketplaceUnlock", value)} />
+            <FeatureToggle title="插件/站点自动展开" detail="按上游新策略自动展开插件/站点区域，不再依赖旧入口强制解锁。" checked={form.codexAppPluginAutoExpand} disabled={!masterEnabled || !pluginPatchAllowed} onChange={(value) => setEnhanceFlag("codexAppPluginAutoExpand", value)} />
+            <FeatureToggle title="特殊插件/站点强制安装" detail="解除 App unavailable / 应用不可用导致的前端安装禁用。" checked={form.codexAppForcePluginInstall} disabled={!masterEnabled || !pluginPatchAllowed} onChange={(value) => setEnhanceFlag("codexAppForcePluginInstall", value)} />
             <FeatureToggle title="模型白名单解锁" detail="读取本地和上游模型目录，补进 Codex 模型选择列表。" checked={form.codexAppModelWhitelistUnlock} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppModelWhitelistUnlock", value)} />
             <FeatureToggle title="Fast 按钮" detail="显示服务模式切换入口，控制 Standard / Fast / priority。" checked={form.codexAppServiceTierControls} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppServiceTierControls", value)} />
             <FeatureToggle title="粘贴修复" detail="修复部分输入框粘贴事件被 Codex 前端吞掉的问题。" checked={form.codexAppPasteFix} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppPasteFix", value)} />
             <FeatureToggle title="强制中文界面" detail="启动时传入 zh-CN locale，并在注入层补齐部分菜单本地化。" checked={form.codexAppForceChineseLocale} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppForceChineseLocale", value)} />
-            <FeatureToggle title="快速启动参数" detail="启动 Codex 时附加上游 fast startup 参数，减少启动卡顿。" checked={form.codexAppFastStartup} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppFastStartup", value)} />
+            <FeatureToggle title="快速启动参数" detail="启动 ChatGPT 时附加上游 fast startup 参数，减少启动卡顿。" checked={form.codexAppFastStartup} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppFastStartup", value)} />
             <FeatureToggle title="会话删除" detail="在会话列表悬停显示删除按钮，并支持撤销。" checked={form.codexAppSessionDelete} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppSessionDelete", value)} />
             <FeatureToggle title="Markdown 导出" detail="导出带时间戳的 Markdown。" checked={form.codexAppMarkdownExport} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppMarkdownExport", value)} />
             <FeatureToggle title="会话项目移动" detail="把会话移动到普通对话或其他本地项目。" checked={form.codexAppProjectMove} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppProjectMove", value)} />
@@ -3757,9 +3758,9 @@ function EnhanceScreen({
             <FeatureToggle title="切换对话保留位置" detail="切换 thread 时恢复上一次浏览位置。" checked={form.codexAppThreadScrollRestore} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppThreadScrollRestore", value)} />
             <FeatureToggle title="Zed Remote open" detail="远程 SSH 文件引用可直接用 Zed Remote Development 打开。" checked={form.codexAppZedRemoteOpen} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppZedRemoteOpen", value)} />
             <FeatureToggle title="Upstream worktree" detail="从 upstream 分支创建 Git worktree。" checked={form.codexAppUpstreamWorktreeCreate} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppUpstreamWorktreeCreate", value)} />
-            <FeatureToggle title="原生菜单栏位置" detail="把 Codex++ 菜单插入 Codex 顶部原生菜单栏。" checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
+            <FeatureToggle title="原生菜单栏位置" detail="把 ChatGPT Codex 菜单插入 ChatGPT 顶部原生菜单栏。" checked={form.codexAppNativeMenuPlacement} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuPlacement", value)} />
             <FeatureToggle title="原生菜单本地化" detail="启用上游 native menu localization inspector，修复原生菜单英文残留。" checked={form.codexAppNativeMenuLocalization} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppNativeMenuLocalization", value)} />
-            <FeatureToggle title="Computer Use Guard" detail="启动 Codex 前后保护 Windows Computer Use 插件、marketplace 和 js_repl 配置。" checked={form.computerUseGuardEnabled} onChange={(value) => setEnhanceFlag("computerUseGuardEnabled", value)} />
+            <FeatureToggle title="Computer Use Guard" detail="启动 ChatGPT 前后保护 Windows Computer Use 插件、marketplace 和 js_repl 配置。" checked={form.computerUseGuardEnabled} onChange={(value) => setEnhanceFlag("computerUseGuardEnabled", value)} />
             <FeatureToggle title="Zed 项目记录" detail="记录成功打开的远程项目，并和当前 thread / global state 一起展示最近项目。" checked={form.zedRemoteProjectRegistryEnabled} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteProjectRegistryEnabled", value)} />
             <FeatureToggle title="同步 Zed 设置" detail="打开远程项目时同步到 Zed 项目记录，方便后续复用。" checked={form.zedRemoteSyncToZedSettings} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("zedRemoteSyncToZedSettings", value)} />
           </div>
@@ -3798,7 +3799,7 @@ function MobileHelperPanel({ actions }: { actions: Actions }) {
       <CardContent>
         <div className="hint-line">
           <Smartphone className="h-4 w-4" />
-          <span>从 CodexTools 启动 Codex 后，helper 会提供 /mobile、/app-server/status 和 /app-server/ws。</span>
+          <span>从 ChatGPT Codex 启动 ChatGPT 后，helper 会提供 /mobile、/app-server/status 和 /app-server/ws。</span>
         </div>
         <div className="path-line compact-path">{mobileUrl}</div>
         <Toolbar>
@@ -3938,11 +3939,11 @@ function ProviderSyncScreen({
   const backups = skillMcpBackups?.backups ?? [];
   const isWindows = computerUse?.platform === "windows";
   const guideItems = [
-    "自动修复只在 Codex++ 启动 Codex 前运行，会整理旧对话归属、补回插件配置并重读插件市场。",
+    "自动修复只在 ChatGPT Codex 启动 ChatGPT 前运行，会整理旧对话归属、补回插件配置并重读插件市场。",
     "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置，并执行 marketplace 刷新/重读。",
-    ...(isWindows ? ["Computer Use 修复会写入本地兼容插件和用户环境变量，修复后需要重启 Codex。"] : []),
+    ...(isWindows ? ["Computer Use 修复会写入本地兼容插件和用户环境变量，修复后需要重启 ChatGPT。"] : []),
     "Skill/MCP 恢复前会自动备份当前状态，并只替换 config.toml 里的 MCP、插件、市场和 features 表。",
-    "切回官方时历史会话会整理为 openai；切到 API 时会整理为 CodexPlusPlus。",
+    "切回官方时历史会话会整理为 openai；切到 API 时会整理为 ChatGPT Codex Tools 中转供应商。",
   ];
   return (
     <>
@@ -3957,7 +3958,7 @@ function ProviderSyncScreen({
             />
             <span>
               <strong>启动前自动修复历史会话</strong>
-              <small>开启后，通过 Codex++ 启动 Codex 前自动整理一次旧对话的归属标记。</small>
+              <small>开启后，通过 ChatGPT Codex 启动 ChatGPT 前自动整理一次旧对话的归属标记。</small>
             </span>
           </label>
           <div className="relay-grid compact">
@@ -4005,7 +4006,7 @@ function ProviderSyncScreen({
               <StatusRow title="config.toml" status={computerUse?.configReady ? "ok" : "missing"} path={computerUse?.configPath ?? null} />
             </div>
             {computerUse?.backupPath ? <div className="path-line compact-path">本次配置备份：{computerUse.backupPath}</div> : null}
-            <div className="path-line compact-path">修复后请关闭所有 Codex 窗口，再从 Codex++ 入口重新启动。</div>
+            <div className="path-line compact-path">修复后请关闭所有 ChatGPT 窗口，再从 ChatGPT Codex 入口重新启动。</div>
             <Toolbar>
               <Button onClick={() => void actions.refreshComputerUse()} variant="outline">
                 <RefreshCw className="h-4 w-4" />
@@ -4103,18 +4104,18 @@ function MaintenanceScreen({
   const isWindows = watcherPlatform === "windows";
   const isMac = watcherPlatform === "darwin";
   const appPathPlaceholder = isWindows
-    ? "选择解包后的 app\\Codex.exe 或解包目录"
+    ? "选择 ChatGPT.exe 或 ChatGPT 安装目录"
     : isMac
-      ? "选择 Codex.app 或所在应用目录"
-      : "选择 Codex 应用路径";
-  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "例如 C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe" : "/Applications/Codex.app");
+      ? "选择 ChatGPT.app"
+      : "选择 ChatGPT 应用路径";
+  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "例如 C:\\Users\\你\\AppData\\Local\\Programs\\ChatGPT\\ChatGPT.exe" : "/Applications/ChatGPT.app");
   return (
     <>
       <Panel>
-        <CardHead title="检查与修复" detail={isWindows ? "检查入口、Codex 应用和 Watcher 状态" : "检查入口和 Codex 应用状态"} />
+        <CardHead title="检查与修复" detail={isWindows ? "检查入口、ChatGPT 应用和 Watcher 状态" : "检查入口和 ChatGPT 应用状态"} />
         <CardContent>
           <div className="status-table">
-            <StatusRow title="Codex 应用" status={overview?.codex_app.status} path={overview?.codex_app.path} />
+            <StatusRow title="ChatGPT 应用" status={overview?.codex_app.status} path={overview?.codex_app.path} />
             <StatusRow title="静默启动入口" status={overview?.silent_shortcut.status} path={overview?.silent_shortcut.path} />
             <StatusRow title="管理控制台入口" status={overview?.management_shortcut.status} path={overview?.management_shortcut.path} />
             {isWindows ? <StatusRow title="Watcher 自动接管" status={watcher?.enabled ? "ok" : "disabled"} path={watcher?.disabled_flag} /> : null}
@@ -4123,7 +4124,7 @@ function MaintenanceScreen({
             <Button onClick={() => void actions.checkHealth()}>检查</Button>
             <Button variant="secondary" onClick={() => void actions.repairCodexApp()}>
               <Wrench className="h-4 w-4" />
-              修复 Codex 程序
+              修复 ChatGPT 应用
             </Button>
             <Button variant="secondary" onClick={() => void actions.repairShortcuts()}>修复快捷方式</Button>
             <Button variant="secondary" onClick={() => void actions.repairBackend()}>修复后端</Button>
@@ -4131,11 +4132,11 @@ function MaintenanceScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="入口管理" detail={isWindows ? "快捷方式写入系统实际桌面位置，不使用写死桌面路径" : "在 /Applications 写入 Codex++ 应用入口"} />
+        <CardHead title="入口管理" detail={isWindows ? "快捷方式写入系统实际桌面位置，不使用写死桌面路径" : "在 /Applications 写入 ChatGPT Codex 应用入口"} />
         <CardContent>
           <label className="check-row">
             <input checked={removeOwnedData} onChange={(event) => onRemoveOwnedDataChange(event.currentTarget.checked)} type="checkbox" />
-            <span>卸载时移除 Codex++ 托管数据</span>
+            <span>卸载时移除 ChatGPT Codex 托管数据</span>
           </label>
           <Toolbar>
             <Button onClick={() => void actions.installEntrypoints()}>安装入口</Button>
@@ -4144,7 +4145,7 @@ function MaintenanceScreen({
             {watcherPlatform === "windows" ? (
               <Button variant="outline" onClick={() => void actions.uninstallCodexTools()}>
                 <Trash2 className="h-4 w-4" />
-                卸载 Codex++
+                卸载 ChatGPT Codex
               </Button>
             ) : null}
           </Toolbar>
@@ -4152,14 +4153,14 @@ function MaintenanceScreen({
       </Panel>
       {isWindows ? (
         <Panel>
-          <CardHead title="自动接管" detail="Windows watcher 用于保持 Codex++ 接管状态" />
+          <CardHead title="自动接管" detail="Windows watcher 用于保持 ChatGPT Codex 接管状态" />
           <CardContent>
             <div className="platform-note">
               <ShieldCheck className="h-4 w-4" />
-              <span>Windows 使用当前用户 Run 注册表项保持 Codex++ 静默接管，并会清理旧版本启动目录快捷方式以避免重复启动。</span>
+              <span>Windows 使用当前用户 Run 注册表项保持 ChatGPT Codex 静默接管，并会清理旧版本启动目录快捷方式以避免重复启动。</span>
             </div>
             <div className="status-table compact-path">
-              <StatusRow title="Run 项名称" status={watcher?.run_value_installed ? "installed" : "not_checked"} path={watcher?.run_value_name || "CodexPlusPlusWatcher"} />
+              <StatusRow title="Run 项名称" status={watcher?.run_value_installed ? "installed" : "not_checked"} path={watcher?.run_value_name || "ChatGPTCodexToolsWatcher"} />
               <StatusRow title="旧启动快捷方式" status={watcher?.startup_shortcut_installed ? "found" : "ok"} path={watcher?.startup_shortcut || null} />
               <StatusRow title="启动器命令" status={watcher?.launcher_path ? "found" : "not_checked"} path={`${watcher?.launcher_path || ""} ${watcher?.launcher_arguments || ""}`.trim() || null} />
             </div>
@@ -4173,7 +4174,7 @@ function MaintenanceScreen({
         </Panel>
       ) : null}
       <Panel>
-        <CardHead title="Codex 应用路径" detail={isWindows ? "免安装版或解包版只需要选择一次，之后静默启动会自动复用" : "选择 Codex.app 后，之后静默启动会自动复用"} />
+        <CardHead title="ChatGPT 应用路径" detail={isWindows ? "选择可直接执行的 ChatGPT.exe 后，静默启动会自动复用" : "选择 ChatGPT.app 后，之后静默启动会自动复用"} />
         <CardContent>
           <div className="status-table">
             <StatusRow title="保存路径" status={savedCodexAppPath ? "ok" : "not_checked"} path={savedCodexAppPath || null} />
@@ -4189,10 +4190,10 @@ function MaintenanceScreen({
           <Toolbar>
             <Button onClick={() => void actions.repairCodexApp()}>
               <Wrench className="h-4 w-4" />
-              修复 Codex 程序
+              修复 ChatGPT 应用
             </Button>
-            <Button onClick={() => void actions.chooseCodexAppPath("folder")}>{isWindows ? "选择应用目录" : "选择 Codex.app"}</Button>
-            {isWindows ? <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 Codex.exe</Button> : null}
+            <Button onClick={() => void actions.chooseCodexAppPath("folder")}>{isWindows ? "选择应用目录" : "选择 ChatGPT.app"}</Button>
+            {isWindows ? <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 ChatGPT.exe</Button> : null}
             <Button variant="secondary" onClick={() => void actions.clearCodexAppPath()}>清除保存路径</Button>
           </Toolbar>
         </CardContent>
@@ -4222,7 +4223,7 @@ function MaintenanceScreen({
             </Field>
           </div>
           <Toolbar>
-            <Button onClick={() => void actions.launch()}>启动 Codex++</Button>
+            <Button onClick={() => void actions.launch()}>启动 ChatGPT Codex</Button>
             <Button variant="secondary" onClick={() => void actions.saveManualCodexAppPath()}>
               保存为默认路径
             </Button>
@@ -4246,11 +4247,11 @@ function AboutScreen({
   return (
     <>
       <Panel>
-        <CardHead title="关于 CodexTools" detail="本地 Codex 增强、管理工具和安装包维护" />
+        <CardHead title="关于 ChatGPT Codex Tools" detail="本地 ChatGPT Codex 增强、管理工具和安装包维护" />
         <CardContent>
           <div className="metric-list">
-            <Metric label="CodexTools 版本" value={overview?.current_version ?? "-"} />
-            <Metric label="Codex 版本" value={overview?.codex_version ?? "未检测到"} />
+            <Metric label="ChatGPT Codex Tools 版本" value={overview?.current_version ?? "-"} />
+            <Metric label="ChatGPT 版本" value={overview?.codex_version ?? "未检测到"} />
             <Metric label="项目地址" value="github.com/hereww/codextools" />
             <Metric label="电报群" value="t.me/wanai8" />
           </div>
@@ -4377,7 +4378,7 @@ function SettingsScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="Codex 启动参数" detail="启动 Codex App 时追加到默认 CDP 参数后。留空则保持默认启动行为。" />
+        <CardHead title="ChatGPT 启动参数" detail="启动 ChatGPT App 时追加到默认 CDP 参数后。留空则保持默认启动行为。" />
         <CardContent>
           <Field label="额外参数">
             <Textarea
@@ -4400,7 +4401,7 @@ function SettingsScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title="图片覆盖层" detail="启动 Codex 时在窗口上叠加一张本地参考图，适合按截图对齐界面。" />
+        <CardHead title="图片覆盖层" detail="启动 ChatGPT 时在窗口上叠加一张本地参考图，适合按截图对齐界面。" />
         <CardContent>
           <label className="switch-row">
             <input
@@ -5874,7 +5875,7 @@ function RelayProfileEditor({
       {showApiFields && profile.protocol === "chatCompletions" ? (
         <div className="hint-line relay-protocol-hint">
           <MessageCircle className="h-4 w-4" />
-          <span>此上游会通过本地 127.0.0.1:57321 转成 Responses API，需要从 Codex++ 启动 Codex。</span>
+          <span>此上游会通过本地 127.0.0.1:57321 转成 Responses API，需要从 ChatGPT Codex 启动 ChatGPT。</span>
         </div>
       ) : null}
       <div className="hint-line relay-protocol-hint">
@@ -6012,7 +6013,7 @@ function ModeSelector({ launchMode, actions }: { launchMode: LaunchMode; actions
         type="button"
       >
         <strong>兼容增强</strong>
-        <span>手动兜底选项；使用更保守的页面注入路径，仍保留删除、导出、项目移动、Timeline 和用户脚本。</span>
+        <span>纯中转/聚合的兜底路径会关闭站点/插件解锁；混合 API 会保留官方登录能力并继续启用站点功能。</span>
       </button>
       <button
         className={`mode-option ${launchMode === "patch" ? "active" : ""}`}
@@ -6314,15 +6315,15 @@ function platformGuideFor(status: InstallGuideStatusResult | null): PlatformGuid
     systemDescription: "安装包、路径检测和桌面运行方式会根据当前系统自动切换。",
     desktopRuntime: status?.desktopRuntime || "桌面窗口",
     desktopRuntimeDescription: "当前系统使用桌面窗口运行管理器。",
-    installTitle: "安装 Codex",
+    installTitle: "安装 ChatGPT",
     installActionLabel: "打开安装入口",
     installSourceLabel: "安装入口",
-    installDescription: "按当前系统打开对应的 Codex 安装入口。",
+    installDescription: "按当前系统打开 ChatGPT 桌面应用安装入口。",
     manualPrimaryLabel: "手动选择应用",
     manualPrimaryMode: "folder",
     manualSecondaryLabel: "",
     manualSecondaryMode: "",
-    detectionNote: "自动检测暂未找到 Codex 时，可以手动选择实际安装位置。",
+    detectionNote: "自动检测暂未找到 ChatGPT 时，可以手动选择实际安装位置。",
     pathHint: "",
     launchMethodLabel: "启动方式",
     launchTargetLabel: "启动文件",
@@ -6333,37 +6334,37 @@ function platformGuideFor(status: InstallGuideStatusResult | null): PlatformGuid
     return {
       ...base,
       title: "macOS 新手引导",
-      systemDescription: "macOS 会检查 Codex.app、官方安装页和 WebKit 桌面窗口运行状态。",
+      systemDescription: "macOS 会检查 ChatGPT.app、官方安装页和 WebKit 桌面窗口运行状态。",
       desktopRuntime: status?.desktopRuntime || "macOS WebKit 桌面窗口",
       desktopRuntimeDescription: "macOS 使用 WebKit 桌面窗口运行管理器。",
       installTitle: "macOS 官方安装",
       installActionLabel: "打开官方安装页",
       installSourceLabel: "官方页面",
-      manualPrimaryLabel: "选择 Codex.app",
+      manualPrimaryLabel: "选择 ChatGPT.app",
       manualPrimaryMode: "folder",
-      detectionNote: "macOS 已安装但未识别时，选择 /Applications/Codex.app 或实际放置 Codex.app 的应用目录即可。",
-      pathHint: "/Applications/Codex.app",
-      launchTargetLabel: "Codex.app",
+      detectionNote: "macOS 已安装但未识别时，选择 /Applications/ChatGPT.app 或实际放置 ChatGPT.app 的应用目录即可。",
+      pathHint: "/Applications/ChatGPT.app",
+      launchTargetLabel: "ChatGPT.app",
     };
   }
   if (platform === "windows") {
     return {
       ...base,
       title: "Windows 新手引导",
-      systemDescription: "Windows 会检查 Codex.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。",
+      systemDescription: "Windows 会检查 ChatGPT.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。",
       desktopRuntime: status?.desktopRuntime || "Windows WebView2 桌面窗口",
       desktopRuntimeDescription: "Windows 使用 WebView2 桌面窗口运行管理器。",
-      installTitle: "Windows 镜像包解包",
-      installActionLabel: "打开镜像下载页",
-      installSourceLabel: "镜像项目",
-      installDescription: "Windows Store/MSIX 版不能作为 Codex++ 启动目标；请用修复工具自动下载并解包镜像包，或手动选择解包后的 Codex.exe。",
-      manualPrimaryLabel: "选择解包后的 Codex.exe",
+      installTitle: "Windows 官方安装",
+      installActionLabel: "打开 ChatGPT 下载页",
+      installSourceLabel: "官方页面",
+      installDescription: "请安装 ChatGPT 桌面应用；如自动检测失败，手动选择 ChatGPT.exe 或其安装目录。",
+      manualPrimaryLabel: "选择 ChatGPT.exe",
       manualPrimaryMode: "file",
-      manualSecondaryLabel: "选择解包目录",
+      manualSecondaryLabel: "选择安装目录",
       manualSecondaryMode: "folder",
-      detectionNote: "不要选择 Program Files\\WindowsApps 包目录；请点击“修复 Codex 程序”自动解包镜像包，或选择解包目录中的 app\\Codex.exe。",
-      pathHint: "C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe",
-      launchTargetLabel: "Codex.exe",
+      detectionNote: "优先选择可直接执行的 ChatGPT.exe；如果是 Microsoft Store/MSIX 版，可能无法稳定接收调试端口参数。",
+      pathHint: "C:\\Users\\你\\AppData\\Local\\Programs\\ChatGPT\\ChatGPT.exe",
+      launchTargetLabel: "ChatGPT.exe",
     };
   }
   return { ...base, unsupported: true };
@@ -6408,16 +6409,16 @@ function healthItems(overview: OverviewResult | null, relay: RelayResult | null)
   const managementShortcut = pathStateOrDefault(overview?.management_shortcut);
   return [
     {
-      title: "Codex 应用",
+      title: "ChatGPT 应用",
       status: codexApp.status,
       ok: codexApp.status === "found",
-      detail: codexApp.path || "尚未检查 Codex 应用路径。",
+      detail: codexApp.path || "尚未检查 ChatGPT 应用路径。",
     },
     {
       title: "静默启动入口",
       status: silentShortcut.status,
       ok: silentShortcut.status === "installed",
-      detail: silentShortcut.path || "缺少 Codex++ 静默启动快捷方式时可在安装维护页修复。",
+      detail: silentShortcut.path || "缺少 ChatGPT Codex 静默启动快捷方式时可在安装维护页修复。",
     },
     {
       title: "管理工具入口",
@@ -6906,7 +6907,7 @@ function buildRelayConfigToml(
   }
   if (profile.protocol === "responses" && profile.imageGenerationEnabled && profile.imageGenerationUseSeparateApi) {
     lines.push(`codex_plus_image_base_url = "${tomlString(normalizeRelayBaseUrl(profile.imageGenerationBaseUrl))}"`);
-    lines.push("# codex_plus_image_api_key 只保存在 Codex++ 设置里，图片路由命中时由本地代理使用。");
+    lines.push("# codex_plus_image_api_key 只保存在 ChatGPT Codex 设置里，图片路由命中时由本地代理使用。");
   }
   lines.push(`experimental_bearer_token = "${tomlString(apiKey)}"`, "");
   return lines.join("\n");

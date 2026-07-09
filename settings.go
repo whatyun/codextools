@@ -245,7 +245,7 @@ func normalizeSettings(settings backendSettings) backendSettings {
 			settings.RelayProfiles[index].OfficialAccountLabel = ""
 			settings.RelayProfiles[index].OfficialAuthUpdatedAt = ""
 		} else if settings.RelayProfiles[index].OfficialAccountLabel == "" {
-			status := chatGPTAuthStatusFromContents(settings.RelayProfiles[index].OfficialAuthContents, "settings")
+			status := officialAuthStatusFromContents(settings.RelayProfiles[index].OfficialAuthContents, "settings")
 			settings.RelayProfiles[index].OfficialAccountLabel = status.AccountLabel
 		}
 	}

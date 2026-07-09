@@ -359,15 +359,7 @@ type providerImportResult struct {
 	ProfileName string `json:"profileName"`
 }
 
-type codexAppMirrorRelease struct {
-	TagName     string                `json:"tag_name"`
-	Name        string                `json:"name"`
-	HTMLURL     string                `json:"html_url"`
-	PublishedAt string                `json:"published_at"`
-	Assets      []codexAppMirrorAsset `json:"assets"`
-}
-
-type codexAppMirrorAsset struct {
+type releaseAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
@@ -375,11 +367,11 @@ type codexAppMirrorAsset struct {
 }
 
 type codexToolsRelease struct {
-	TagName     string                `json:"tag_name"`
-	Name        string                `json:"name"`
-	HTMLURL     string                `json:"html_url"`
-	PublishedAt string                `json:"published_at"`
-	Assets      []codexAppMirrorAsset `json:"assets"`
+	TagName     string         `json:"tag_name"`
+	Name        string         `json:"name"`
+	HTMLURL     string         `json:"html_url"`
+	PublishedAt string         `json:"published_at"`
+	Assets      []releaseAsset `json:"assets"`
 }
 
 type launchRequest struct {

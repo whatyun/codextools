@@ -50,34 +50,16 @@ func runLauncher(args []string) error {
 	if appPath == "" {
 		appPath = resolveLaunchableCodexApp(settings.CodexAppPath)
 	}
-	if appPath == "" && runtime.GOOS == "windows" {
-		writeLaunchRestartingStatus("未找到可直接启动的 Codex.exe，正在自动下载/解包镜像包。", debugPort, helperPort, nil)
-		selected, repairPayload, repairErr := installWindowsCodexMirror(context.Background())
-		if repairErr == nil && selected != "" {
-			appPath = selected
-			settings.CodexAppPath = selected
-			if err := saveSettings(settings); err != nil {
-				appendDiagnosticLog("launcher.codex_app_auto_repair_save_failed", map[string]any{"codex_app": selected, "error": err.Error()})
-			}
-			appendDiagnosticLog("launcher.codex_app_auto_repaired", map[string]any{"codex_app": selected, "repair": repairPayload})
-		} else {
-			detail := map[string]any{"debug_port": debugPort, "helper_port": helperPort, "repair": repairPayload}
-			if repairErr != nil {
-				detail["error"] = repairErr.Error()
-			}
-			appendDiagnosticLog("launcher.codex_app_auto_repair_failed", detail)
-		}
-	}
 	if appPath == "" {
-		err := errors.New("未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；请在修复工具自动下载/解包镜像包，或手动选择解包目录中的 app\\Codex.exe")
-		writeLaunchFailureStatus("启动 Codex 失败："+err.Error(), debugPort, helperPort, nil)
+		err := errors.New("未找到可直接启动的 ChatGPT 桌面应用；请安装 ChatGPT 桌面应用，或在管理工具中选择 ChatGPT.app / ChatGPT.exe")
+		writeLaunchFailureStatus("启动 ChatGPT Codex 失败："+err.Error(), debugPort, helperPort, nil)
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
 	}
 	restartPrepared := false
 	instanceLock, acquired, err := acquireLauncherSingleInstanceLock(debugPort)
 	if err != nil {
-		writeLaunchFailureStatus("启动 Codex++ 单实例锁失败："+err.Error(), debugPort, helperPort, &appPath)
+		writeLaunchFailureStatus("启动 ChatGPT Codex 单实例锁失败："+err.Error(), debugPort, helperPort, &appPath)
 		appendDiagnosticLog("launcher.guard_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
 		return err
 	}
@@ -85,7 +67,7 @@ func runLauncher(args []string) error {
 		if options.restart {
 			appendDiagnosticLog("launcher.restart_existing_launcher", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
 			if err := prepareFullRestartBeforeLaunch(appPath, debugPort, helperPort, true); err != nil {
-				message := "重启 Codex 失败：" + err.Error()
+				message := "重启 ChatGPT Codex 失败：" + err.Error()
 				writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
 				appendDiagnosticLog("launcher.restart_existing_launcher_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
 				return errors.New(message)
@@ -93,13 +75,13 @@ func runLauncher(args []string) error {
 			restartPrepared = true
 			instanceLock, acquired, err = waitForLauncherSingleInstanceLock(debugPort, 15*time.Second)
 			if err != nil {
-				message := "重启 Codex 失败：重新获取 Codex++ 单实例锁失败：" + err.Error()
+				message := "重启 ChatGPT Codex 失败：重新获取单实例锁失败：" + err.Error()
 				writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
 				appendDiagnosticLog("launcher.restart_guard_reacquire_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
 				return errors.New(message)
 			}
 			if !acquired {
-				message := fmt.Sprintf("重启 Codex 失败：旧 Codex++ 后端未退出，端口 %d 仍被占用", launcherGuardPort)
+				message := fmt.Sprintf("重启 ChatGPT Codex 失败：旧后端未退出，端口 %d 仍被占用", launcherGuardPort)
 				writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
 				appendDiagnosticLog("launcher.restart_guard_still_busy", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort})
 				return errors.New(message)
@@ -110,8 +92,8 @@ func runLauncher(args []string) error {
 		}
 	}
 	if instanceLock == nil {
-		err := errors.New("Codex++ 单实例锁不可用")
-		writeLaunchFailureStatus("启动 Codex++ 失败："+err.Error(), debugPort, helperPort, &appPath)
+		err := errors.New("ChatGPT Codex 单实例锁不可用")
+		writeLaunchFailureStatus("启动 ChatGPT Codex 失败："+err.Error(), debugPort, helperPort, &appPath)
 		appendDiagnosticLog("launcher.guard_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
 		return err
 	}
@@ -121,7 +103,7 @@ func runLauncher(args []string) error {
 	}
 	if options.restart && !restartPrepared {
 		if err := prepareFullRestartBeforeLaunch(appPath, debugPort, helperPort, false); err != nil {
-			message := "重启 Codex 失败：" + err.Error()
+			message := "重启 ChatGPT Codex 失败：" + err.Error()
 			writeLaunchFailureStatus(message, debugPort, helperPort, &appPath)
 			appendDiagnosticLog("launcher.restart_prepare_failed", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "guard_port": launcherGuardPort, "error": err.Error()})
 			return errors.New(message)
@@ -162,7 +144,7 @@ func runLauncher(args []string) error {
 		if err := runtimeState.startHelper(helperPort); err != nil {
 			failure := launchStatus{
 				Status:      "failed",
-				Message:     "启动 Codex++ helper 失败：" + err.Error(),
+				Message:     "启动 ChatGPT Codex helper 失败：" + err.Error(),
 				StartedAtMS: uint64(time.Now().UnixMilli()),
 				DebugPort:   &debugPort,
 				HelperPort:  &helperPort,
@@ -178,7 +160,7 @@ func runLauncher(args []string) error {
 		if err := runtimeState.startRelayProxy(localRelayProxyPort); err != nil {
 			failure := launchStatus{
 				Status:      "failed",
-				Message:     "启动 Codex++ 本地中转代理失败：" + err.Error(),
+				Message:     "启动 ChatGPT Codex 本地中转代理失败：" + err.Error(),
 				StartedAtMS: uint64(time.Now().UnixMilli()),
 				DebugPort:   &debugPort,
 				HelperPort:  &helperPort,
@@ -200,7 +182,7 @@ func runLauncher(args []string) error {
 	}
 	status := launchStatus{
 		Status:      "starting",
-		Message:     "Codex++ launcher starting Codex and waiting for injection.",
+		Message:     "ChatGPT Codex launcher starting ChatGPT and waiting for injection.",
 		StartedAtMS: uint64(time.Now().UnixMilli()),
 		DebugPort:   &debugPort,
 		HelperPort:  &helperPort,
@@ -214,7 +196,7 @@ func runLauncher(args []string) error {
 		detail := launchFailureDetail(appPath, debugPort, helperPort, err)
 		failure := launchStatus{
 			Status:      "failed",
-			Message:     "启动 Codex 失败：" + err.Error(),
+			Message:     "启动 ChatGPT Codex 失败：" + err.Error(),
 			StartedAtMS: uint64(time.Now().UnixMilli()),
 			DebugPort:   &debugPort,
 			HelperPort:  &helperPort,
@@ -227,7 +209,7 @@ func runLauncher(args []string) error {
 	}
 	ready := launchStatus{
 		Status:      "running",
-		Message:     "Codex++ launcher ready.",
+		Message:     "ChatGPT Codex launcher ready.",
 		StartedAtMS: uint64(time.Now().UnixMilli()),
 		DebugPort:   &debugPort,
 		HelperPort:  &helperPort,
@@ -236,7 +218,7 @@ func runLauncher(args []string) error {
 	if settings.Enhancements {
 		if err := runtimeState.retryInjection(helperPort); err != nil {
 			ready.Status = "degraded"
-			ready.Message = "Codex 已启动，但 Codex++ 增强菜单暂时注入失败；中转代理会继续运行，并在后台重试注入：" + err.Error()
+			ready.Message = "ChatGPT 已启动，但 ChatGPT Codex 增强菜单暂时注入失败；中转代理会继续运行，并在后台重试注入：" + err.Error()
 			appendDiagnosticLog("launcher.inject_degraded", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		}
 		go runtimeState.bridgeWatchdog(helperPort)
@@ -277,7 +259,7 @@ func writeLaunchRestartingStatus(message string, debugPort, helperPort uint16, a
 }
 
 func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16, waitForGuard bool) error {
-	writeLaunchRestartingStatus("正在关闭旧 Codex++ 后端并释放端口。", debugPort, helperPort, &appPath)
+	writeLaunchRestartingStatus("正在关闭旧 ChatGPT Codex 后端并释放端口。", debugPort, helperPort, &appPath)
 	appendDiagnosticLog("launcher.restart_prepare", map[string]any{
 		"codex_app":      appPath,
 		"debug_port":     debugPort,
@@ -289,7 +271,7 @@ func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16
 	if cdpTargetsAvailable(debugPort, 800*time.Millisecond) {
 		appendDiagnosticLog("launcher.restart_close_cdp", map[string]any{"debug_port": debugPort, "codex_app": appPath})
 		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
-			return fmt.Errorf("关闭旧 Codex 调试端口失败：%w", err)
+			return fmt.Errorf("关闭旧 ChatGPT 调试端口失败：%w", err)
 		}
 	}
 	if runtime.GOOS == "darwin" && macOSAppRunning(appPath) {
@@ -301,7 +283,7 @@ func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16
 			appendDiagnosticLog("launcher.restart_force_kill_macos_app", map[string]any{"codex_app": appPath})
 			_ = forceKillMacOSApp(appPath)
 			if !waitForMacOSAppExit(appPath, 4*time.Second) {
-				return errors.New("旧 Codex 应用未退出")
+				return errors.New("旧 ChatGPT 应用未退出")
 			}
 		}
 	}
@@ -315,11 +297,11 @@ func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16
 		return err
 	}
 	if waitForGuard {
-		if err := waitForRequiredTCPPortFree(launcherGuardPort, "Codex++ 后端单实例", 12*time.Second); err != nil {
+		if err := waitForRequiredTCPPortFree(launcherGuardPort, "ChatGPT Codex 后端单实例", 12*time.Second); err != nil {
 			return err
 		}
 	}
-	writeLaunchRestartingStatus("旧 Codex++ 后端已退出，正在启动新实例。", debugPort, helperPort, &appPath)
+	writeLaunchRestartingStatus("旧 ChatGPT Codex 后端已退出，正在启动新实例。", debugPort, helperPort, &appPath)
 	return nil
 }
 
@@ -411,18 +393,18 @@ func buildCodexExecutable(appPath string) string {
 		if isWindowsAppsExecutionAlias(appPath) {
 			return appPath
 		}
-		if strings.EqualFold(filepath.Base(appPath), "Codex.exe") || strings.EqualFold(filepath.Base(appPath), "codex.exe") {
+		if isWindowsTargetAppExecutableName(filepath.Base(appPath)) {
 			return appPath
 		}
 		candidates := []string{
-			filepath.Join(appPath, "Codex.exe"),
-			filepath.Join(appPath, "codex.exe"),
-			filepath.Join(appPath, "app", "Codex.exe"),
-			filepath.Join(appPath, "app", "codex.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "Codex", "Codex.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "Codex", "codex.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "OpenAI", "Codex", "Codex.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "OpenAI", "Codex", "codex.exe"),
+			filepath.Join(appPath, "ChatGPT.exe"),
+			filepath.Join(appPath, "chatgpt.exe"),
+			filepath.Join(appPath, "app", "ChatGPT.exe"),
+			filepath.Join(appPath, "app", "chatgpt.exe"),
+			filepath.Join(appPath, "VFS", "ProgramFilesX64", "ChatGPT", "ChatGPT.exe"),
+			filepath.Join(appPath, "VFS", "ProgramFilesX64", "ChatGPT", "chatgpt.exe"),
+			filepath.Join(appPath, "VFS", "ProgramFilesX64", "OpenAI", "ChatGPT", "ChatGPT.exe"),
+			filepath.Join(appPath, "VFS", "ProgramFilesX64", "OpenAI", "ChatGPT", "chatgpt.exe"),
 		}
 		for _, candidate := range candidates {
 			if fileExists(candidate) {
@@ -438,7 +420,7 @@ func buildCodexExecutable(appPath string) string {
 		name := strings.TrimSuffix(filepath.Base(appPath), ".app")
 		candidates := []string{
 			filepath.Join(appPath, "Contents", "MacOS", name),
-			filepath.Join(appPath, "Contents", "MacOS", "Codex"),
+			filepath.Join(appPath, "Contents", "MacOS", "ChatGPT"),
 		}
 		for _, candidate := range candidates {
 			if fileExists(candidate) {
@@ -483,7 +465,7 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 				return nil, err
 			}
 			if len(command) == 0 || strings.TrimSpace(command[0]) == "" || !fileExists(command[0]) {
-				return nil, fmt.Errorf("无法激活 Windows Codex 应用 %s：%w；未找到可直接执行的 Codex.exe，已跳过 explorer 兜底以避免把调试参数作为网页打开", activation.appUserModelID, activationErr)
+				return nil, fmt.Errorf("无法激活 Windows ChatGPT 应用 %s：%w；未找到可直接执行的 ChatGPT.exe，已跳过 explorer 兜底以避免把调试参数作为网页打开", activation.appUserModelID, activationErr)
 			}
 			handle, err := startCodexProcess(command)
 			if err == nil {
@@ -493,10 +475,10 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 		}
 	}
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
-		return nil, fmt.Errorf("未找到 Codex.exe：%s", appPath)
+		return nil, fmt.Errorf("未找到 ChatGPT.exe：%s", appPath)
 	}
 	if runtime.GOOS == "windows" && !isWindowsAppsExecutionAlias(command[0]) && !fileExists(command[0]) {
-		return nil, fmt.Errorf("未找到 Codex.exe：%s", appPath)
+		return nil, fmt.Errorf("未找到 ChatGPT.exe：%s", appPath)
 	}
 	handle, err := startCodexProcess(command)
 	if err != nil {
@@ -512,9 +494,9 @@ func windowsProtectedMSIXLaunchError(appPath, executable string) error {
 	}
 	appUserModelID := packagedWindowsAppUserModelID(appPath)
 	if appUserModelID != "" {
-		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex（%s），Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“修复工具”自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe。已跳过：%s", appUserModelID, target)
+		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 ChatGPT（%s），Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动目标，也无法稳定接收调试端口参数。请安装官方桌面版或选择可直接执行的 ChatGPT.exe。已跳过：%s", appUserModelID, target)
 	}
-	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 Codex，Program Files\\WindowsApps 包目录不能作为 Codex++ 启动目标，也无法稳定接收调试端口参数。请在“修复工具”自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe。已跳过：%s", target)
+	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 ChatGPT，Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动目标，也无法稳定接收调试端口参数。请安装官方桌面版或选择可直接执行的 ChatGPT.exe。已跳过：%s", target)
 }
 
 func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs []string) *windowsPackagedActivation {
@@ -541,7 +523,7 @@ func windowsPackagedExplorerCommand(appUserModelID string, args []string) []stri
 }
 
 func packagedCodexDebugPortError(appUserModelID string, debugPort uint16, method string) error {
-	return fmt.Errorf("%s 已请求激活 Windows Store/MSIX Codex %s，但未检测到调试端口 %d；该安装形态可能不接受 --remote-debugging-port。请在修复工具自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe 后重试", method, appUserModelID, debugPort)
+	return fmt.Errorf("%s 已请求激活 Windows Store/MSIX ChatGPT %s，但未检测到调试端口 %d；该安装形态可能不接受 --remote-debugging-port。请安装官方桌面版或选择可直接执行的 ChatGPT.exe 后重试", method, appUserModelID, debugPort)
 }
 
 func launchFailureDetail(appPath string, debugPort, helperPort uint16, err error) map[string]any {
@@ -551,7 +533,7 @@ func launchFailureDetail(appPath string, debugPort, helperPort uint16, err error
 		"helper_port":        helperPort,
 		"error":              err.Error(),
 		"cdp_port_available": cdpTargetsAvailable(debugPort, 800*time.Millisecond),
-		"recommended_action": "在修复工具自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe；Windows Store/MSIX 版不能作为 Codex++ 启动目标。",
+		"recommended_action": "安装 ChatGPT 桌面应用，或选择可直接执行的 ChatGPT.exe；Windows Store/MSIX 包目录可能无法作为 ChatGPT Codex 的直接启动目标。",
 	}
 	if runtime.GOOS == "windows" {
 		if activation := buildWindowsPackagedActivation(appPath, debugPort, nil); activation != nil {
@@ -756,7 +738,7 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 	if cdpTargetsAvailable(debugPort, 1200*time.Millisecond) {
 		status := launchStatus{
 			Status:      "running",
-			Message:     "Codex 主窗口仍在运行，Codex++ helper 继续驻留。",
+			Message:     "ChatGPT 主窗口仍在运行，ChatGPT Codex helper 继续驻留。",
 			StartedAtMS: uint64(time.Now().UnixMilli()),
 			DebugPort:   &debugPort,
 			HelperPort:  &helperPort,
@@ -830,7 +812,7 @@ func startCodexProcess(command []string) (codexLaunchHandle, error) {
 	cmd.Stderr = io.Discard
 	hideSubprocessWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("无法启动 Codex 可执行文件 %s：%w", command[0], err)
+		return nil, fmt.Errorf("无法启动 ChatGPT 可执行文件 %s：%w", command[0], err)
 	}
 	return &codexProcessLaunch{cmd: cmd, command: append([]string(nil), command...)}, nil
 }

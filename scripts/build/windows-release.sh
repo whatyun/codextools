@@ -126,7 +126,7 @@ build_resource() {
     --manifest gui \
     --icon "$ICON_ICO" \
     --file-description "$description" \
-    --product-name "CodexTools" \
+    --product-name "ChatGPT Codex Tools" \
     --product-version "$(version_quad)" \
     --file-version "$(version_quad)" \
     --original-filename "$filename"
@@ -137,7 +137,7 @@ build_arch() {
   local label
   label="$(arch_label "$goarch")"
   local arch_build="$BUILD/$label"
-  local package_name="CodexTools-${VERSION}-windows-${label}"
+  local package_name="ChatGPT-Codex-Tools-${VERSION}-windows-${label}"
   local package_dir="$arch_build/$package_name"
   local zip_tmp_path="$arch_build/${package_name}.zip.tmp"
   local setup_tmp_path="$arch_build/${package_name}-setup.exe.tmp"
@@ -149,9 +149,9 @@ build_arch() {
   mkdir -p "$package_dir"
 
   pushd "$ROOT" >/dev/null
-  build_resource "$goarch" "CodexTools manager" "codextools.exe"
+  build_resource "$goarch" "ChatGPT Codex Tools manager" "codextools.exe"
   GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=manager" -o "$package_dir/codextools.exe" .
-  build_resource "$goarch" "CodexTools launcher" "codextools-launcher.exe"
+  build_resource "$goarch" "ChatGPT Codex launcher" "codextools-launcher.exe"
   GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -H windowsgui -X main.binaryRole=launcher" -o "$package_dir/codextools-launcher.exe" .
   rm -f "$ROOT"/codextools_windows_*.syso
   popd >/dev/null
@@ -162,12 +162,12 @@ build_arch() {
   cp "$ROOT/README.zh-CN.md" "$package_dir/README.zh-CN.md"
 
   cat > "$package_dir/START-HERE.txt" <<TXT
-CodexTools Windows desktop package (${label})
+ChatGPT Codex Tools Windows desktop package (${label})
 
-1. The recommended release artifact is "CodexTools-${VERSION}-windows-${label}-setup.exe"; it creates Start Menu shortcuts and an uninstall entry.
+1. The recommended release artifact is "ChatGPT-Codex-Tools-${VERSION}-windows-${label}-setup.exe"; it creates Start Menu shortcuts and an uninstall entry.
 2. This folder can also be used as a portable desktop build.
 3. "codextools.exe" opens a native Windows desktop window using WebView2, not a browser tab.
-4. "codextools-launcher.exe" launches Codex through the Codex++ launcher.
+4. "codextools-launcher.exe" launches ChatGPT through the ChatGPT Codex launcher.
 5. Use x64 for traditional Intel/AMD PCs. Use arm64 for Windows on ARM devices.
 TXT
 
@@ -176,61 +176,65 @@ TXT
 
   cat > "$NSIS_SCRIPT" <<NSI
 Unicode true
-Name "CodexTools"
+Name "ChatGPT Codex Tools"
 OutFile "$setup_tmp_path"
-InstallDir "\$LOCALAPPDATA\\CodexTools"
+InstallDir "\$LOCALAPPDATA\\ChatGPT Codex Tools"
 RequestExecutionLevel user
 Icon "$ICON_ICO"
 UninstallIcon "$ICON_ICO"
 VIProductVersion "$(version_quad)"
-VIAddVersionKey "ProductName" "CodexTools"
+VIAddVersionKey "ProductName" "ChatGPT Codex Tools"
 VIAddVersionKey "CompanyName" "hereww"
 VIAddVersionKey "LegalCopyright" "Copyright hereww"
-VIAddVersionKey "FileDescription" "CodexTools Windows Installer (${label})"
+VIAddVersionKey "FileDescription" "ChatGPT Codex Tools Windows Installer (${label})"
 VIAddVersionKey "FileVersion" "$VERSION"
 VIAddVersionKey "ProductVersion" "$VERSION"
 
-!macro CloseCodexToolsProcesses
+!macro CloseChatGPTCodexToolsProcesses
   nsExec::ExecToLog 'taskkill /IM codextools.exe /T /F'
   nsExec::ExecToLog 'taskkill /IM codextools-launcher.exe /T /F'
-  nsExec::ExecToLog 'taskkill /IM "Codex++ 管理工具.exe" /T /F'
-  nsExec::ExecToLog 'taskkill /IM "Codex++.exe" /T /F'
+  nsExec::ExecToLog 'taskkill /IM "ChatGPT Codex 管理工具.exe" /T /F'
+  nsExec::ExecToLog 'taskkill /IM "ChatGPT Codex.exe" /T /F'
   Sleep 800
 !macroend
 
 Section "Install"
   SetShellVarContext current
-  !insertmacro CloseCodexToolsProcesses
-  Delete /REBOOTOK "\$INSTDIR\\Codex++ 管理工具.exe"
-  Delete /REBOOTOK "\$INSTDIR\\Codex++.exe"
+  !insertmacro CloseChatGPTCodexToolsProcesses
+  Delete /REBOOTOK "\$INSTDIR\\ChatGPT Codex 管理工具.exe"
+  Delete /REBOOTOK "\$INSTDIR\\ChatGPT Codex.exe"
   SetOutPath "\$INSTDIR"
   File /r "$package_dir/*"
   WriteUninstaller "\$INSTDIR\\Uninstall.exe"
 
-  CreateDirectory "\$SMPROGRAMS\\CodexTools"
-  CreateShortcut "\$SMPROGRAMS\\CodexTools\\Codex++ 管理工具.lnk" "\$INSTDIR\\codextools.exe" "" "\$INSTDIR\\codextools.exe" 0
-  CreateShortcut "\$SMPROGRAMS\\CodexTools\\Codex++.lnk" "\$INSTDIR\\codextools-launcher.exe" "" "\$INSTDIR\\codextools-launcher.exe" 0
-  CreateShortcut "\$SMPROGRAMS\\CodexTools\\Uninstall CodexTools.lnk" "\$INSTDIR\\Uninstall.exe"
-  CreateShortcut "\$DESKTOP\\Codex++ 管理工具.lnk" "\$INSTDIR\\codextools.exe" "" "\$INSTDIR\\codextools.exe" 0
+  CreateDirectory "\$SMPROGRAMS\\ChatGPT Codex Tools"
+  CreateShortcut "\$SMPROGRAMS\\ChatGPT Codex Tools\\ChatGPT Codex 管理工具.lnk" "\$INSTDIR\\codextools.exe" "" "\$INSTDIR\\codextools.exe" 0
+  CreateShortcut "\$SMPROGRAMS\\ChatGPT Codex Tools\\ChatGPT Codex.lnk" "\$INSTDIR\\codextools-launcher.exe" "" "\$INSTDIR\\codextools-launcher.exe" 0
+  CreateShortcut "\$SMPROGRAMS\\ChatGPT Codex Tools\\Uninstall ChatGPT Codex Tools.lnk" "\$INSTDIR\\Uninstall.exe"
+  CreateShortcut "\$DESKTOP\\ChatGPT Codex 管理工具.lnk" "\$INSTDIR\\codextools.exe" "" "\$INSTDIR\\codextools.exe" 0
 
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "DisplayName" "CodexTools"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "DisplayVersion" "$VERSION"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "Publisher" "hereww"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "InstallLocation" "\$INSTDIR"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "DisplayIcon" "\$INSTDIR\\codextools.exe"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "UninstallString" '"\$INSTDIR\\Uninstall.exe"'
-  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "NoModify" 1
-  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools" "NoRepair" 1
+  RMDir /r "\$SMPROGRAMS\\CodexTools"
+  DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "DisplayName" "ChatGPT Codex Tools"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "DisplayVersion" "$VERSION"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "Publisher" "hereww"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "InstallLocation" "\$INSTDIR"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "DisplayIcon" "\$INSTDIR\\codextools.exe"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "UninstallString" '"\$INSTDIR\\Uninstall.exe"'
+  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "NoModify" 1
+  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools" "NoRepair" 1
 SectionEnd
 
 Section "Uninstall"
   SetShellVarContext current
-  !insertmacro CloseCodexToolsProcesses
-  Delete "\$DESKTOP\\Codex++ 管理工具.lnk"
-  Delete "\$SMPROGRAMS\\CodexTools\\Codex++ 管理工具.lnk"
-  Delete "\$SMPROGRAMS\\CodexTools\\Codex++.lnk"
-  Delete "\$SMPROGRAMS\\CodexTools\\Uninstall CodexTools.lnk"
-  RMDir "\$SMPROGRAMS\\CodexTools"
+  !insertmacro CloseChatGPTCodexToolsProcesses
+  Delete "\$DESKTOP\\ChatGPT Codex 管理工具.lnk"
+  Delete "\$SMPROGRAMS\\ChatGPT Codex Tools\\ChatGPT Codex 管理工具.lnk"
+  Delete "\$SMPROGRAMS\\ChatGPT Codex Tools\\ChatGPT Codex.lnk"
+  Delete "\$SMPROGRAMS\\ChatGPT Codex Tools\\Uninstall ChatGPT Codex Tools.lnk"
+  RMDir "\$SMPROGRAMS\\ChatGPT Codex Tools"
+  RMDir /r "\$SMPROGRAMS\\CodexTools"
+  DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ChatGPT Codex Tools"
   DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CodexTools"
   RMDir /r "\$INSTDIR"
 SectionEnd

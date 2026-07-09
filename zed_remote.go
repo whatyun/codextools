@@ -922,7 +922,7 @@ func readZedRegistryProjects(path string) ([]zedRemoteProject, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Cannot read Codex++ Zed remote project registry: %w", err)
+		return nil, fmt.Errorf("Cannot read ChatGPT Codex Tools Zed remote project registry: %w", err)
 	}
 	if strings.TrimSpace(string(data)) == "" {
 		return nil, nil
@@ -933,21 +933,21 @@ func readZedRegistryProjects(path string) ([]zedRemoteProject, error) {
 	}
 	var projects []zedRemoteProject
 	if err := json.Unmarshal(data, &projects); err != nil {
-		return nil, fmt.Errorf("Cannot parse Codex++ Zed remote project registry: %w", err)
+		return nil, fmt.Errorf("Cannot parse ChatGPT Codex Tools Zed remote project registry: %w", err)
 	}
 	return projects, nil
 }
 
 func writeZedRegistryProjects(path string, projects []zedRemoteProject) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("Cannot write Codex++ Zed remote project registry: %w", err)
+		return fmt.Errorf("Cannot write ChatGPT Codex Tools Zed remote project registry: %w", err)
 	}
 	data, err := json.MarshalIndent(zedRemoteProjectRegistry{Projects: projects}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("Cannot write Codex++ Zed remote project registry: %w", err)
+		return fmt.Errorf("Cannot write ChatGPT Codex Tools Zed remote project registry: %w", err)
 	}
 	if err := atomicWrite(path, data); err != nil {
-		return fmt.Errorf("Cannot write Codex++ Zed remote project registry: %w", err)
+		return fmt.Errorf("Cannot write ChatGPT Codex Tools Zed remote project registry: %w", err)
 	}
 	return nil
 }

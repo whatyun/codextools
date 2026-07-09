@@ -144,7 +144,7 @@ func latestCodexToolsUpdateFromDownloadsPage(ctx context.Context, base map[strin
 	}
 	assets := codexToolsDownloadsAssets(string(data))
 	if len(assets) == 0 {
-		return nil, fmt.Errorf("下载页没有找到 CodexTools 安装包链接")
+		return nil, fmt.Errorf("下载页没有找到 ChatGPT Codex Tools 安装包链接")
 	}
 	asset, ok := selectCodexToolsAsset(assets, goos, goarch)
 	if !ok {
@@ -161,7 +161,7 @@ func latestCodexToolsUpdateFromDownloadsPage(ctx context.Context, base map[strin
 	latest := codexToolsAssetVersion(asset.Name)
 	payload := cloneStringAnyMap(base)
 	payload["latestVersion"] = latest
-	payload["releaseName"] = "CodexTools " + latest
+	payload["releaseName"] = "ChatGPT Codex Tools " + latest
 	payload["tagName"] = "v" + latest
 	payload["releaseUrl"] = codexToolsDownloadsURL
 	payload["updateSource"] = "downloads_page"
@@ -188,11 +188,11 @@ func latestCodexToolsUpdateFromDownloadsPage(ctx context.Context, base map[strin
 	return payload, nil
 }
 
-var codexToolsDownloadHrefPattern = regexp.MustCompile(`(?i)href=["']([^"']*CodexTools-[^"']+\.(pkg|dmg|zip|exe))["']`)
+var codexToolsDownloadHrefPattern = regexp.MustCompile(`(?i)href=["']([^"']*(ChatGPT-Codex-Tools|CodexTools)-[^"']+\.(pkg|dmg|zip|exe))["']`)
 
-func codexToolsDownloadsAssets(page string) []codexAppMirrorAsset {
+func codexToolsDownloadsAssets(page string) []releaseAsset {
 	matches := codexToolsDownloadHrefPattern.FindAllStringSubmatch(page, -1)
-	assets := make([]codexAppMirrorAsset, 0, len(matches))
+	assets := make([]releaseAsset, 0, len(matches))
 	seen := map[string]bool{}
 	for _, match := range matches {
 		if len(match) < 2 {
@@ -208,7 +208,7 @@ func codexToolsDownloadsAssets(page string) []codexAppMirrorAsset {
 		}
 		seen[downloadURL] = true
 		name := filepath.Base(strings.TrimPrefix(href, "./"))
-		assets = append(assets, codexAppMirrorAsset{
+		assets = append(assets, releaseAsset{
 			Name:               name,
 			BrowserDownloadURL: downloadURL,
 			ContentType:        codexToolsAssetContentType(name),
@@ -243,21 +243,23 @@ func codexToolsAssetContentType(name string) string {
 
 func codexToolsAssetVersion(name string) string {
 	lower := strings.ToLower(name)
-	prefix := "codextools-"
-	index := strings.Index(lower, prefix)
-	if index < 0 {
-		return ""
+	for _, prefix := range []string{"chatgpt-codex-tools-", "codextools-"} {
+		index := strings.Index(lower, prefix)
+		if index < 0 {
+			continue
+		}
+		rest := name[index+len(prefix):]
+		parts := strings.Split(rest, "-")
+		if len(parts) == 0 {
+			return ""
+		}
+		return cleanVersion(parts[0])
 	}
-	rest := name[index+len(prefix):]
-	parts := strings.Split(rest, "-")
-	if len(parts) == 0 {
-		return ""
-	}
-	return cleanVersion(parts[0])
+	return ""
 }
 
-func selectCodexToolsAsset(assets []codexAppMirrorAsset, goos, goarch string) (codexAppMirrorAsset, bool) {
-	var best codexAppMirrorAsset
+func selectCodexToolsAsset(assets []releaseAsset, goos, goarch string) (releaseAsset, bool) {
+	var best releaseAsset
 	bestScore := -1_000_000
 	bestVersion := ""
 	for _, asset := range assets {
@@ -312,7 +314,12 @@ func codexToolsAssetCompatible(name, goos, goarch string) bool {
 func codexToolsAssetScore(name, goos, goarch string) int {
 	lower := strings.ToLower(name)
 	score := 0
-	if !strings.Contains(lower, "codextools") {
+	switch {
+	case strings.Contains(lower, "chatgpt-codex-tools"):
+		score += 20
+	case strings.Contains(lower, "codextools"):
+		score += 5
+	default:
 		score -= 20
 	}
 	switch goos {
@@ -393,10 +400,10 @@ func annotateCodexToolsAssetPayload(payload map[string]any, name, goos string) {
 func codexToolsUpdateAvailableMessage(goos, kind string) string {
 	if goos == "darwin" {
 		if kind == "pkg" {
-			return "发现新版本，可下载 macOS pkg 安装器；安装后会覆盖 /Applications 中的 Codex++ 应用。"
+			return "发现新版本，可下载 macOS pkg 安装器；安装后会覆盖 /Applications 中的 ChatGPT Codex Tools 应用。"
 		}
 		if kind == "dmg" {
-			return "发现新版本，可下载 macOS DMG；请拖入 /Applications 覆盖旧版 Codex++ 应用。"
+			return "发现新版本，可下载 macOS DMG；请拖入 /Applications 覆盖旧版 ChatGPT Codex Tools 应用。"
 		}
 		return "发现新版本，但仅找到便携包；建议到发布页下载 pkg 安装器以覆盖 /Applications。"
 	}
@@ -459,7 +466,10 @@ func versionParts(value string) []int {
 func cleanVersion(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	value = strings.TrimPrefix(value, "release ")
+	value = strings.TrimPrefix(value, "chatgpt codex tools ")
+	value = strings.TrimPrefix(value, "chatgpt-codex-tools-")
 	value = strings.TrimPrefix(value, "codextools ")
+	value = strings.TrimPrefix(value, "codextools-")
 	value = strings.TrimPrefix(value, "v")
 	return strings.TrimSpace(value)
 }
@@ -485,7 +495,7 @@ func safeUpdateFilename(assetName, latestVersion string) string {
 		} else if runtime.GOOS == "windows" {
 			ext = ".exe"
 		}
-		name = fmt.Sprintf("CodexTools-%s-%s-%s%s", cleanVersion(latestVersion), runtime.GOOS, runtime.GOARCH, ext)
+		name = fmt.Sprintf("ChatGPT-Codex-Tools-%s-%s-%s%s", cleanVersion(latestVersion), runtime.GOOS, runtime.GOARCH, ext)
 	}
 	name = strings.ReplaceAll(name, string(filepath.Separator), "-")
 	return name

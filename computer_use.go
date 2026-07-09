@@ -50,7 +50,7 @@ func (s *server) repairComputerUse() commandResult {
 		}
 		return commandResultWithStatus(resultStatus, "Computer Use 修复失败："+err.Error(), payload)
 	}
-	return commandResultWithStatus("ok", "Computer Use 已修复；请关闭所有 Codex 窗口后，从 Codex++ 入口重新启动，让环境变量、marketplace 和插件缓存生效。", payload)
+	return commandResultWithStatus("ok", "Computer Use 已修复；请关闭所有 ChatGPT 窗口后，从 ChatGPT Codex 入口重新启动，让环境变量、marketplace 和插件缓存生效。", payload)
 }
 
 func commandResultWithStatus(status, message string, payload map[string]any) commandResult {
@@ -370,9 +370,8 @@ func windowsInstalledCodexPackageRoots() []string {
 		return nil
 	}
 	commands := [][]string{
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.CodexBeta -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.CodexBeta' -or $_.PackageFullName -like 'OpenAI.Codex_*' -or $_.PackageFullName -like 'OpenAI.CodexBeta_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.ChatGPT* -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.ChatGPT*' -or $_.PackageFullName -like 'OpenAI.ChatGPT*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
 	}
 	var roots []string
 	for _, command := range commands {
@@ -424,7 +423,7 @@ func writeComputerUsePluginTree(root string) error {
   "private": true
 }
 `,
-		filepath.Join(root, "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"):                                                         "# Placeholder executable path for Codex Desktop Windows Computer Use resolution.\n# The local helper transport module implements the actual request handling.\n",
+		filepath.Join(root, "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"):                                                         "# Placeholder executable path for ChatGPT desktop Computer Use resolution.\n# The local helper transport module implements the actual request handling.\n",
 		filepath.Join(root, "node_modules", "@oai", "sky", "dist", "project", "cua", "sky_js", "src", "targets", "windows", "internal", "helper_transport.js"): computerUseHelperTransportJS(),
 	}
 	for path, contents := range files {
@@ -439,7 +438,7 @@ func computerUsePluginJSON() string {
 	return `{
   "name": "computer-use",
   "version": "` + computerUsePluginVersion + `",
-  "description": "Local Windows Computer Use compatibility helper for Codex Desktop.",
+  "description": "Local Windows Computer Use compatibility helper for ChatGPT desktop.",
   "author": {
     "name": "Local"
   },
@@ -451,7 +450,7 @@ func computerUsePluginJSON() string {
   "interface": {
     "displayName": "Computer Use",
     "shortDescription": "Control this Windows desktop from Codex",
-    "longDescription": "Local compatibility plugin that provides the Windows helper paths expected by Codex Desktop Computer Use.",
+    "longDescription": "Local compatibility plugin that provides the Windows helper paths expected by ChatGPT desktop Computer Use.",
     "developerName": "Local",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],
@@ -469,14 +468,14 @@ func computerUsePluginJSON() string {
 func computerUseSkillMarkdown() string {
 	return `---
 name: computer-use
-description: Local Windows Computer Use compatibility helper for Codex Desktop. Provides the @oai/sky paths that the Desktop app expects when CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1.
+description: Local Windows Computer Use compatibility helper for ChatGPT desktop. Provides the @oai/sky paths that the desktop app expects when CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1.
 ---
 
 # Computer Use
 
-This local compatibility plugin is installed by CodexTools. It supplies the Windows helper transport paths that Codex Desktop resolves for Computer Use.
+This local compatibility plugin is installed by ChatGPT Codex Tools. It supplies the Windows helper transport paths that ChatGPT desktop resolves for Computer Use.
 
-The Desktop app must be launched with ` + "`CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1`" + `. CodexTools writes that as a user environment variable, so restart Codex after repair.
+The desktop app must be launched with ` + "`CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE=1`" + `. ChatGPT Codex Tools writes that as a user environment variable, so restart ChatGPT after repair.
 `
 }
 

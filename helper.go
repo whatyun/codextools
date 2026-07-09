@@ -170,7 +170,7 @@ func (r *launcherRuntime) writeMobilePage(w http.ResponseWriter, req *http.Reque
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Codex++ Mobile</title>
+  <title>ChatGPT Codex Mobile</title>
   <style>
     :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #f8fafc; }
@@ -184,7 +184,7 @@ func (r *launcherRuntime) writeMobilePage(w http.ResponseWriter, req *http.Reque
 </head>
 <body>
   <main>
-    <h1>Codex++ Mobile</h1>
+    <h1>ChatGPT Codex Mobile</h1>
     <p>本地 helper 已启用内置 mobile 入口。手机控制客户端可以连接 <code id="ws"></code>，HTTP 状态可读取 <code id="status"></code>。</p>
     <button id="check">检查连接</button>
     <pre id="out">ready</pre>
@@ -315,7 +315,7 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 		lastErr = errors.New("upstream returned failure")
 		profile = candidate
 	}
-	message := "Codex++ relay proxy request failed"
+	message := "ChatGPT Codex relay proxy request failed"
 	if lastErr != nil {
 		message += ": " + lastErr.Error()
 	}
@@ -338,7 +338,7 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 		}
 	}
 	if baseURL == "" || apiKey == "" {
-		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy missing base URL or API key"}})
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "ChatGPT Codex relay proxy missing base URL or API key"}})
 		recordRelayRequestFailure(settings)
 		return true
 	}
@@ -373,7 +373,7 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 		if attempt < candidateCount {
 			return false
 		}
-		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "ChatGPT Codex relay proxy request failed: " + err.Error()}})
 		return true
 	}
 	resp, err := client.Do(upstreamReq)
@@ -391,7 +391,7 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 		if attempt < candidateCount {
 			return false
 		}
-		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Codex++ relay proxy request failed: " + err.Error()}})
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "ChatGPT Codex relay proxy request failed: " + err.Error()}})
 		return true
 	}
 	defer resp.Body.Close()

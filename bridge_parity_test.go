@@ -176,7 +176,7 @@ func TestBridgeParityRoutesExistAndAdsStayAbsent(t *testing.T) {
 
 func TestBridgeSettingsIncludesRuntimeCodexAppVersion(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	runtime := &launcherRuntime{codexAppPath: filepath.Join("C:", "Program Files", "WindowsApps", "OpenAI.Codex_26.601.2237.0_x64__2p2nqsd0c76g0", "app")}
+	runtime := &launcherRuntime{codexAppPath: filepath.Join("C:", "Program Files", "WindowsApps", "OpenAI.ChatGPT_26.601.2237.0_x64__2p2nqsd0c76g0", "app")}
 
 	result := runtime.handleBridgeRequest("/settings/get", json.RawMessage(`{}`))
 

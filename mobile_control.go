@@ -463,7 +463,7 @@ func startMobileAppServerRuntime(ctx context.Context) (*mobileAppServerRuntime, 
 	cmd.Stderr = io.Discard
 	hideSubprocessWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("无法启动 Codex app-server：%w", err)
+		return nil, fmt.Errorf("无法启动 ChatGPT Codex app-server：%w", err)
 	}
 	runtime := &mobileAppServerRuntime{port: port, source: "managed", cmd: cmd}
 	if err := waitForMobileAppServerReady(ctx, port); err != nil {
@@ -508,7 +508,7 @@ func reserveMobileAppServerPort() (uint16, error) {
 			return port, nil
 		}
 	}
-	return 0, errors.New("无法为 Codex app-server 预留端口")
+	return 0, errors.New("无法为 ChatGPT Codex app-server 预留端口")
 }
 
 func waitForMobileAppServerReady(ctx context.Context, port uint16) error {
@@ -522,7 +522,7 @@ func waitForMobileAppServerReady(ctx context.Context, port uint16) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("Codex app-server 启动超时")
+	return errors.New("ChatGPT Codex app-server 启动超时")
 }
 
 func mobileAppServerReady(port uint16) bool {

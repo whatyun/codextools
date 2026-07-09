@@ -640,8 +640,8 @@ func codexResourcesDir() string {
 			return resources
 		}
 	}
-	if runtime.GOOS == "darwin" && isDir("/Applications/Codex.app/Contents/Resources") {
-		return "/Applications/Codex.app/Contents/Resources"
+	if runtime.GOOS == "darwin" && isDir("/Applications/ChatGPT.app/Contents/Resources") {
+		return "/Applications/ChatGPT.app/Contents/Resources"
 	}
 	return filepath.Dir(companionBinaryPath("codex"))
 }
@@ -1102,7 +1102,7 @@ func createProviderSyncBackup(home, targetProvider string, changes []sessionChan
 	if err := atomicWriteJSON(filepath.Join(backupDir, "session-meta-backup.json"), manifest); err != nil {
 		return "", err
 	}
-	if err := atomicWriteJSON(filepath.Join(backupDir, "metadata.json"), map[string]any{"managedBy": "Codex++ provider sync", "targetProvider": targetProvider}); err != nil {
+	if err := atomicWriteJSON(filepath.Join(backupDir, "metadata.json"), map[string]any{"managedBy": "ChatGPT Codex Tools provider sync", "targetProvider": targetProvider}); err != nil {
 		return "", err
 	}
 	return backupDir, nil
@@ -1661,7 +1661,7 @@ func pruneProviderSyncBackups(home string) {
 		}
 		path := filepath.Join(root, entry.Name())
 		var meta map[string]any
-		if readJSON(filepath.Join(path, "metadata.json"), &meta) == nil && stringFromAny(meta["managedBy"]) == "Codex++ provider sync" {
+		if readJSON(filepath.Join(path, "metadata.json"), &meta) == nil && isProviderSyncBackupManager(stringFromAny(meta["managedBy"])) {
 			managed = append(managed, path)
 		}
 	}
@@ -1671,5 +1671,14 @@ func pruneProviderSyncBackups(home string) {
 	}
 	for _, path := range managed[5:] {
 		_ = os.RemoveAll(path)
+	}
+}
+
+func isProviderSyncBackupManager(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "ChatGPT Codex Tools provider sync", "Codex++ provider sync":
+		return true
+	default:
+		return false
 	}
 }

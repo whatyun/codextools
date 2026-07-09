@@ -1,8 +1,6 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -48,8 +46,8 @@ func TestRuntimeVersionMatchesMacOSTestBuild(t *testing.T) {
 	}
 }
 
-func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
-	command := buildManagerLauncherCommand(`C:\Tools\codextools-launcher.exe`, `C:\Codex\app`, 9229, 57321, true)
+func TestBuildManagerLauncherCommandUsesChatGPTCodexLauncher(t *testing.T) {
+	command := buildManagerLauncherCommand(`C:\Tools\codextools-launcher.exe`, `C:\ChatGPT\app`, 9229, 57321, true)
 
 	expected := []string{
 		`C:\Tools\codextools-launcher.exe`,
@@ -59,13 +57,13 @@ func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
 		"--helper-port",
 		"57321",
 		"--app-path",
-		`C:\Codex\app`,
+		`C:\ChatGPT\app`,
 		"--restart",
 	}
 	if strings.Join(command, "\x00") != strings.Join(expected, "\x00") {
-		t.Fatalf("manager launch command should target Codex++ launcher:\n got: %#v\nwant: %#v", command, expected)
+		t.Fatalf("manager launch command should target ChatGPT Codex launcher:\n got: %#v\nwant: %#v", command, expected)
 	}
-	payload := managerLauncherPayload(command[0], command, `C:\Codex\app`, 9229, 57321)
+	payload := managerLauncherPayload(command[0], command, `C:\ChatGPT\app`, 9229, 57321)
 	if got := stringFromAny(payload["launch_chain"]); got != "codex_plus_launcher" {
 		t.Fatalf("launch chain mismatch: %q", got)
 	}
@@ -76,9 +74,9 @@ func TestBuildManagerLauncherCommandUsesCodexPlusLauncher(t *testing.T) {
 
 func TestPreferredMacOSLauncherPathPrefersSiblingLauncherApp(t *testing.T) {
 	root := t.TempDir()
-	managerExecutable := filepath.Join(root, "Codex++ 管理工具.app", "Contents", "MacOS", "codextools")
-	managerNestedLauncher := filepath.Join(root, "Codex++ 管理工具.app", "Contents", "MacOS", "codextools-launcher")
-	launcherExecutable := filepath.Join(root, "Codex++.app", "Contents", "MacOS", "codextools-launcher")
+	managerExecutable := filepath.Join(root, "ChatGPT Codex 管理工具.app", "Contents", "MacOS", "ChatGPTCodexManager")
+	managerNestedLauncher := filepath.Join(root, "ChatGPT Codex 管理工具.app", "Contents", "MacOS", "ChatGPTCodex")
+	launcherExecutable := filepath.Join(root, "ChatGPT Codex.app", "Contents", "MacOS", "ChatGPTCodex")
 	for _, path := range []string{managerExecutable, managerNestedLauncher, launcherExecutable} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir failed: %v", err)
@@ -90,9 +88,9 @@ func TestPreferredMacOSLauncherPathPrefersSiblingLauncherApp(t *testing.T) {
 
 	got := preferredMacOSAppExecutableFromCandidates(
 		managerNestedLauncher,
-		[]string{filepath.Join(root, "Codex++.app")},
-		"Codex++.app",
-		[]string{"codextools-launcher", "CodexPlusPlus"},
+		[]string{filepath.Join(root, "ChatGPT Codex.app")},
+		"ChatGPT Codex.app",
+		[]string{"ChatGPTCodex", "codextools-launcher"},
 	)
 	if got != launcherExecutable {
 		t.Fatalf("manager launch should use standalone launcher app:\n got: %q\nwant: %q", got, launcherExecutable)
@@ -101,20 +99,20 @@ func TestPreferredMacOSLauncherPathPrefersSiblingLauncherApp(t *testing.T) {
 
 func TestPreferredMacOSLauncherPathRejectsManagerBundleFallback(t *testing.T) {
 	root := t.TempDir()
-	managerNestedLauncher := filepath.Join(root, "Codex++ 管理工具.app", "Contents", "MacOS", "codextools-launcher")
+	managerNestedLauncher := filepath.Join(root, "ChatGPT Codex 管理工具.app", "Contents", "MacOS", "ChatGPTCodex")
 	if err := os.MkdirAll(filepath.Dir(managerNestedLauncher), 0o755); err != nil {
 		t.Fatalf("mkdir failed: %v", err)
 	}
 	if err := os.WriteFile(managerNestedLauncher, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write executable failed: %v", err)
 	}
-	expectedMissingStandalone := filepath.Join(root, "Codex++.app", "Contents", "MacOS", "codextools-launcher")
+	expectedMissingStandalone := filepath.Join(root, "ChatGPT Codex.app", "Contents", "MacOS", "ChatGPTCodex")
 
 	got := preferredMacOSAppExecutableFromCandidates(
 		managerNestedLauncher,
-		[]string{filepath.Join(root, "Codex++.app")},
-		"Codex++.app",
-		[]string{"codextools-launcher", "CodexPlusPlus"},
+		[]string{filepath.Join(root, "ChatGPT Codex.app")},
+		"ChatGPT Codex.app",
+		[]string{"ChatGPTCodex", "codextools-launcher"},
 	)
 	if got != expectedMissingStandalone {
 		t.Fatalf("manager bundle launcher fallback should be rejected:\n got: %q\nwant: %q", got, expectedMissingStandalone)
@@ -147,9 +145,9 @@ func TestWriteLaunchRestartingStatus(t *testing.T) {
 	t.Setenv("HOME", home)
 	debugPort := uint16(9229)
 	helperPort := uint16(57321)
-	appPath := filepath.Join(home, "Codex.app")
+	appPath := filepath.Join(home, "ChatGPT.app")
 
-	writeLaunchRestartingStatus("正在关闭旧 Codex++ 后端并释放端口。", debugPort, helperPort, &appPath)
+	writeLaunchRestartingStatus("正在关闭旧 ChatGPT Codex 后端并释放端口。", debugPort, helperPort, &appPath)
 
 	var status launchStatus
 	if err := readJSON(latestStatusPath(), &status); err != nil {
@@ -158,7 +156,7 @@ func TestWriteLaunchRestartingStatus(t *testing.T) {
 	if status.Status != "restarting" {
 		t.Fatalf("status mismatch: %q", status.Status)
 	}
-	if status.Message != "正在关闭旧 Codex++ 后端并释放端口。" {
+	if status.Message != "正在关闭旧 ChatGPT Codex 后端并释放端口。" {
 		t.Fatalf("message mismatch: %q", status.Message)
 	}
 	if status.DebugPort == nil || *status.DebugPort != debugPort {
@@ -181,7 +179,7 @@ func TestReapLauncherChildKeepsBackendAliveWhileCDPPortIsOpen(t *testing.T) {
 			return
 		}
 		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`[{"id":"codex","type":"page","url":"app://-/index.html","title":"Codex","webSocketDebuggerUrl":"ws://127.0.0.1/devtools/page/codex"}]`))
+		_, _ = w.Write([]byte(`[{"id":"chatgpt","type":"page","url":"app://-/index.html","title":"ChatGPT","webSocketDebuggerUrl":"ws://127.0.0.1/devtools/page/chatgpt"}]`))
 	}))
 	parsed, err := url.Parse(cdp.URL)
 	if err != nil {
@@ -196,7 +194,7 @@ func TestReapLauncherChildKeepsBackendAliveWhileCDPPortIsOpen(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- reapLauncherChild(fakeCodexLaunch{}, filepath.Join(home, "Codex.exe"), debugPort, helperPort)
+		done <- reapLauncherChild(fakeCodexLaunch{}, filepath.Join(home, "ChatGPT.exe"), debugPort, helperPort)
 	}()
 
 	select {
@@ -289,34 +287,38 @@ func TestRelayProfileHTTPProxyUIAndStateAreWired(t *testing.T) {
 }
 
 func TestWindowsUIDoesNotSuggestWindowsAppsLaunchPath(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
+	appData, err := os.ReadFile(filepath.Join("web", "src", "App.tsx"))
 	if err != nil {
 		t.Fatalf("read App.tsx failed: %v", err)
 	}
-	source := string(data)
+	translationsData, err := os.ReadFile(filepath.Join("web", "src", "i18n", "translations.ts"))
+	if err != nil {
+		t.Fatalf("read translations.ts failed: %v", err)
+	}
+	source := string(appData) + "\n" + string(translationsData)
 	for _, expected := range []string{
 		`不要选择 Program Files\\WindowsApps 包目录`,
-		`C:\\Users\\你\\AppData\\Local\\Programs\\Codex\\Codex.exe`,
-		`选择解包后的 app\\Codex.exe 或解包目录`,
-		`自动解包镜像包`,
+		`C:\\Users\\你\\AppData\\Local\\Programs\\ChatGPT\\ChatGPT.exe`,
+		`选择 ChatGPT.exe`,
+		`打开 ChatGPT 下载页`,
 	} {
 		if !strings.Contains(source, expected) {
-			t.Fatalf("Windows UI should guide users to runnable mirror Codex.exe; missing %q", expected)
+			t.Fatalf("Windows UI should guide users to ChatGPT desktop app; missing %q", expected)
 		}
 	}
-	if strings.Contains(source, `C:\\Program Files\\WindowsApps\\OpenAI.Codex_...\\app`) {
+	if strings.Contains(source, `C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT_...\\app`) {
 		t.Fatal("Windows UI must not suggest Program Files\\WindowsApps as a launch path")
 	}
 }
 
 func TestBuildCodexLaunchCommandKeepsDebugArgumentsForExecutable(t *testing.T) {
-	command := buildCodexLaunchCommand(filepath.Join(t.TempDir(), "Codex.exe"), 9229, []string{"--force_high_performance_gpu"})
+	command := buildCodexLaunchCommand(filepath.Join(t.TempDir(), "ChatGPT.exe"), 9229, []string{"--force_high_performance_gpu"})
 
 	if len(command) != 4 {
 		t.Fatalf("command length mismatch: %#v", command)
 	}
-	if !strings.EqualFold(filepath.Base(command[0]), "Codex.exe") {
-		t.Fatalf("command should target Codex.exe: %#v", command)
+	if !strings.EqualFold(filepath.Base(command[0]), "ChatGPT.exe") {
+		t.Fatalf("command should target ChatGPT.exe: %#v", command)
 	}
 	if command[1] != "--remote-debugging-port=9229" {
 		t.Fatalf("debug port argument mismatch: %#v", command)
@@ -333,7 +335,7 @@ func TestManagerLaunchAppPathSkipsPackagedOverrideWithoutExecutable(t *testing.T
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows launch path fallback only applies on Windows")
 	}
-	requested := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	requested := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 
 	if got := managerLaunchAppPath(requested, defaultSettings()); got != "" {
 		t.Fatalf("packaged override without direct executable should be skipped, got %q", got)
@@ -344,8 +346,8 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows launch path fallback only applies on Windows")
 	}
-	appDir := filepath.Join(t.TempDir(), "Codex")
-	exe := filepath.Join(appDir, "Codex.exe")
+	appDir := filepath.Join(t.TempDir(), "ChatGPT")
+	exe := filepath.Join(appDir, "ChatGPT.exe")
 	writeTestFile(t, exe, "binary")
 
 	if got := managerLaunchAppPath(exe, defaultSettings()); got != appDir {
@@ -354,8 +356,8 @@ func TestManagerLaunchAppPathKeepsDirectExecutableOverride(t *testing.T) {
 }
 
 func TestWindowsProtectedPackagePathDetectionIsPathBased(t *testing.T) {
-	packageApp := `C:\Program Files\WindowsApps\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0\app`
-	packageExe := packageApp + `\Codex.exe`
+	packageApp := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.623.19656.0_x64__2p2nqsd0c76g0\app`
+	packageExe := packageApp + `\ChatGPT.exe`
 
 	if !isWindowsProtectedAppPackagePath(packageApp) {
 		t.Fatalf("package app dir should be treated as protected: %q", packageApp)
@@ -367,8 +369,8 @@ func TestWindowsProtectedPackagePathDetectionIsPathBased(t *testing.T) {
 		t.Fatal("protected app/executable pair should block direct launch")
 	}
 
-	alias := `C:\Users\Alice\AppData\Local\Microsoft\WindowsApps\Codex.exe`
-	localRuntime := `C:\Users\Alice\AppData\Local\Programs\Codex\Codex.exe`
+	alias := `C:\Users\Alice\AppData\Local\Microsoft\WindowsApps\ChatGPT.exe`
+	localRuntime := `C:\Users\Alice\AppData\Local\Programs\ChatGPT\ChatGPT.exe`
 	if isWindowsProtectedAppPackagePath(alias) {
 		t.Fatalf("execution alias should not be treated as protected package path: %q", alias)
 	}
@@ -387,9 +389,8 @@ func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
 		"directLaunchBlocked",
 		"isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])",
 		"windowsProtectedMSIXLaunchError(appPath, command[0])",
-		"installWindowsCodexMirror(context.Background())",
-		"launcher.codex_app_auto_repaired",
-		"Program Files\\\\WindowsApps 包目录不能作为 Codex++ 启动目标",
+		"Program Files\\\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动目标",
+		"ChatGPT.exe",
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("launcher should guard protected MSIX direct fallback; missing %q", expected)
@@ -403,6 +404,11 @@ func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
 	if strings.Contains(source, "MSIX 激活 %s 失败：%v；已跳过直接启动") {
 		t.Fatal("protected MSIX failure must not report an activation error")
 	}
+	for _, forbidden := range []string{"installWindowsCodexMirror", "launcher.codex_app_auto_repaired"} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("launcher must not keep old standalone Codex repair flow: %q", forbidden)
+		}
+	}
 }
 
 func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
@@ -415,9 +421,8 @@ func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
 		`if runtime.GOOS != "windows" {`,
 		`if appPath != "" && windowsCodexPathSupportsDirectLaunch(appPath) {`,
 		`if runtime.GOOS == "windows" && !windowsCodexPathSupportsDirectLaunch(path) {`,
-		`MSIX 版 Codex 不能作为 Codex++ 启动目标`,
-		`不要选择 Program Files\\WindowsApps 包目录`,
-		`installWindowsCodexMirror(ctx)`,
+		`MSIX 不支持`,
+		`Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex`,
 	} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("Windows manager should skip unsupported MSIX paths; missing %q", expected)
@@ -426,6 +431,9 @@ func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
 	if strings.Contains(source, `runtime.GOOS != "windows" || appPath == ""`) {
 		t.Fatal("Windows launch path selection must fall back to saved/detected executable when request path is empty")
 	}
+	if strings.Contains(source, "installWindowsCodexMirror") {
+		t.Fatal("Windows manager must not keep old standalone Codex mirror repair")
+	}
 }
 
 func TestNormalizeCodexAppPathRejectsCodexToolsMacApps(t *testing.T) {
@@ -433,15 +441,15 @@ func TestNormalizeCodexAppPathRejectsCodexToolsMacApps(t *testing.T) {
 		t.Skip("macOS app bundle filtering only applies on darwin")
 	}
 	root := t.TempDir()
-	for _, name := range []string{"Codex++.app", "Codex++ 管理工具.app", "CodexTools.app"} {
+	for _, name := range []string{"ChatGPT Codex.app", "ChatGPT Codex 管理工具.app", "ChatGPT Codex Tools.app", "Codex.app", "Codex++.app", "Codex++ 管理工具.app", "CodexTools.app"} {
 		if got := normalizeCodexAppPath(filepath.Join(root, name)); got != "" {
-			t.Fatalf("CodexTools app should not be accepted as Codex app: %q", got)
+			t.Fatalf("non-ChatGPT app should not be accepted as ChatGPT desktop app: %q", got)
 		}
 	}
 	random := filepath.Join(root, "Renamed.app")
 	writeTestFile(t, filepath.Join(random, "Contents", "Info.plist"), `<plist><dict><key>CFBundleIdentifier</key><string>com.hereww.codextools.manager</string></dict></plist>`)
 	if got := normalizeCodexAppPath(random); got != "" {
-		t.Fatalf("CodexTools bundle id should not be accepted as Codex app: %q", got)
+		t.Fatalf("ChatGPT Codex Tools bundle id should not be accepted as ChatGPT desktop app: %q", got)
 	}
 }
 
@@ -451,7 +459,8 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`pluginMarketplaceUnlock`,
 		`forcePluginInstall`,
 		`pluginPatchDisabledInRelayMode`,
-		`codexPlusBackendSettings.launchMode === "relay"`,
+		`activeRelayModeSupportsOfficialSites`,
+		`activeRelayMode: "official"`,
 		`codexAppVersion`,
 		`pasteFix`,
 		`codexAppPasteFix`,
@@ -659,15 +668,15 @@ func TestComputerUseGuardConfigPreservesExistingFeatureKeys(t *testing.T) {
 }
 
 func TestBuildWatcherInstallPlanMatchesOriginalWindowsShape(t *testing.T) {
-	plan := buildWatcherInstallPlan(`C:\Tools\Codex++.exe`, 9229, `C:\Users\A\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CodexPlusPlusWatcher.lnk`)
+	plan := buildWatcherInstallPlan(`C:\Tools\ChatGPTCodex.exe`, 9229, `C:\Users\A\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\ChatGPTCodexToolsWatcher.lnk`)
 
-	if plan.LauncherPath != `C:\Tools\Codex++.exe` {
+	if plan.LauncherPath != `C:\Tools\ChatGPTCodex.exe` {
 		t.Fatalf("launcher path mismatch: %q", plan.LauncherPath)
 	}
 	if plan.Arguments != "--debug-port 9229" {
 		t.Fatalf("arguments mismatch: %q", plan.Arguments)
 	}
-	if plan.RunValue != `"C:\Tools\Codex++.exe" --debug-port 9229` {
+	if plan.RunValue != `"C:\Tools\ChatGPTCodex.exe" --debug-port 9229` {
 		t.Fatalf("run value mismatch: %q", plan.RunValue)
 	}
 	if plan.ShortcutPath == "" {
@@ -712,19 +721,19 @@ func TestMacOSReleasePackageForcesApplicationsInstallLocation(t *testing.T) {
 }
 
 func TestParseWindowsUninstallRegistryValue(t *testing.T) {
-	output := `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexTools
-    DisplayName    REG_SZ    CodexTools
-    UninstallString    REG_SZ    "C:\Users\A\AppData\Local\CodexTools\Uninstall.exe"
+	output := `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\ChatGPT Codex Tools
+    DisplayName    REG_SZ    ChatGPT Codex Tools
+    UninstallString    REG_SZ    "C:\Users\A\AppData\Local\ChatGPT Codex Tools\Uninstall.exe"
 `
 	value := parseWindowsRegQueryValue(output, "UninstallString")
-	if value != `"C:\Users\A\AppData\Local\CodexTools\Uninstall.exe"` {
+	if value != `"C:\Users\A\AppData\Local\ChatGPT Codex Tools\Uninstall.exe"` {
 		t.Fatalf("uninstall registry value mismatch: %q", value)
 	}
 }
 
 func TestWindowsExecutableFromCommandParsesQuotedPath(t *testing.T) {
-	command := `"C:\Users\A\AppData\Local\CodexTools\Uninstall.exe" /S`
-	if got := windowsExecutableFromCommand(command); got != `C:\Users\A\AppData\Local\CodexTools\Uninstall.exe` {
+	command := `"C:\Users\A\AppData\Local\ChatGPT Codex Tools\Uninstall.exe" /S`
+	if got := windowsExecutableFromCommand(command); got != `C:\Users\A\AppData\Local\ChatGPT Codex Tools\Uninstall.exe` {
 		t.Fatalf("quoted command path mismatch: %q", got)
 	}
 }
@@ -760,14 +769,75 @@ func TestListContextEntriesJSONUsesEmptyArrays(t *testing.T) {
 	}
 }
 
-func TestChatGPTAuthStatusFromContentsReadsEmail(t *testing.T) {
-	status := chatGPTAuthStatusFromContents(fakeChatGPTAuthJSON(t, "alpha@example.com"), "test")
+func TestOfficialAuthStatusFromContentsReadsEmail(t *testing.T) {
+	status := officialAuthStatusFromContents(fakeChatGPTAuthJSON(t, "alpha@example.com"), "test")
 
 	if !status.Authenticated {
 		t.Fatal("official auth should be authenticated")
 	}
 	if status.AccountLabel != "alpha@example.com" {
 		t.Fatalf("account label mismatch: %q", status.AccountLabel)
+	}
+}
+
+func TestOfficialAuthStatusFromContentsUsesFallbackForUnknownEmail(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]string{
+			"refresh_token": "refresh-token",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal auth json: %v", err)
+	}
+
+	status := officialAuthStatusFromContents(string(data), "test")
+
+	if !status.Authenticated {
+		t.Fatal("official auth should be authenticated")
+	}
+	if status.AccountLabel != "官方账号" {
+		t.Fatalf("fallback account label mismatch: %q", status.AccountLabel)
+	}
+}
+
+func TestOfficialAuthStatusFromContentsReadsProfileEmail(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"refresh_token": "refresh-token",
+			"profile": map[string]any{
+				"email": "profile@example.com",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal auth json: %v", err)
+	}
+
+	status := officialAuthStatusFromContents(string(data), "test")
+
+	if !status.Authenticated {
+		t.Fatal("official auth should be authenticated")
+	}
+	if status.AccountLabel != "profile@example.com" {
+		t.Fatalf("profile account label mismatch: %q", status.AccountLabel)
+	}
+}
+
+func TestOfficialAuthStatusFromContentsRejectsMissingTokens(t *testing.T) {
+	status := officialAuthStatusFromContents(`{"auth_mode":"chatgpt","tokens":{}}`, "test")
+
+	if status.Authenticated {
+		t.Fatalf("auth without tokens should not be authenticated: %#v", status)
+	}
+}
+
+func TestOfficialAuthStatusFromContentsRejectsAPIKeyMode(t *testing.T) {
+	status := officialAuthStatusFromContents(`{"auth_mode":"apikey","tokens":{"refresh_token":"refresh-token"}}`, "test")
+
+	if status.Authenticated {
+		t.Fatalf("apikey auth should not be treated as official auth: %#v", status)
 	}
 }
 
@@ -818,6 +888,25 @@ func TestBridgeSettingsIncludesThreadIDBadge(t *testing.T) {
 
 	if !boolFromAny(value["codexAppThreadIdBadge"]) {
 		t.Fatalf("bridge settings should include codexAppThreadIdBadge: %#v", value)
+	}
+}
+
+func TestBridgeSettingsIncludesActiveRelayModeForMixedSites(t *testing.T) {
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{
+		{ID: "official", Name: "Official", RelayMode: "official"},
+		{ID: "mixed", Name: "Mixed", RelayMode: "mixedApi"},
+	}
+	settings.ActiveRelayID = "mixed"
+	runtime := &launcherRuntime{}
+
+	value := runtime.bridgeSettingsValue(settings)
+
+	if got := stringFromAny(value["activeRelayMode"]); got != "mixedApi" {
+		t.Fatalf("bridge settings should expose active mixed relay mode for Sites support, got %q in %#v", got, value)
+	}
+	if got := stringFromAny(value["activeRelayID"]); got != "mixed" {
+		t.Fatalf("bridge settings should expose active relay id, got %q in %#v", got, value)
 	}
 }
 
@@ -1305,7 +1394,7 @@ func TestInstallGuidePlatformGuideSeparatesMacAndWindows(t *testing.T) {
 	if got := stringFromAny(mac["title"]); !strings.Contains(got, "macOS") {
 		t.Fatalf("mac guide should be labeled macOS: %#v", mac)
 	}
-	for _, expected := range []string{"Codex.app", "官方"} {
+	for _, expected := range []string{"ChatGPT.app", "官方"} {
 		if !strings.Contains(stringFromAny(mac["detectionNote"])+stringFromAny(mac["installTitle"])+stringFromAny(mac["installActionLabel"]), expected) {
 			t.Fatalf("mac guide should mention %q: %#v", expected, mac)
 		}
@@ -1322,7 +1411,7 @@ func TestInstallGuidePlatformGuideSeparatesMacAndWindows(t *testing.T) {
 		t.Fatalf("windows guide should be labeled Windows: %#v", windows)
 	}
 	combined := stringFromAny(windows["systemDescription"]) + stringFromAny(windows["detectionNote"]) + stringFromAny(windows["launchTargetLabel"])
-	for _, expected := range []string{"Codex.exe", "WindowsApps", "AppUserModelID", "MSIX"} {
+	for _, expected := range []string{"ChatGPT.exe", "WindowsApps", "AppUserModelID", "MSIX"} {
 		if !strings.Contains(combined, expected) {
 			t.Fatalf("windows guide should mention %q: %#v", expected, windows)
 		}
@@ -1588,7 +1677,7 @@ func TestOfficialModeWritesBoundOfficialAuth(t *testing.T) {
 	if result["status"] != "ok" {
 		t.Fatalf("official switch should succeed: %#v", result)
 	}
-	status := chatGPTAuthStatus(filepath.Join(home, ".codex"))
+	status := officialAuthStatus(filepath.Join(home, ".codex"))
 	if !status.Authenticated || status.AccountLabel != "official@example.com" {
 		t.Fatalf("bound official auth was not written: %#v", status)
 	}
@@ -1628,7 +1717,7 @@ func TestActivateOfficialAuthWritesBoundOfficialAuth(t *testing.T) {
 	if result["status"] != "ok" {
 		t.Fatalf("activate official auth should succeed: %#v", result)
 	}
-	status := chatGPTAuthStatus(filepath.Join(home, ".codex"))
+	status := officialAuthStatus(filepath.Join(home, ".codex"))
 	if !status.Authenticated || status.AccountLabel != "bound@example.com" {
 		t.Fatalf("bound official auth was not activated: %#v", status)
 	}
@@ -1693,7 +1782,7 @@ func TestClearRelayInjectionFallsBackToLegacyOfficialAuthContents(t *testing.T) 
 		t.Fatalf("official switch should succeed with legacy auth fallback: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "legacy@example.com" {
+	if officialAuthStatusFromContents(string(auth), "auth").AccountLabel != "legacy@example.com" {
 		t.Fatalf("legacy official auth should be written to live auth.json, got:\n%s", string(auth))
 	}
 }
@@ -1723,7 +1812,7 @@ func TestMixedModeWritesBoundOfficialAuthAndRelayConfig(t *testing.T) {
 	if result["status"] != "ok" {
 		t.Fatalf("mixed switch should succeed: %#v", result)
 	}
-	status := chatGPTAuthStatus(filepath.Join(home, ".codex"))
+	status := officialAuthStatus(filepath.Join(home, ".codex"))
 	if !status.Authenticated || status.AccountLabel != "mixed@example.com" {
 		t.Fatalf("bound mixed official auth was not written: %#v", status)
 	}
@@ -1732,7 +1821,7 @@ func TestMixedModeWritesBoundOfficialAuthAndRelayConfig(t *testing.T) {
 		t.Fatalf("mixed relay config missing bearer token:\n%s", string(config))
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "mixed@example.com" {
+	if officialAuthStatusFromContents(string(auth), "auth").AccountLabel != "mixed@example.com" {
 		t.Fatalf("mixed relay should use profile auth snapshot, got:\n%s", string(auth))
 	}
 }
@@ -1847,7 +1936,7 @@ func TestPureAPIModeKeepsCurrentAuthWhenProfileSnapshotMissing(t *testing.T) {
 		t.Fatalf("pure API switch should succeed: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
+	if officialAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
 		t.Fatalf("pure API mode should preserve auth.json, got:\n%s", string(auth))
 	}
 	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
@@ -1888,7 +1977,7 @@ func TestPureAPIModePreservesCurrentAuthWhenProfileSnapshotPresent(t *testing.T)
 		t.Fatalf("pure API switch should succeed: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
+	if officialAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
 		t.Fatalf("pure API should preserve current auth snapshot, got:\n%s", string(auth))
 	}
 }
@@ -1964,7 +2053,7 @@ func TestPureAPIModeWritesImportedConfigWithoutAuthOverwrite(t *testing.T) {
 		t.Fatalf("pure API switch should succeed: %#v", result)
 	}
 	auth, _ := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if chatGPTAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
+	if officialAuthStatusFromContents(string(auth), "auth").AccountLabel != "current@example.com" {
 		t.Fatalf("pure API mode should preserve auth.json, got:\n%s", string(auth))
 	}
 	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
@@ -2298,7 +2387,7 @@ func TestCodexCLIExecutablePrefersLocalRuntimeAndSkipsWindowsApps(t *testing.T) 
 	userProfile := t.TempDir()
 	t.Setenv("LOCALAPPDATA", localAppData)
 	t.Setenv("USERPROFILE", userProfile)
-	t.Setenv("CODEX_CLI_PATH", filepath.Join(t.TempDir(), "Program Files", "WindowsApps", "OpenAI.Codex", "app", "resources", "codex.exe"))
+	t.Setenv("CODEX_CLI_PATH", filepath.Join(t.TempDir(), "Program Files", "WindowsApps", "OpenAI.ChatGPT", "app", "resources", "codex.exe"))
 	writeTestFile(t, os.Getenv("CODEX_CLI_PATH"), "blocked")
 	runtimeCLI := filepath.Join(localAppData, "OpenAI", "Codex", "bin", "fb2111b91430cb17", "codex.exe")
 	writeTestFile(t, runtimeCLI, "runtime")
@@ -2321,7 +2410,7 @@ func TestCodexCLIExecutableReturnsEmptyWhenOnlyWindowsAppsAliasExists(t *testing
 	t.Setenv("USERPROFILE", t.TempDir())
 	windowsAppsDir := filepath.Join(t.TempDir(), "WindowsApps")
 	t.Setenv("PATH", windowsAppsDir)
-	t.Setenv("CODEX_CLI_PATH", filepath.Join(windowsAppsDir, "OpenAI.Codex", "app", "resources", "codex.exe"))
+	t.Setenv("CODEX_CLI_PATH", filepath.Join(windowsAppsDir, "OpenAI.ChatGPT", "app", "resources", "codex.exe"))
 	writeTestFile(t, os.Getenv("CODEX_CLI_PATH"), "blocked")
 	writeTestFile(t, filepath.Join(windowsAppsDir, "codex.exe"), "blocked")
 
@@ -2338,9 +2427,9 @@ func TestCodexCLIExecutableReturnsEmptyWhenOnlyWindowsAppsAliasExists(t *testing
 
 func TestIsWindowsAppsPathRecognizesPathSegments(t *testing.T) {
 	for _, path := range []string{
-		`C:\Program Files\WindowsApps\OpenAI.Codex\codex.exe`,
+		`C:\Program Files\WindowsApps\OpenAI.ChatGPT\codex.exe`,
 		`C:\Users\A\AppData\Local\Microsoft\WindowsApps\codex.exe`,
-		filepath.Join(t.TempDir(), "WindowsApps", "OpenAI.Codex", "codex.exe"),
+		filepath.Join(t.TempDir(), "WindowsApps", "OpenAI.ChatGPT", "codex.exe"),
 	} {
 		if !isWindowsAppsPath(path) {
 			t.Fatalf("path should be recognized as WindowsApps alias: %q", path)
@@ -2774,25 +2863,6 @@ func writeTestFile(t *testing.T, path, contents string) {
 	}
 }
 
-func testZipArchive(t *testing.T, files map[string]string) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	writer := zip.NewWriter(&buf)
-	for name, contents := range files {
-		entry, err := writer.Create(name)
-		if err != nil {
-			t.Fatalf("failed to create zip entry: %v", err)
-		}
-		if _, err := entry.Write([]byte(contents)); err != nil {
-			t.Fatalf("failed to write zip entry: %v", err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("failed to close zip writer: %v", err)
-	}
-	return buf.Bytes()
-}
-
 func stubCodexPluginCommands(t *testing.T, failures map[string]error, observers ...func([]string)) {
 	t.Helper()
 	original := runCodexPluginCommand
@@ -2936,42 +3006,13 @@ func fakeChatGPTAuthJSON(t *testing.T, email string) string {
 	return string(data) + "\n"
 }
 
-func TestSelectCodexMirrorAssetPrefersWindowsInstaller(t *testing.T) {
-	asset, ok := selectCodexMirrorAsset([]codexAppMirrorAsset{
-		{Name: "release-manifest.json", BrowserDownloadURL: "https://example.com/release-manifest.json"},
-		{Name: "SHA256SUMS-windows.txt", BrowserDownloadURL: "https://example.com/SHA256SUMS-windows.txt"},
-		{Name: "OpenAI.Codex_26.519.5221.0_x64__2p2nqsd0c76g0.Msix", BrowserDownloadURL: "https://example.com/OpenAI.Codex_26.519.5221.0_x64__2p2nqsd0c76g0.Msix"},
-	}, "windows", "amd64")
-
-	if !ok {
-		t.Fatal("expected a windows asset")
-	}
-	if asset.Name != "OpenAI.Codex_26.519.5221.0_x64__2p2nqsd0c76g0.Msix" {
-		t.Fatalf("selected wrong asset: %q", asset.Name)
-	}
-}
-
-func TestSelectCodexMirrorAssetPrefersMacArchitecture(t *testing.T) {
-	asset, ok := selectCodexMirrorAsset([]codexAppMirrorAsset{
-		{Name: "Codex-mac-x64.dmg", BrowserDownloadURL: "https://example.com/Codex-mac-x64.dmg"},
-		{Name: "Codex-mac-arm64.dmg", BrowserDownloadURL: "https://example.com/Codex-mac-arm64.dmg"},
-	}, "darwin", "arm64")
-
-	if !ok {
-		t.Fatal("expected a macOS asset")
-	}
-	if asset.Name != "Codex-mac-arm64.dmg" {
-		t.Fatalf("selected wrong asset: %q", asset.Name)
-	}
-}
-
 func TestNormalizeCodexAppPathAcceptsWindowsExecutableAndAppDir(t *testing.T) {
 	root := t.TempDir()
-	appDir := filepath.Join(root, "OpenAI.Codex_1.2.3.0_x64__test", "app")
+	appDir := filepath.Join(root, "OpenAI.ChatGPT_1.2.3.0_x64__test", "app")
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		t.Fatalf("failed to create app dir: %v", err)
 	}
-	exe := filepath.Join(appDir, "Codex.exe")
+	exe := filepath.Join(appDir, "ChatGPT.exe")
 	writeTestFile(t, exe, "binary")
 
 	if got := normalizeCodexAppPath(exe); got != appDir {
@@ -2986,17 +3027,17 @@ func TestNormalizeCodexAppPathAcceptsWindowsExecutableAndAppDir(t *testing.T) {
 }
 
 func TestPackagedWindowsAppUserModelIDMatchesOriginalLauncherShape(t *testing.T) {
-	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 
-	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("app user model id mismatch: %q", got)
 	}
 }
 
 func TestPackagedWindowsAppUserModelIDSupportsCodexBetaPackage(t *testing.T) {
-	path := `C:\Program Files\WindowsApps\OpenAI.CodexBeta_26.619.2200.0_x64__2p2nqsd0c76g0\app`
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPTBeta_26.619.2200.0_x64__2p2nqsd0c76g0\app`
 
-	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.CodexBeta_2p2nqsd0c76g0!App" {
+	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.ChatGPTBeta_2p2nqsd0c76g0!App" {
 		t.Fatalf("beta app user model id mismatch: %q", got)
 	}
 	if got := windowsPackageVersionFromPath(path); got != "26.619.2200.0" {
@@ -3005,10 +3046,10 @@ func TestPackagedWindowsAppUserModelIDSupportsCodexBetaPackage(t *testing.T) {
 }
 
 func TestPackagedWindowsAppUserModelIDIsCaseInsensitive(t *testing.T) {
-	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
-	mistypedCase := strings.Replace(path, "OpenAI.Codex_", "OpenAl.Codex_", 1)
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	mistypedCase := strings.Replace(path, "OpenAI.ChatGPT_", "OpenAl.Codex_", 1)
 
-	if got := packagedWindowsAppUserModelID(strings.ToLower(path)); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+	if got := packagedWindowsAppUserModelID(strings.ToLower(path)); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("lowercase package path should still resolve app id: %q", got)
 	}
 	if got := packagedWindowsAppUserModelID(mistypedCase); got != "" {
@@ -3017,7 +3058,7 @@ func TestPackagedWindowsAppUserModelIDIsCaseInsensitive(t *testing.T) {
 }
 
 func TestWindowsPackagePathNormalizesToAppDirOnWindows(t *testing.T) {
-	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app\Codex.exe`
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`
 
 	if runtime.GOOS != "windows" {
 		if got := normalizeCodexAppPath(path); got != "" {
@@ -3025,7 +3066,7 @@ func TestWindowsPackagePathNormalizesToAppDirOnWindows(t *testing.T) {
 		}
 		return
 	}
-	want := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	want := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 	if got := normalizeCodexAppPath(path); got != want {
 		t.Fatalf("Windows package path should normalize to app dir: %q", got)
 	}
@@ -3035,8 +3076,8 @@ func TestWindowsPackageShapeNormalizesWithoutReadableExecutable(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows package normalization only applies on Windows")
 	}
-	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0`
-	want := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0`
+	want := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 
 	if got := normalizeCodexAppPath(path); got != want {
 		t.Fatalf("package shape should normalize without file access: %q", got)
@@ -3047,7 +3088,7 @@ func TestMissingWindowsExecutionAliasDoesNotNormalize(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("execution alias guard only applies on Windows")
 	}
-	path := filepath.Join(t.TempDir(), "Microsoft", "WindowsApps", "Codex.exe")
+	path := filepath.Join(t.TempDir(), "Microsoft", "WindowsApps", "ChatGPT.exe")
 
 	if got := normalizeCodexAppPath(path); got != "" {
 		t.Fatalf("missing Windows execution alias should not normalize: %q", got)
@@ -3064,7 +3105,7 @@ func TestWindowsPlainDirectoryWithoutCodexExecutableDoesNotNormalize(t *testing.
 	}
 
 	if got := normalizeCodexAppPath(dir); got != "" {
-		t.Fatalf("plain directory without Codex.exe should not normalize: %q", got)
+		t.Fatalf("plain directory without ChatGPT.exe should not normalize: %q", got)
 	}
 }
 
@@ -3086,14 +3127,14 @@ func TestBuildWindowsPackagedActivationArguments(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("packaged activation is only built on Windows")
 	}
-	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 
 	activation := buildWindowsPackagedActivation(path, 9229, []string{"--force_high_performance_gpu"})
 
 	if activation == nil {
 		t.Fatal("activation should be built")
 	}
-	if activation.appUserModelID != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+	if activation.appUserModelID != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("app user model id mismatch: %q", activation.appUserModelID)
 	}
 	if activation.arguments != "--remote-debugging-port=9229 --remote-allow-origins=http://127.0.0.1:9229 --force_high_performance_gpu" {
@@ -3242,8 +3283,8 @@ func TestCodexLaunchPayloadRejectsProtectedWindowsAppsEvenWhenReadable(t *testin
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows protected package handling only applies on Windows")
 	}
-	appDir := filepath.Join(t.TempDir(), "Program Files", "WindowsApps", "OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
-	exe := filepath.Join(appDir, "Codex.exe")
+	appDir := filepath.Join(t.TempDir(), "Program Files", "WindowsApps", "OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
+	exe := filepath.Join(appDir, "ChatGPT.exe")
 	writeTestFile(t, exe, "binary")
 
 	payload := codexLaunchPayload(appDir)
@@ -3263,8 +3304,8 @@ func TestCodexLaunchPayloadAcceptsUnpackedCodexExecutable(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows executable preference only applies on Windows")
 	}
-	appDir := filepath.Join(t.TempDir(), "CodexAppMirror", "OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
-	exe := filepath.Join(appDir, "Codex.exe")
+	appDir := filepath.Join(t.TempDir(), "CodexAppMirror", "OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
+	exe := filepath.Join(appDir, "ChatGPT.exe")
 	writeTestFile(t, exe, "binary")
 
 	payload := codexLaunchPayload(appDir)
@@ -3278,12 +3319,12 @@ func TestCodexLaunchPayloadAcceptsUnpackedCodexExecutable(t *testing.T) {
 }
 
 func TestWindowsPackagedExplorerCommandShape(t *testing.T) {
-	command := windowsPackagedExplorerCommand("OpenAI.Codex_abc!App", []string{"--remote-debugging-port=9229", "--remote-allow-origins=http://127.0.0.1:9229"})
+	command := windowsPackagedExplorerCommand("OpenAI.ChatGPT_abc!App", []string{"--remote-debugging-port=9229", "--remote-allow-origins=http://127.0.0.1:9229"})
 
 	if len(command) != 2 {
 		t.Fatalf("command length mismatch: %#v", command)
 	}
-	if command[0] != "explorer.exe" || command[1] != `shell:AppsFolder\OpenAI.Codex_abc!App` {
+	if command[0] != "explorer.exe" || command[1] != `shell:AppsFolder\OpenAI.ChatGPT_abc!App` {
 		t.Fatalf("command shape mismatch: %#v", command)
 	}
 	for _, part := range command {
@@ -3294,10 +3335,10 @@ func TestWindowsPackagedExplorerCommandShape(t *testing.T) {
 }
 
 func TestPackagedCodexDebugPortErrorGivesActionableGuidance(t *testing.T) {
-	err := packagedCodexDebugPortError("OpenAI.Codex_abc!App", 9229, "explorer")
+	err := packagedCodexDebugPortError("OpenAI.ChatGPT_abc!App", 9229, "explorer")
 	message := err.Error()
 
-	for _, expected := range []string{"Windows Store/MSIX", "调试端口 9229", "Codex.exe", "--remote-debugging-port"} {
+	for _, expected := range []string{"Windows Store/MSIX", "调试端口 9229", "ChatGPT.exe", "--remote-debugging-port"} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("error should contain %q, got %q", expected, message)
 		}
@@ -3305,10 +3346,10 @@ func TestPackagedCodexDebugPortErrorGivesActionableGuidance(t *testing.T) {
 }
 
 func TestLaunchFailureDetailIncludesRecommendedAction(t *testing.T) {
-	detail := launchFailureDetail(`C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`, 9229, 57321, errors.New("no cdp"))
+	detail := launchFailureDetail(`C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`, 9229, 57321, errors.New("no cdp"))
 
-	if got := stringFromAny(detail["recommended_action"]); !strings.Contains(got, "Codex.exe") {
-		t.Fatalf("recommended action should mention Codex.exe, got %q", got)
+	if got := stringFromAny(detail["recommended_action"]); !strings.Contains(got, "ChatGPT.exe") {
+		t.Fatalf("recommended action should mention ChatGPT.exe, got %q", got)
 	}
 	if got := stringFromAny(detail["error"]); got != "no cdp" {
 		t.Fatalf("error mismatch: %q", got)
@@ -3322,7 +3363,7 @@ func TestCodexLaunchPayloadRejectsProtectedPackagedActivationShape(t *testing.T)
 	if runtime.GOOS != "windows" {
 		t.Skip("packaged activation is only used on Windows")
 	}
-	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app`
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 
 	payload := codexLaunchPayload(path)
 
@@ -3332,72 +3373,27 @@ func TestCodexLaunchPayloadRejectsProtectedPackagedActivationShape(t *testing.T)
 	if got := stringFromAny(payload["method"]); got != "msix_unsupported" {
 		t.Fatalf("launch method mismatch: %q", got)
 	}
-	if got := stringFromAny(payload["appUserModelId"]); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+	if got := stringFromAny(payload["appUserModelId"]); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("app user model id mismatch: %q", got)
 	}
 }
 
 func TestFindLatestWindowsCodexAppDirPrefersHighestVersion(t *testing.T) {
 	root := t.TempDir()
-	oldApp := filepath.Join(root, "OpenAI.Codex_1.2.3.0_x64__abc", "app")
-	newApp := filepath.Join(root, "OpenAI.Codex_26.519.11010.0_x64__abc", "app")
+	oldApp := filepath.Join(root, "OpenAI.ChatGPT_1.2.3.0_x64__abc", "app")
+	newApp := filepath.Join(root, "OpenAI.ChatGPT_26.519.11010.0_x64__abc", "app")
 	if err := os.MkdirAll(oldApp, 0o755); err != nil {
 		t.Fatalf("failed to create old app dir: %v", err)
 	}
 	if err := os.MkdirAll(newApp, 0o755); err != nil {
 		t.Fatalf("failed to create new app dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "OpenAI.Codex_not-a-version_x64__abc"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "OpenAI.ChatGPT_not-a-version_x64__abc"), 0o755); err != nil {
 		t.Fatalf("failed to create invalid app dir: %v", err)
 	}
 
 	if got := findLatestWindowsCodexAppDir(root); got != newApp {
 		t.Fatalf("latest app dir mismatch: %q", got)
-	}
-}
-
-func TestSelectCodexMirrorAssetPrefersMSIXBundleForWindows(t *testing.T) {
-	asset, ok := selectCodexMirrorAsset([]codexAppMirrorAsset{
-		{Name: "codex-windows-arm64.msixbundle", BrowserDownloadURL: "https://example.com/arm64.msixbundle"},
-		{Name: "codex-windows-x64.msixbundle", BrowserDownloadURL: "https://example.com/x64.msixbundle"},
-		{Name: "codex-windows-x64.sha256.txt", BrowserDownloadURL: "https://example.com/x64.sha256.txt"},
-	}, "windows", "amd64")
-
-	if !ok {
-		t.Fatal("expected a matching Codex mirror asset")
-	}
-	if asset.Name != "codex-windows-x64.msixbundle" {
-		t.Fatalf("selected wrong asset: %q", asset.Name)
-	}
-}
-
-func TestExtractCodexMirrorArchiveFindsAppExecutable(t *testing.T) {
-	root := t.TempDir()
-	data := testZipArchive(t, map[string]string{
-		"OpenAI.Codex/app/Codex.exe": "binary",
-		"OpenAI.Codex/readme.txt":    "readme",
-	})
-
-	if err := extractCodexMirrorArchive(data, root); err != nil {
-		t.Fatalf("extract mirror archive failed: %v", err)
-	}
-	want := filepath.Join(root, "OpenAI.Codex", "app")
-	if got := findExtractedCodexAppDir(root); got != want {
-		t.Fatalf("extracted app dir mismatch: got %q want %q", got, want)
-	}
-}
-
-func TestExtractCodexMirrorArchiveRejectsUnsafePaths(t *testing.T) {
-	root := t.TempDir()
-	data := testZipArchive(t, map[string]string{
-		"../Codex.exe": "binary",
-	})
-
-	if err := extractCodexMirrorArchive(data, root); err == nil {
-		t.Fatal("extract mirror archive should reject unsafe paths")
-	}
-	if fileExists(filepath.Join(root, "..", "Codex.exe")) {
-		t.Fatal("unsafe archive path should not be written")
 	}
 }
 
@@ -3408,76 +3404,76 @@ func TestCompareVersionsHandlesSemverTags(t *testing.T) {
 	if compareVersions("1.2.0", "1.10.0") >= 0 {
 		t.Fatal("1.2.0 should be older than 1.10.0")
 	}
-	if compareVersions("CodexTools 1.1.12", "1.1.12") != 0 {
+	if compareVersions("ChatGPT Codex Tools 1.1.12", "1.1.12") != 0 {
 		t.Fatal("release name prefix should be ignored")
 	}
 }
 
 func TestSelectCodexToolsAssetPrefersPlatformAndArchitecture(t *testing.T) {
-	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
-		{Name: "CodexTools-1.1.13-windows-x64.zip", BrowserDownloadURL: "https://example.com/windows.zip"},
-		{Name: "CodexTools-1.1.13-macos-x64.zip", BrowserDownloadURL: "https://example.com/macos-x64.zip"},
-		{Name: "CodexTools-1.1.13-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
+	asset, ok := selectCodexToolsAsset([]releaseAsset{
+		{Name: "ChatGPT-Codex-Tools-1.1.13-windows-x64.zip", BrowserDownloadURL: "https://example.com/windows.zip"},
+		{Name: "ChatGPT-Codex-Tools-1.1.13-macos-x64.zip", BrowserDownloadURL: "https://example.com/macos-x64.zip"},
+		{Name: "ChatGPT-Codex-Tools-1.1.13-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
 		{Name: "SHA256SUMS.txt", BrowserDownloadURL: "https://example.com/SHA256SUMS.txt"},
 	}, "darwin", "arm64")
 
 	if !ok {
-		t.Fatal("expected a matching CodexTools asset")
+		t.Fatal("expected a matching ChatGPT Codex Tools asset")
 	}
-	if asset.Name != "CodexTools-1.1.13-macos-arm64.zip" {
+	if asset.Name != "ChatGPT-Codex-Tools-1.1.13-macos-arm64.zip" {
 		t.Fatalf("selected wrong asset: %q", asset.Name)
 	}
 }
 
 func TestSelectCodexToolsAssetPrefersMacOSInstaller(t *testing.T) {
-	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
-		{Name: "CodexTools-1.1.19-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
-		{Name: "CodexTools-1.1.19-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
+	asset, ok := selectCodexToolsAsset([]releaseAsset{
+		{Name: "ChatGPT-Codex-Tools-1.1.19-macos-arm64.zip", BrowserDownloadURL: "https://example.com/macos-arm64.zip"},
+		{Name: "ChatGPT-Codex-Tools-1.1.19-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
 	}, "darwin", "arm64")
 
 	if !ok {
-		t.Fatal("expected a matching CodexTools asset")
+		t.Fatal("expected a matching ChatGPT Codex Tools asset")
 	}
-	if asset.Name != "CodexTools-1.1.19-macos-arm64.pkg" {
+	if asset.Name != "ChatGPT-Codex-Tools-1.1.19-macos-arm64.pkg" {
 		t.Fatalf("selected wrong asset: %q", asset.Name)
 	}
 }
 
 func TestLatestAppxInstallLocationFromOutput(t *testing.T) {
-	if got := latestAppxInstallLocationFromOutput("\nC:\\Program Files\\WindowsApps\\OpenAI.CodexBeta_1.2.3.0_x64__2p2nqsd0c76g0\\app\n"); got != `C:\Program Files\WindowsApps\OpenAI.CodexBeta_1.2.3.0_x64__2p2nqsd0c76g0\app` {
+	if got := latestAppxInstallLocationFromOutput("\nC:\\Program Files\\WindowsApps\\OpenAI.ChatGPTBeta_1.2.3.0_x64__2p2nqsd0c76g0\\app\n"); got != `C:\Program Files\WindowsApps\OpenAI.ChatGPTBeta_1.2.3.0_x64__2p2nqsd0c76g0\app` {
 		t.Fatalf("latest appx install location mismatch: %q", got)
 	}
 }
 
 func TestSelectCodexToolsAssetPrefersWindowsSetup(t *testing.T) {
-	asset, ok := selectCodexToolsAsset([]codexAppMirrorAsset{
-		{Name: "CodexTools-1.1.13-windows-x64.zip", BrowserDownloadURL: "https://example.com/windows.zip"},
-		{Name: "CodexTools-1.1.13-windows-x64-setup.exe", BrowserDownloadURL: "https://example.com/windows-setup.exe"},
+	asset, ok := selectCodexToolsAsset([]releaseAsset{
+		{Name: "ChatGPT-Codex-Tools-1.1.13-windows-x64.zip", BrowserDownloadURL: "https://example.com/windows.zip"},
+		{Name: "ChatGPT-Codex-Tools-1.1.13-windows-x64-setup.exe", BrowserDownloadURL: "https://example.com/windows-setup.exe"},
 	}, "windows", "amd64")
 
 	if !ok {
-		t.Fatal("expected a matching CodexTools asset")
+		t.Fatal("expected a matching ChatGPT Codex Tools asset")
 	}
-	if asset.Name != "CodexTools-1.1.13-windows-x64-setup.exe" {
+	if asset.Name != "ChatGPT-Codex-Tools-1.1.13-windows-x64-setup.exe" {
 		t.Fatalf("selected wrong asset: %q", asset.Name)
 	}
 }
 
 func TestCodexToolsDownloadsAssetsParsesGitHubPagesLinks(t *testing.T) {
 	assets := codexToolsDownloadsAssets(`
-		<a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">Apple Silicon</a>
-		<a href="./releases/CodexTools-1.1.26-macos-arm64.zip">Apple Silicon zip</a>
-		<a href="./releases/CodexTools-1.1.26-windows-x64-setup.exe">Windows</a>
-		<a href="./releases/CodexTools-1.1.26-macos-arm64.pkg">Duplicate</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.26-macos-arm64.pkg">Apple Silicon</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.26-macos-arm64.zip">Apple Silicon zip</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.26-windows-x64-setup.exe">Windows</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.26-macos-arm64.pkg">Duplicate</a>
 	`)
 
 	if len(assets) != 3 {
 		t.Fatalf("expected 3 unique assets, got %d: %#v", len(assets), assets)
 	}
-	if assets[0].Name != "CodexTools-1.1.26-macos-arm64.pkg" {
+	if assets[0].Name != "ChatGPT-Codex-Tools-1.1.26-macos-arm64.pkg" {
 		t.Fatalf("asset name mismatch: %q", assets[0].Name)
 	}
-	if assets[0].BrowserDownloadURL != codexToolsPagesBaseURL+"releases/CodexTools-1.1.26-macos-arm64.pkg" {
+	if assets[0].BrowserDownloadURL != codexToolsPagesBaseURL+"releases/ChatGPT-Codex-Tools-1.1.26-macos-arm64.pkg" {
 		t.Fatalf("absolute download URL mismatch: %q", assets[0].BrowserDownloadURL)
 	}
 	asset, ok := selectCodexToolsAsset(assets, "darwin", "arm64")
@@ -3491,31 +3487,31 @@ func TestCodexToolsDownloadsAssetsParsesGitHubPagesLinks(t *testing.T) {
 
 func TestCodexToolsDownloadsAssetsSelectsMacOSInstallerFromFallbackPage(t *testing.T) {
 	assets := codexToolsDownloadsAssets(`
-		<a href="./releases/CodexTools-1.1.27-macos-arm64.zip">Portable Apple Silicon zip</a>
-		<a href="./releases/CodexTools-1.1.27-macos-arm64.pkg">Download Apple Silicon installer</a>
-		<a href="./releases/CodexTools-1.1.27-macos-x64.pkg">Download Intel installer</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.27-macos-arm64.zip">Portable Apple Silicon zip</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.27-macos-arm64.pkg">Download Apple Silicon installer</a>
+		<a href="./releases/ChatGPT-Codex-Tools-1.1.27-macos-x64.pkg">Download Intel installer</a>
 	`)
 
 	asset, ok := selectCodexToolsAsset(assets, "darwin", "arm64")
 	if !ok {
 		t.Fatal("expected a matching macOS asset")
 	}
-	if asset.Name != "CodexTools-1.1.27-macos-arm64.pkg" {
+	if asset.Name != "ChatGPT-Codex-Tools-1.1.27-macos-arm64.pkg" {
 		t.Fatalf("selected wrong fallback asset: %q", asset.Name)
 	}
 }
 
 func TestSelectCodexToolsAssetDoesNotCrossArchitectures(t *testing.T) {
-	assets := []codexAppMirrorAsset{
-		{Name: "CodexTools-1.1.26-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
-		{Name: "CodexTools-1.1.25-macos-x64.pkg", BrowserDownloadURL: "https://example.com/macos-x64.pkg"},
+	assets := []releaseAsset{
+		{Name: "ChatGPT-Codex-Tools-1.1.26-macos-arm64.pkg", BrowserDownloadURL: "https://example.com/macos-arm64.pkg"},
+		{Name: "ChatGPT-Codex-Tools-1.1.25-macos-x64.pkg", BrowserDownloadURL: "https://example.com/macos-x64.pkg"},
 	}
 
 	asset, ok := selectCodexToolsAsset(assets, "darwin", "amd64")
 	if !ok {
 		t.Fatal("expected an Intel macOS asset")
 	}
-	if asset.Name != "CodexTools-1.1.25-macos-x64.pkg" {
+	if asset.Name != "ChatGPT-Codex-Tools-1.1.25-macos-x64.pkg" {
 		t.Fatalf("selected cross-architecture asset: %q", asset.Name)
 	}
 }
@@ -3532,6 +3528,26 @@ func TestPickCDPPageTargetPrefersCodexAppPage(t *testing.T) {
 	}
 	if target.ID != "codex-page" {
 		t.Fatalf("selected wrong target: %q", target.ID)
+	}
+}
+
+func TestPickCDPPageTargetFallsBackToChatGPTTitle(t *testing.T) {
+	target, err := pickCDPPageTarget([]cdpTarget{
+		{ID: "blank-page", Type: "page", URL: "about:blank", WebSocketDebuggerURL: "ws://127.0.0.1:9229/devtools/page/blank"},
+		{ID: "chatgpt-page", Type: "page", URL: "https://example.com", Title: "ChatGPT", WebSocketDebuggerURL: "ws://127.0.0.1:9229/devtools/page/chatgpt"},
+	})
+
+	if err != nil {
+		t.Fatalf("pickCDPPageTarget returned error: %v", err)
+	}
+	if target.ID != "chatgpt-page" {
+		t.Fatalf("selected wrong target: %q", target.ID)
+	}
+}
+
+func TestCDPPageTargetRejectsStandaloneCodexTitle(t *testing.T) {
+	if isCodexCDPPageTarget(cdpTarget{Type: "page", Title: "Codex", WebSocketDebuggerURL: "ws://127.0.0.1:9229/devtools/page/codex"}) {
+		t.Fatal("standalone Codex title must not be treated as a ChatGPT CDP target")
 	}
 }
 
@@ -3566,6 +3582,29 @@ func TestDecideRelayRouteKeepsToolDeclarationOnTextRoute(t *testing.T) {
 	}
 	if hasImageGenerationTool(t, decision.body) {
 		t.Fatal("stripped request body still contains image_generation tool")
+	}
+}
+
+func TestDecideRelayRouteKeepsSiteToolsInMixedTextRoute(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","input":"open the site","tools":[{"type":"site"},{"type":"web_app"},{"type":"hosted_site"}]}`)
+	decision := decideRelayRoute(body, relayProfile{
+		RelayMode:                     "mixedApi",
+		ImageGenerationEnabled:        true,
+		ImageGenerationUseSeparateAPI: true,
+		ImageGenerationBaseURL:        "https://image.example/v1",
+		ImageGenerationAPIKey:         "image-key",
+	})
+
+	if decision.useImageAPI {
+		t.Fatal("site tools in mixed mode should stay on the text/official-capable route")
+	}
+	if decision.strippedImageTool {
+		t.Fatal("site tools must not be stripped as image tools")
+	}
+	for _, expected := range []string{"site", "web_app", "hosted_site"} {
+		if !hasToolType(t, decision.body, expected) {
+			t.Fatalf("mixed route lost site tool %q in body %s", expected, string(decision.body))
+		}
 	}
 }
 
@@ -3799,7 +3838,7 @@ func forwardProxyRequest(t *testing.T, upstreamRawURL string, w http.ResponseWri
 
 func TestSetRelayProxyUserAgentForwardsCodexClientAgent(t *testing.T) {
 	source := http.Header{"User-Agent": []string{"codex-cli/1.2.3"}}
-	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
+	target := http.Header{"User-Agent": []string{"ChatGPTCodexTools-GoRelay/" + version}}
 
 	setRelayProxyUserAgent("", source, target)
 
@@ -3809,7 +3848,7 @@ func TestSetRelayProxyUserAgentForwardsCodexClientAgent(t *testing.T) {
 }
 
 func TestSetRelayProxyUserAgentFallsBackToCodex(t *testing.T) {
-	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
+	target := http.Header{"User-Agent": []string{"ChatGPTCodexTools-GoRelay/" + version}}
 
 	setRelayProxyUserAgent("", http.Header{}, target)
 
@@ -3820,7 +3859,7 @@ func TestSetRelayProxyUserAgentFallsBackToCodex(t *testing.T) {
 
 func TestSetRelayProxyUserAgentPrefersConfiguredProfileAgent(t *testing.T) {
 	source := http.Header{"User-Agent": []string{"codex-cli/1.2.3"}}
-	target := http.Header{"User-Agent": []string{"CodexPlusPlus-GoRelay/" + version}}
+	target := http.Header{"User-Agent": []string{"ChatGPTCodexTools-GoRelay/" + version}}
 
 	setRelayProxyUserAgent("custom-agent/9", source, target)
 
@@ -3957,6 +3996,21 @@ func hasImageGenerationTool(t *testing.T, body []byte) bool {
 	tools, _ := value["tools"].([]any)
 	for _, tool := range tools {
 		if object, ok := tool.(map[string]any); ok && object["type"] == "image_generation" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasToolType(t *testing.T, body []byte, toolType string) bool {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("failed to unmarshal body: %v", err)
+	}
+	tools, _ := value["tools"].([]any)
+	for _, tool := range tools {
+		if object, ok := tool.(map[string]any); ok && object["type"] == toolType {
 			return true
 		}
 	}

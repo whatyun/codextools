@@ -406,7 +406,7 @@ func fetchModelsFromSource(ctx context.Context, source codexModelSource) ([]stri
 		return nil, status
 	}
 	req.Header.Set("accept", "application/json")
-	req.Header.Set("user-agent", "CodexTools-GoManager/"+version)
+	req.Header.Set("user-agent", "ChatGPTCodexTools-GoManager/"+version)
 	if strings.TrimSpace(source.APIKey) != "" {
 		req.Header.Set("authorization", "Bearer "+strings.TrimSpace(source.APIKey))
 	}

@@ -81,7 +81,7 @@ func (r *launcherRuntime) handleBridgeRequest(path string, payload json.RawMessa
 		source := strings.TrimSpace(stringFromAny(payloadMap["source"]))
 		appendDiagnosticLog("launcher.manager_open_requested", map[string]any{"source": source, "allowed": source == "codex_plus_menu"})
 		if source != "codex_plus_menu" {
-			result = map[string]any{"status": "failed", "message": "只允许从 Codex++ 菜单手动打开管理工具"}
+			result = map[string]any{"status": "failed", "message": "只允许从 ChatGPT Codex 菜单手动打开管理工具"}
 			break
 		}
 		if err := openManagerAppFunc(); err != nil {
@@ -137,6 +137,7 @@ func mapKeys(value map[string]any) []string {
 }
 
 func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[string]any {
+	active := activeRelayProfile(settings)
 	return map[string]any{
 		"providerSyncEnabled":             settings.ProviderSync,
 		"relayProfilesEnabled":            settings.RelayProfilesEnabled,
@@ -177,6 +178,8 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"mobileControlShareUrl":           mobileRelayShareURL(settings),
 		"codexAppVersion":                 r.codexAppVersion(settings),
 		"launchMode":                      settings.LaunchMode,
+		"activeRelayMode":                 active.RelayMode,
+		"activeRelayID":                   active.ID,
 		"language":                        settings.Language,
 	}
 }
@@ -483,14 +486,14 @@ func pickCDPPageTarget(targets []cdpTarget) (cdpTarget, error) {
 	if fallback != nil {
 		return *fallback, nil
 	}
-	return cdpTarget{}, errors.New("未找到可注入的 Codex CDP 页面 target")
+	return cdpTarget{}, errors.New("未找到可注入的 ChatGPT CDP 页面 target")
 }
 
 func isCodexCDPPageTarget(target cdpTarget) bool {
 	if target.Type != "page" || target.WebSocketDebuggerURL == "" {
 		return false
 	}
-	return strings.HasPrefix(target.URL, "app://-/") || strings.EqualFold(target.Title, "Codex")
+	return strings.HasPrefix(target.URL, "app://-/") || strings.Contains(strings.ToLower(target.Title), "chatgpt")
 }
 
 func (r *launcherRuntime) installBridge(ctx context.Context, websocketURL string, helperPort uint16) error {

@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	appName                  = "CodexTools"
-	silentName               = "Codex++"
-	managerName              = "Codex++ 管理工具"
+	appName                  = "ChatGPT Codex Tools"
+	silentName               = "ChatGPT Codex"
+	managerName              = "ChatGPT Codex 管理工具"
 	silentBinary             = "codextools-launcher"
 	managerBinary            = "codextools"
 	version                  = "1.2.1"
@@ -25,15 +25,12 @@ const (
 	protocolProxyBaseURL     = "http://127.0.0.1:57321/v1"
 	defaultMobileRelayURL    = "ws://127.0.0.1:57323"
 	scriptMarketIndexURL     = "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlusScriptMarket/main/index.json"
-	codexAppMirrorAPIURL     = "https://api.github.com/repos/Wangnov/codex-app-mirror/releases/latest"
-	codexAppMirrorReleaseURL = "https://github.com/Wangnov/codex-app-mirror/releases/latest"
-	codexAppMirrorProjectURL = "https://github.com/Wangnov/codex-app-mirror"
 	codexToolsLatestAPIURL   = "https://api.github.com/repos/hereww/codextools/releases/latest"
 	codexToolsReleaseURL     = "https://github.com/hereww/codextools/releases/latest"
 	codexToolsProjectURL     = "https://github.com/hereww/codextools"
 	codexToolsDownloadsURL   = "https://hereww.github.io/codextools/downloads.html"
 	codexToolsPagesBaseURL   = "https://hereww.github.io/codextools/"
-	codexOfficialInstallURL  = "https://openai.com/codex/"
+	codexOfficialInstallURL  = "https://chatgpt.com/download/"
 	defaultRelayTestModel    = "gpt-5-mini"
 	defaultAPIKeyEnvironment = "CUSTOM_OPENAI_API_KEY"
 	defaultLanguage          = "zh-CN"
@@ -44,9 +41,9 @@ const (
 	bridgeBindingName        = "codexSessionDeleteV2"
 	launcherGuardPort        = 57320
 	defaultWatcherDebugPort  = 9229
-	watcherRunName           = "CodexPlusPlusWatcher"
+	watcherRunName           = "ChatGPTCodexToolsWatcher"
 	watcherRunKey            = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	watcherStartupLinkName   = "CodexPlusPlusWatcher.lnk"
+	watcherStartupLinkName   = "ChatGPTCodexToolsWatcher.lnk"
 )
 
 var binaryRole = "manager"

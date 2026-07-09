@@ -18,7 +18,7 @@ import (
 
 func (s *server) relayStatus() commandResult {
 	status := relayStatusFromHome(codexHomeDir(), loadSettings())
-	message := "未检测到 ChatGPT 登录状态，请先在 Codex/ChatGPT 中正常登录。"
+	message := "未检测到 ChatGPT 登录状态，请先在 ChatGPT 中正常登录。"
 	if boolFromAny(status["currentAuthenticated"]) {
 		message = "已检测到当前 ChatGPT 登录状态。"
 	} else if boolFromAny(status["boundOfficialAuthenticated"]) {
@@ -28,7 +28,7 @@ func (s *server) relayStatus() commandResult {
 }
 
 func relayStatusFromHome(home string, settingsOpt ...backendSettings) map[string]any {
-	auth := chatGPTAuthStatus(home)
+	auth := officialAuthStatus(home)
 	config := relayConfigStatus(home)
 	settings := loadSettings()
 	if len(settingsOpt) > 0 {
@@ -101,7 +101,7 @@ func relayProfileOfficialAuthStatus(profile relayProfile) (boundOfficialAuthSumm
 	if contents == "" {
 		return boundOfficialAuthSummary{}, false
 	}
-	status := chatGPTAuthStatusFromContents(contents, "settings:"+profile.ID)
+	status := officialAuthStatusFromContents(contents, "settings:"+profile.ID)
 	if !status.Authenticated {
 		return boundOfficialAuthSummary{}, false
 	}
@@ -118,28 +118,33 @@ func relayProfileOfficialAuthStatus(profile relayProfile) (boundOfficialAuthSumm
 	}, true
 }
 
-func chatGPTAuthStatus(home string) authStatus {
+func officialAuthStatus(home string) authStatus {
 	path := filepath.Join(home, "auth.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return authStatus{}
 	}
-	return chatGPTAuthStatusFromContents(string(data), path)
+	return officialAuthStatusFromContents(string(data), path)
 }
 
-func chatGPTAuthStatusFromContents(contents, source string) authStatus {
+func officialAuthStatusFromContents(contents, source string) authStatus {
 	var value map[string]any
 	if json.Unmarshal([]byte(contents), &value) != nil {
 		return authStatus{}
 	}
-	if !strings.EqualFold(stringFromAny(value["auth_mode"]), "chatgpt") {
+	authMode := strings.ToLower(strings.TrimSpace(stringFromAny(value["auth_mode"])))
+	if authMode != "" && authMode != "chatgpt" && authMode != "openai" {
 		return authStatus{}
 	}
 	tokens, _ := value["tokens"].(map[string]any)
 	if tokens == nil || (!hasToken(tokens, "access_token") && !hasToken(tokens, "id_token") && !hasToken(tokens, "refresh_token")) {
 		return authStatus{}
 	}
-	return authStatus{Authenticated: true, Source: source, AccountLabel: accountLabelFromTokens(tokens)}
+	label := accountLabelFromTokens(tokens)
+	if label == "" {
+		label = "官方账号"
+	}
+	return authStatus{Authenticated: true, Source: source, AccountLabel: label}
 }
 
 type officialAuthSnapshot struct {
@@ -155,7 +160,7 @@ func currentOfficialAuthSnapshot(home string) (officialAuthSnapshot, bool) {
 		return officialAuthSnapshot{}, false
 	}
 	contents := string(data)
-	status := chatGPTAuthStatusFromContents(contents, path)
+	status := officialAuthStatusFromContents(contents, path)
 	if !status.Authenticated {
 		return officialAuthSnapshot{}, false
 	}
@@ -176,7 +181,24 @@ func accountLabelFromTokens(tokens map[string]any) string {
 			return label
 		}
 	}
+	for _, key := range []string{"email", "profile.email", "user.email", "account.email", "openai.email"} {
+		if label := nestedStringFromAnyMap(tokens, strings.Split(key, ".")...); label != "" {
+			return label
+		}
+	}
 	return ""
+}
+
+func nestedStringFromAnyMap(value map[string]any, path ...string) string {
+	var current any = value
+	for _, key := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current = object[key]
+	}
+	return strings.TrimSpace(stringFromAny(current))
 }
 
 func accountLabelFromJWT(token string) string {
@@ -252,7 +274,7 @@ func runtimeAuthContents(profile relayProfile) string {
 
 func promoteLegacyOfficialAuth(profile relayProfile) relayProfile {
 	if strings.TrimSpace(profile.AuthContents) == "" && strings.TrimSpace(profile.OfficialAuthContents) != "" {
-		status := chatGPTAuthStatusFromContents(profile.OfficialAuthContents, "settings:"+profile.ID)
+		status := officialAuthStatusFromContents(profile.OfficialAuthContents, "settings:"+profile.ID)
 		if status.Authenticated {
 			profile.AuthContents = profile.OfficialAuthContents
 		}
@@ -271,7 +293,7 @@ func syncOfficialAuthMetadataFromAuth(profile relayProfile) relayProfile {
 		profile.OfficialAuthUpdatedAt = ""
 		return profile
 	}
-	status := chatGPTAuthStatusFromContents(contents, "settings:"+profile.ID)
+	status := officialAuthStatusFromContents(contents, "settings:"+profile.ID)
 	if !status.Authenticated {
 		profile.OfficialAuthContents = ""
 		profile.OfficialAccountLabel = ""
@@ -479,7 +501,7 @@ func (s *server) clearCurrentOfficialAuth() commandResult {
 		payload["backupPath"] = nil
 		return ok("当前没有可清除的官方登录文件。", payload)
 	}
-	if !chatGPTAuthStatusFromContents(string(data), path).Authenticated {
+	if !officialAuthStatusFromContents(string(data), path).Authenticated {
 		payload := relayStatusFromHome(home)
 		payload["backupPath"] = nil
 		return failed("当前 auth.json 不是 ChatGPT 官方登录，为避免误删已停止清除。", payload)
@@ -497,7 +519,7 @@ func (s *server) clearCurrentOfficialAuth() commandResult {
 	}
 	payload := relayStatusFromHome(home)
 	payload["backupPath"] = backupPath
-	return ok("已备份并清除当前官方登录；现在可以在 Codex/ChatGPT 登录另一个账号。", payload)
+	return ok("已备份并清除当前官方登录；现在可以在 ChatGPT 中登录另一个账号。", payload)
 }
 
 func relayProfileIDArg(args map[string]any) string {
@@ -577,7 +599,7 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	if !pure {
 		relay = refreshRelayOfficialAuthFromCurrent(home, relay)
 	}
-	if !pure && relay.RelayMode == "mixedApi" && !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
+	if !pure && relay.RelayMode == "mixedApi" && !officialAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
 		return failed("切换官方混合 API 失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
 	if relay.RelayMode == "aggregate" {
@@ -623,7 +645,7 @@ func refreshRelayOfficialAuthFromCurrent(home string, relay relayProfile) relayP
 	currentLabel := strings.TrimSpace(snapshot.AccountLabel)
 	storedLabel := strings.TrimSpace(relay.OfficialAccountLabel)
 	if storedLabel == "" {
-		status := chatGPTAuthStatusFromContents(runtimeAuthContents(relay), "settings:"+relay.ID)
+		status := officialAuthStatusFromContents(runtimeAuthContents(relay), "settings:"+relay.ID)
 		storedLabel = strings.TrimSpace(status.AccountLabel)
 	}
 	if storedLabel != "" && currentLabel != "" && !strings.EqualFold(storedLabel, currentLabel) {
@@ -910,7 +932,7 @@ func upsertModelProviderConfig(contents, baseURL, bearerToken string, relay rela
 	}
 	if usesSeparateImageGenerationAPI(relay) {
 		providerLines = append(providerLines, "codex_plus_image_base_url = "+quoteToml(normalizeResponsesBaseURL(relay.ImageGenerationBaseURL)))
-		providerLines = append(providerLines, "# codex_plus_image_api_key is stored only in Codex++ settings and used by the local relay proxy for image routes.")
+		providerLines = append(providerLines, "# codex_plus_image_api_key is stored only in ChatGPT Codex Tools settings and used by the local relay proxy for image routes.")
 	}
 	providerLines = append(providerLines, "experimental_bearer_token = "+quoteToml(bearerToken), "")
 	lines = append(lines[:insertAt], append(providerLines, lines[insertAt:]...)...)
@@ -927,7 +949,7 @@ func (s *server) clearRelayInjection() commandResult {
 	currentConfig := readFile(filepath.Join(home, "config.toml"))
 	relay := ensureRelaySnapshot(activeRelayProfile(settings), currentConfig, true)
 	relay = refreshRelayOfficialAuthFromCurrent(home, relay)
-	if !chatGPTAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
+	if !officialAuthStatusFromContents(canonicalAuthContents(relay), "settings:"+relay.ID).Authenticated {
 		return failed("切换官方登录模式失败：此供应商尚未保存 auth.json 快照。", relayStatusFromHome(home))
 	}
 	if err := persistRelayProfileSnapshot(settings, relay); err != nil {
@@ -956,7 +978,7 @@ func writeOfficialAuthForRelay(home string, relay relayProfile) error {
 	if contents == "" {
 		return errors.New("此供应商还没有绑定官方账号，请先登录目标 ChatGPT 账号并绑定当前登录")
 	}
-	status := chatGPTAuthStatusFromContents(contents, "settings:"+relay.ID)
+	status := officialAuthStatusFromContents(contents, "settings:"+relay.ID)
 	if !status.Authenticated {
 		return errors.New("此供应商绑定的官方账号快照无效，请重新绑定")
 	}
@@ -970,7 +992,7 @@ func relayDisplayOfficialAuthLabel(relay relayProfile) string {
 	label := strings.TrimSpace(relay.OfficialAccountLabel)
 	if label == "" {
 		contents := runtimeAuthContents(relay)
-		status := chatGPTAuthStatusFromContents(contents, "settings:"+relay.ID)
+		status := officialAuthStatusFromContents(contents, "settings:"+relay.ID)
 		label = strings.TrimSpace(status.AccountLabel)
 	}
 	if label == "" {

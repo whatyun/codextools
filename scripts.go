@@ -149,16 +149,16 @@ func installMarketScriptContent(script marketScript, content []byte) error {
 
 func userScriptsConfigDir() string {
 	if runtime.GOOS == "windows" && os.Getenv("APPDATA") != "" {
-		return filepath.Join(os.Getenv("APPDATA"), "Codex++")
+		return filepath.Join(os.Getenv("APPDATA"), "ChatGPT Codex Tools")
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "Codex++")
+		return filepath.Join(xdg, "ChatGPT Codex Tools")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", "Codex++")
+		return filepath.Join(".config", "chatgpt-codex-tools")
 	}
-	return filepath.Join(home, ".config", "Codex++")
+	return filepath.Join(home, ".config", "chatgpt-codex-tools")
 }
 
 func userScriptsDir() string {

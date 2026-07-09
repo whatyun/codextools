@@ -770,7 +770,7 @@
   }
 
   function codexPlusSettings() {
-    const relayPatchDisabled = codexPlusBackendSettings.launchMode === "relay";
+    const relayPatchDisabled = pluginPatchDisabledInRelayMode();
     if (codexPlusBackendSettings.enhancementsEnabled === false) {
       return {
         pluginEntryUnlock: false,
@@ -895,7 +895,7 @@
     refreshCodexServiceTierControls();
   }
 
-  let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
+  let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", activeRelayMode: "official", activeRelayID: "", codexAppVersion: "" };
   const codexPluginLegacyEntryUnlockBeforeVersion = "26.601.2237";
   const codexPluginBridgeRequestUnlockFromVersion = "26.616.0";
 
@@ -1634,10 +1634,10 @@
     if (codexPlusBackendStatus.version) {
       codexPlusVersion = codexPlusBackendStatus.version;
       document.querySelectorAll("[data-codex-plus-version]").forEach((node) => {
-        node.textContent = `Codex++ ${codexPlusVersion}`;
+        node.textContent = `ChatGPT Codex ${codexPlusVersion}`;
       });
       document.querySelectorAll(`#${codexPlusMenuId} .codex-plus-trigger`).forEach((node) => {
-        node.textContent = `Codex++ ${codexPlusVersion}`;
+        node.textContent = `ChatGPT Codex ${codexPlusVersion}`;
       });
     }
     const label = document.querySelector("[data-codex-backend-status]");
@@ -1756,12 +1756,12 @@
     const overlay = document.createElement("div");
     overlay.className = "codex-plus-modal-overlay";
     overlay.innerHTML = `
-      <div class="codex-plus-modal-content" role="dialog" aria-modal="true" aria-label="Codex++">
+      <div class="codex-plus-modal-content" role="dialog" aria-modal="true" aria-label="ChatGPT Codex">
         <div class="codex-plus-modal-header">
-          <div class="codex-plus-modal-title"><span class="codex-plus-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-codex-plus-version="true">Codex++ ${codexPlusVersion}</span></div>
+          <div class="codex-plus-modal-title"><span class="codex-plus-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-codex-plus-version="true">ChatGPT Codex ${codexPlusVersion}</span></div>
           <button type="button" class="codex-plus-modal-close" aria-label="关闭">×</button>
         </div>
-        <div class="codex-plus-tabs" role="tablist" aria-label="Codex++">
+        <div class="codex-plus-tabs" role="tablist" aria-label="ChatGPT Codex">
           <button type="button" class="codex-plus-tab-button" data-codex-plus-tab="home" data-active="true">主页</button>
           <button type="button" class="codex-plus-tab-button" data-codex-plus-tab="userScripts" data-active="false">用户脚本</button>
         </div>
@@ -1779,16 +1779,16 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="enhancementsEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">插件市场解锁</div><div class="codex-plus-row-description">API Key 模式下扩展插件市场请求，尽量显示完整插件列表；兼容增强模式会自动关闭。</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginMarketplaceUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="codex-plus-row-title">插件/站点市场解锁</div><div class="codex-plus-row-description">API Key 或混合模式下扩展插件/站点市场请求，尽量显示完整列表；纯中转/聚合兼容路径会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginMarketplaceUnlock" ${pluginPatchDisabledInRelayMode() ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">插件自动展开</div><div class="codex-plus-row-description">按上游新策略自动展开插件市场里的更多按钮；兼容增强模式会自动关闭。</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginAutoExpand" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="codex-plus-row-title">插件/站点自动展开</div><div class="codex-plus-row-description">按上游新策略自动展开插件/站点市场里的更多按钮；纯中转/聚合兼容路径会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginAutoExpand" ${pluginPatchDisabledInRelayMode() ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">特殊插件强制安装</div><div class="codex-plus-row-description">解除 App unavailable / 应用不可用导致的前端安装禁用；兼容增强模式会自动关闭。</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="forcePluginInstall" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="codex-plus-row-title">特殊插件/站点强制安装</div><div class="codex-plus-row-description">解除 App unavailable / 应用不可用导致的前端安装禁用；纯中转/聚合兼容路径会自动关闭。</div></div>
+              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="forcePluginInstall" ${pluginPatchDisabledInRelayMode() ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">模型白名单解锁</div><div class="codex-plus-row-description">从环境变量和 Codex config.toml 中的中转站 /v1/models 拉取模型，并补进模型选择列表。</div></div>
@@ -1852,7 +1852,7 @@
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="threadScrollRestore"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">Zed Remote open</div><div class="codex-plus-row-description">Open supported remote SSH file references in Zed without patching Codex.app.</div></div>
+              <div><div class="codex-plus-row-title">Zed Remote open</div><div class="codex-plus-row-description">Open supported remote SSH file references in Zed without patching ChatGPT.app.</div></div>
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="zedRemoteOpen"><span></span></button>
             </div>
             <div class="codex-plus-row">
@@ -1867,11 +1867,11 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="providerSyncEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">页面增强模式</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强：使用更保守的官方/混合登录路径，同时加载项目路径移动等页面能力。" : "完整增强：加载会话删除、导出、项目路径移动等全部页面能力。"}</div></div>
+              <div><div class="codex-plus-row-title">页面增强模式</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? (activeRelayModeSupportsOfficialSites() ? "混合 API 增强：保留官方登录能力，站点/插件市场和页面能力可用。" : "兼容增强：纯中转/聚合使用更保守路径，站点/插件解锁保持关闭。") : "完整增强：加载会话删除、导出、项目路径移动等全部页面能力。"}</div></div>
               <button type="button" class="codex-plus-action-button" data-codex-open-manager="true">打开管理工具</button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">原生菜单栏位置</div><div class="codex-plus-row-description">把 Codex++ 菜单插入顶部原生菜单栏；默认关闭以避免页面重渲染冲突。</div></div>
+              <div><div class="codex-plus-row-title">原生菜单栏位置</div><div class="codex-plus-row-description">把 ChatGPT Codex 菜单插入顶部原生菜单栏；默认关闭以避免页面重渲染冲突。</div></div>
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="nativeMenuPlacement"><span></span></button>
             </div>
             <div class="codex-plus-row">
@@ -1884,7 +1884,7 @@
               <div>
                 <div class="codex-plus-row-title">用户脚本</div>
                 <div class="codex-plus-row-description">启用用户脚本：自动加载内置目录和用户配置目录中的 .js 文件。</div>
-                <div class="codex-plus-user-script-warning">禁用后需重载页面或重启 Codex++ 才能完全移除已执行效果。</div>
+                <div class="codex-plus-user-script-warning">禁用后需重载页面或重启 ChatGPT Codex 才能完全移除已执行效果。</div>
                 <div class="codex-plus-user-script-dirs" data-codex-user-script-dirs="true">正在读取脚本目录…</div>
                 <div class="codex-plus-user-script-list" data-codex-user-script-list="true">正在读取用户脚本…</div>
               </div>
@@ -2028,7 +2028,7 @@
       if (node !== keep) node.remove();
     });
     Array.from(document.querySelectorAll("button")).forEach((button) => {
-      if ((button.textContent || "").trim() === `Codex++ ${codexPlusVersion}` && !button.closest(`#${codexPlusMenuId}`)) {
+      if ((button.textContent || "").trim() === `ChatGPT Codex ${codexPlusVersion}` && !button.closest(`#${codexPlusMenuId}`)) {
         button.remove();
       }
     });
@@ -2121,7 +2121,7 @@
     menu.dataset.codexPlusMenuVersion = "6";
     const trigger = document.createElement("button");
     trigger.type = "button";
-    trigger.textContent = `Codex++ ${codexPlusVersion}`;
+    trigger.textContent = `ChatGPT Codex ${codexPlusVersion}`;
     const indicator = document.createElement("span");
     indicator.className = "codex-plus-backend-indicator";
     indicator.dataset.codexBackendIndicator = "true";
@@ -2154,7 +2154,11 @@
   }
 
   function pluginPatchDisabledInRelayMode() {
-    return !codexPlusBackendSettingsLoaded || codexPlusBackendSettings.launchMode === "relay";
+    return !codexPlusBackendSettingsLoaded || (codexPlusBackendSettings.launchMode === "relay" && !activeRelayModeSupportsOfficialSites());
+  }
+
+  function activeRelayModeSupportsOfficialSites() {
+    return String(codexPlusBackendSettings.activeRelayMode || "").trim() === "mixedApi";
   }
 
   function patchPluginMarketplaceRequestParams(method, params) {
@@ -2170,9 +2174,9 @@
   }
 
   function displayNameForPluginMarketplaceName(name, fallback) {
-    if (name === "openai-bundled") return "OpenAI插件1(Codex++)";
-    if (name === "openai-curated") return "OpenAI插件2(Codex++)";
-    if (name === "openai-primary-runtime") return "OpenAI插件3(Codex++)";
+    if (name === "openai-bundled") return "OpenAI插件1(ChatGPT Codex)";
+    if (name === "openai-curated") return "OpenAI插件2(ChatGPT Codex)";
+    if (name === "openai-primary-runtime") return "OpenAI插件3(ChatGPT Codex)";
     return fallback;
   }
 
@@ -3847,7 +3851,7 @@
           errorMessage: bridgeError?.message || String(bridgeError),
         });
         if (!backendStatusRoute) {
-          return { status: "failed", message: "本地桥接不可用，请重启 Codex++" };
+          return { status: "failed", message: "本地桥接不可用，请重启 ChatGPT Codex" };
         }
       }
     }
@@ -3862,9 +3866,9 @@
         errorName: fallback?.errorName || "",
         errorMessage: fallback?.errorMessage || "",
       });
-      return { status: "failed", message: "本地 helper 未连接，请重启 Codex++" };
+      return { status: "failed", message: "本地 helper 未连接，请重启 ChatGPT Codex" };
     }
-    return { status: "failed", message: "本地桥接不可用，请重启 Codex++" };
+    return { status: "failed", message: "本地桥接不可用，请重启 ChatGPT Codex" };
   }
 
   function downloadMarkdown(filename, markdown) {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"database/sql"
@@ -17,7 +16,6 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -345,391 +343,28 @@ func (s *server) loadOverview() commandResult {
 func (s *server) repairCodexApp(ctx context.Context) commandResult {
 	settings := loadSettings()
 	candidates := codexAppRepairCandidates(settings.CodexAppPath)
-	var mirrorRepair map[string]any
-	mirrorInstalled := false
-	if len(candidates) == 0 && runtime.GOOS == "windows" {
-		selected, repairPayload, err := installWindowsCodexMirror(ctx)
-		mirrorRepair = repairPayload
-		if err == nil && selected != "" {
-			candidates = []string{selected}
-			mirrorInstalled = true
-		} else {
-			payload := settingsPayloadValue(settings)
-			attachCodexMirrorRepairPayload(payload, candidates, mirrorRepair)
-			message := "未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；自动下载/解包镜像版失败"
-			if err != nil {
-				message += "：" + err.Error()
-			}
-			message += "。请手动下载镜像包并解包，然后选择解包目录中的 app\\Codex.exe。"
-			return failed(message, payload)
-		}
-	}
+	download := latestCodexDownload(ctx, runtime.GOOS, runtime.GOARCH)
 	if len(candidates) == 0 {
 		payload := settingsPayloadValue(settings)
-		attachCodexMirrorRepairPayload(payload, candidates, mirrorRepair)
-		return failed("未找到可直接启动的 Codex.exe。Windows Store/MSIX 版 Codex 不能作为 Codex++ 启动目标；请下载镜像包并解包，或手动选择解包目录中的 app\\Codex.exe。", payload)
+		attachChatGPTInstallPayload(payload, candidates, download)
+		return failed("未找到可直接启动的 ChatGPT 桌面应用。请安装 ChatGPT 桌面应用，或手动选择 ChatGPT.app / ChatGPT.exe。", payload)
 	}
 	selected := candidates[0]
 	settings.CodexAppPath = selected
 	if err := saveSettings(settings); err != nil {
-		return failed("修复 Codex 程序失败："+err.Error(), settingsPayloadValue(loadSettings()))
+		return failed("修复 ChatGPT 应用路径失败："+err.Error(), settingsPayloadValue(loadSettings()))
 	}
 	payload := settingsPayloadValue(loadSettings())
 	payload["codexApp"] = codexPathState(resolveCodexApp(selected))
 	payload["repairCandidates"] = candidates
-	if mirrorRepair != nil {
-		payload["codexMirrorRepair"] = mirrorRepair
-	}
-	if mirrorInstalled {
-		return ok("已下载并解包镜像版 Codex，程序路径已设置为："+selected, payload)
-	}
-	return ok("已修复 Codex 程序路径："+selected, payload)
+	attachChatGPTInstallPayload(payload, candidates, download)
+	return ok("已修复 ChatGPT 应用路径："+selected, payload)
 }
 
-func attachCodexMirrorRepairPayload(payload map[string]any, candidates []string, mirrorRepair map[string]any) {
-	payload["codexInstallUrl"] = codexAppMirrorReleaseURL
-	payload["codexMirrorLatestReleaseUrl"] = codexAppMirrorReleaseURL
-	payload["codexMirrorProjectUrl"] = codexAppMirrorProjectURL
+func attachChatGPTInstallPayload(payload map[string]any, candidates []string, download map[string]any) {
+	payload["codexInstallUrl"] = codexOfficialInstallURL
 	payload["repairCandidates"] = candidates
-	if mirrorRepair != nil {
-		payload["codexMirrorRepair"] = mirrorRepair
-	}
-}
-
-func installWindowsCodexMirror(ctx context.Context) (string, map[string]any, error) {
-	payload := map[string]any{
-		"status":     "checking",
-		"projectUrl": codexAppMirrorProjectURL,
-		"releaseUrl": codexAppMirrorReleaseURL,
-	}
-	if runtime.GOOS != "windows" {
-		payload["status"] = "skipped"
-		return "", payload, errors.New("当前平台不支持自动解包 Windows Codex 镜像")
-	}
-	download := latestCodexDownload(ctx, runtime.GOOS, runtime.GOARCH)
 	payload["codexLatestDownload"] = download
-	payload["releaseUrl"] = codexMirrorLatestReleaseURL(download)
-	downloadURL := stringFromAny(download["downloadUrl"])
-	if stringFromAny(download["status"]) != "available" || downloadURL == "" {
-		message := stringFromAny(download["message"])
-		if message == "" {
-			message = "镜像项目没有返回当前架构的安装包"
-		}
-		payload["status"] = "failed"
-		payload["message"] = message
-		return "", payload, errors.New(message)
-	}
-	payload["downloadUrl"] = downloadURL
-	payload["assetName"] = stringFromAny(download["assetName"])
-	var data []byte
-	if localPackage := existingCodexMirrorPackage(stringFromAny(download["assetName"])); localPackage != "" {
-		payload["packagePath"] = localPackage
-		payload["packageSource"] = "local_downloads"
-		localData, err := os.ReadFile(localPackage)
-		if err == nil {
-			data = localData
-		} else {
-			payload["localPackageError"] = err.Error()
-		}
-	}
-	if len(data) == 0 {
-		payload["packageSource"] = "download"
-		downloadData, err := getBytes(ctx, downloadURL)
-		if err != nil {
-			payload["status"] = "failed"
-			payload["message"] = "下载镜像包失败：" + err.Error()
-			return "", payload, fmt.Errorf("下载镜像包失败：%w", err)
-		}
-		data = downloadData
-	}
-	installRoot := windowsCodexMirrorInstallRoot()
-	packageName := codexMirrorPackageDirName(download)
-	target := filepath.Join(installRoot, packageName)
-	tmp := filepath.Join(installRoot, "."+packageName+".tmp-"+strconv.Itoa(os.Getpid()))
-	payload["installRoot"] = installRoot
-	payload["extractPath"] = target
-	_ = os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		payload["status"] = "failed"
-		payload["message"] = "创建解包目录失败：" + err.Error()
-		return "", payload, fmt.Errorf("创建解包目录失败：%w", err)
-	}
-	defer os.RemoveAll(tmp)
-	if err := extractCodexMirrorArchive(data, tmp); err != nil {
-		payload["status"] = "failed"
-		payload["message"] = "解包镜像包失败：" + err.Error()
-		return "", payload, fmt.Errorf("解包镜像包失败：%w", err)
-	}
-	if findExtractedCodexAppDir(tmp) == "" {
-		if err := expandNestedCodexMirrorArchive(tmp); err != nil {
-			payload["status"] = "failed"
-			payload["message"] = "解包镜像包后未找到 Codex.exe：" + err.Error()
-			return "", payload, fmt.Errorf("解包镜像包后未找到 Codex.exe：%w", err)
-		}
-	}
-	if appDir := findExtractedCodexAppDir(tmp); appDir == "" {
-		payload["status"] = "failed"
-		payload["message"] = "解包镜像包后未找到 Codex.exe"
-		return "", payload, errors.New("解包镜像包后未找到 Codex.exe")
-	}
-	if err := os.MkdirAll(installRoot, 0o755); err != nil {
-		payload["status"] = "failed"
-		payload["message"] = "创建安装目录失败：" + err.Error()
-		return "", payload, fmt.Errorf("创建安装目录失败：%w", err)
-	}
-	_ = os.RemoveAll(target)
-	if err := os.Rename(tmp, target); err != nil {
-		payload["status"] = "failed"
-		payload["message"] = "写入解包目录失败：" + err.Error()
-		return "", payload, fmt.Errorf("写入解包目录失败：%w", err)
-	}
-	selected := findExtractedCodexAppDir(target)
-	if selected == "" {
-		payload["status"] = "failed"
-		payload["message"] = "写入解包目录后未找到 Codex.exe"
-		return "", payload, errors.New("写入解包目录后未找到 Codex.exe")
-	}
-	if !windowsCodexPathSupportsDirectLaunch(selected) {
-		payload["status"] = "failed"
-		payload["message"] = "解包后的 Codex.exe 仍不可直接启动"
-		return "", payload, errors.New("解包后的 Codex.exe 仍不可直接启动")
-	}
-	payload["status"] = "installed"
-	payload["message"] = "已下载并解包镜像版 Codex。"
-	payload["selectedPath"] = selected
-	payload["executable"] = buildCodexExecutable(selected)
-	return selected, payload, nil
-}
-
-func windowsCodexMirrorInstallRoot() string {
-	for _, root := range []string{os.Getenv("LOCALAPPDATA"), filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")} {
-		root = strings.TrimSpace(root)
-		if root != "" {
-			return filepath.Join(root, "CodexTools", "CodexAppMirror")
-		}
-	}
-	return filepath.Join(stateDir(), "codex-app-mirror")
-}
-
-func existingCodexMirrorPackage(assetName string) string {
-	name := filepath.Base(strings.TrimSpace(assetName))
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		return ""
-	}
-	candidates := []string{filepath.Join(downloadsDir(), name)}
-	lowerName := strings.ToLower(name)
-	for _, ext := range []string{".msix", ".msixbundle", ".appx", ".appxbundle", ".zip"} {
-		if strings.HasSuffix(lowerName, ext) {
-			base := name[:len(name)-len(ext)]
-			titleExt := ext
-			if len(ext) > 2 {
-				titleExt = "." + strings.ToUpper(ext[1:2]) + ext[2:]
-			}
-			candidates = append(candidates, filepath.Join(downloadsDir(), base+strings.ToLower(ext)))
-			candidates = append(candidates, filepath.Join(downloadsDir(), base+titleExt))
-		}
-	}
-	for _, candidate := range candidates {
-		if fileExists(candidate) && !isDir(candidate) {
-			return candidate
-		}
-	}
-	return ""
-}
-
-func codexMirrorPackageDirName(download map[string]any) string {
-	for _, key := range []string{"assetName", "tagName", "releaseName"} {
-		if name := safePathComponent(stringFromAny(download[key])); name != "" {
-			name = trimCodexArchiveExtension(name)
-			if name != "" {
-				return name
-			}
-		}
-	}
-	return "codex-app-mirror"
-}
-
-func safePathComponent(value string) string {
-	value = strings.TrimSpace(filepath.Base(value))
-	var out strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			out.WriteRune(r)
-		case r == '.', r == '-', r == '_':
-			out.WriteRune(r)
-		default:
-			out.WriteByte('-')
-		}
-	}
-	return strings.Trim(out.String(), ".- ")
-}
-
-func trimCodexArchiveExtension(name string) string {
-	for _, ext := range []string{".msixbundle", ".appxbundle", ".msix", ".appx", ".zip"} {
-		if strings.HasSuffix(strings.ToLower(name), ext) {
-			return name[:len(name)-len(ext)]
-		}
-	}
-	return name
-}
-
-func extractCodexMirrorArchive(data []byte, dest string) error {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-	cleanDest := filepath.Clean(dest)
-	for _, entry := range reader.File {
-		name := strings.ReplaceAll(entry.Name, `\`, `/`)
-		if !safeArchiveEntryName(name) {
-			return fmt.Errorf("压缩包包含不安全路径：%s", entry.Name)
-		}
-		cleanName := pathpkg.Clean("/" + name)
-		cleanName = strings.TrimPrefix(cleanName, "/")
-		if cleanName == "." || cleanName == "" {
-			continue
-		}
-		target := filepath.Join(cleanDest, filepath.FromSlash(cleanName))
-		if !pathInsideDir(cleanDest, target) {
-			return fmt.Errorf("压缩包路径越界：%s", entry.Name)
-		}
-		if entry.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		src, err := entry.Open()
-		if err != nil {
-			return err
-		}
-		mode := entry.FileInfo().Mode()
-		if mode == 0 {
-			mode = 0o644
-		}
-		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-		if err != nil {
-			_ = src.Close()
-			return err
-		}
-		_, copyErr := io.Copy(dst, src)
-		closeErr := dst.Close()
-		_ = src.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-	}
-	return nil
-}
-
-func safeArchiveEntryName(name string) bool {
-	name = strings.TrimSpace(name)
-	if name == "" || pathpkg.IsAbs(name) || strings.Contains(name, ":") {
-		return false
-	}
-	for _, part := range strings.Split(name, "/") {
-		if part == ".." {
-			return false
-		}
-	}
-	return true
-}
-
-func pathInsideDir(dir, path string) bool {
-	dir = filepath.Clean(dir)
-	path = filepath.Clean(path)
-	if strings.EqualFold(dir, path) {
-		return true
-	}
-	rel, err := filepath.Rel(dir, path)
-	if err != nil {
-		return false
-	}
-	return rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
-}
-
-func expandNestedCodexMirrorArchive(root string) error {
-	nested := findNestedCodexMirrorArchive(root)
-	if nested == "" {
-		return errors.New("没有可继续解包的嵌套 MSIX/APPX/ZIP")
-	}
-	data, err := os.ReadFile(nested)
-	if err != nil {
-		return err
-	}
-	dest := filepath.Join(root, "_codex_app")
-	_ = os.RemoveAll(dest)
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	return extractCodexMirrorArchive(data, dest)
-}
-
-func findNestedCodexMirrorArchive(root string) string {
-	var matches []string
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		lower := strings.ToLower(entry.Name())
-		if strings.HasSuffix(lower, ".msix") || strings.HasSuffix(lower, ".msixbundle") || strings.HasSuffix(lower, ".appx") || strings.HasSuffix(lower, ".appxbundle") || strings.HasSuffix(lower, ".zip") {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	sort.SliceStable(matches, func(i, j int) bool {
-		return codexAssetScore(filepath.Base(matches[i]), runtime.GOARCH) > codexAssetScore(filepath.Base(matches[j]), runtime.GOARCH)
-	})
-	if len(matches) == 0 {
-		return ""
-	}
-	return matches[0]
-}
-
-func findExtractedCodexAppDir(root string) string {
-	var matches []string
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		if strings.EqualFold(entry.Name(), "Codex.exe") || strings.EqualFold(entry.Name(), "codex.exe") {
-			matches = append(matches, filepath.Dir(path))
-		}
-		return nil
-	})
-	sort.SliceStable(matches, func(i, j int) bool {
-		return extractedCodexAppDirScore(root, matches[i]) > extractedCodexAppDirScore(root, matches[j])
-	})
-	if len(matches) == 0 {
-		return ""
-	}
-	return matches[0]
-}
-
-func extractedCodexAppDirScore(root, dir string) int {
-	rel, err := filepath.Rel(root, dir)
-	if err != nil {
-		rel = dir
-	}
-	lower := strings.ToLower(filepath.ToSlash(rel))
-	score := 1000 - len(lower)
-	if strings.HasSuffix(lower, "/app") || lower == "app" {
-		score += 300
-	}
-	if strings.Contains(lower, "/vfs/programfilesx64/") {
-		score += 100
-	}
-	if strings.Contains(lower, "/program files/windowsapps/") {
-		score -= 500
-	}
-	return score
 }
 
 func codexAppRepairCandidates(saved string) []string {
@@ -796,9 +431,6 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 	if ccsErr != nil {
 		warnings = append(warnings, "CCSwitch 数据库读取失败："+ccsErr.Error())
 	}
-	if runtime.GOOS == "windows" && stringFromAny(download["status"]) == "failed" {
-		warnings = append(warnings, "Windows 安装包信息暂时获取失败，可稍后刷新")
-	}
 	if len(warnings) > 0 {
 		message = "系统和本地安装状态已读取；" + strings.Join(warnings, "；") + "。"
 	}
@@ -823,8 +455,6 @@ func (s *server) loadInstallGuideStatus(ctx context.Context) commandResult {
 		"codexLaunch":                           codexLaunchPayload(codexApp),
 		"codexInstallUrl":                       codexInstallURL(download),
 		"codexInstallSource":                    codexInstallSource(download),
-		"codexMirrorProjectUrl":                 codexAppMirrorProjectURL,
-		"codexMirrorLatestReleaseUrl":           codexMirrorLatestReleaseURL(download),
 		"codexLatestDownload":                   download,
 		"ccs": map[string]any{
 			"installed":        fileExists(ccsDBPath),
@@ -849,15 +479,15 @@ func installGuidePlatformGuide(goos string) map[string]any {
 		"systemDescription":         "安装包、路径检测和桌面运行方式会根据当前系统自动切换。",
 		"desktopRuntime":            desktopRuntimeNameFor(goos),
 		"desktopRuntimeDescription": "当前系统使用桌面窗口运行；未启用桌面窗口时会回退到浏览器模式。",
-		"installTitle":              "安装 Codex",
+		"installTitle":              "安装 ChatGPT",
 		"installActionLabel":        "打开安装入口",
 		"installSourceLabel":        "安装入口",
-		"installDescription":        "按当前系统打开对应的 Codex 安装入口。",
+		"installDescription":        "按当前系统打开 ChatGPT 桌面应用安装入口。",
 		"manualPrimaryLabel":        "手动选择应用",
 		"manualPrimaryMode":         "folder",
 		"manualSecondaryLabel":      "",
 		"manualSecondaryMode":       "",
-		"detectionNote":             "自动检测暂未找到 Codex 时，可以手动选择实际安装位置。",
+		"detectionNote":             "自动检测暂未找到 ChatGPT 时，可以手动选择实际安装位置。",
 		"pathHint":                  "",
 		"launchMethodLabel":         "启动方式",
 		"launchTargetLabel":         "启动文件",
@@ -867,39 +497,39 @@ func installGuidePlatformGuide(goos string) map[string]any {
 	switch goos {
 	case "darwin":
 		guide["title"] = "macOS 新手引导"
-		guide["systemDescription"] = "macOS 会检查 Codex.app、官方安装页和 WebKit 桌面窗口运行状态。"
+		guide["systemDescription"] = "macOS 会检查 ChatGPT.app、官方安装页和 WebKit 桌面窗口运行状态。"
 		guide["desktopRuntimeDescription"] = "macOS 使用 WebKit 桌面窗口运行管理器。"
 		guide["installTitle"] = "macOS 官方安装"
 		guide["installActionLabel"] = "打开官方安装页"
 		guide["installSourceLabel"] = "官方页面"
-		guide["installDescription"] = "macOS 默认打开 Codex 官方安装页面。"
-		guide["manualPrimaryLabel"] = "选择 Codex.app"
+		guide["installDescription"] = "macOS 默认打开 ChatGPT 官方下载页面。"
+		guide["manualPrimaryLabel"] = "选择 ChatGPT.app"
 		guide["manualPrimaryMode"] = "folder"
-		guide["detectionNote"] = "macOS 已安装但未识别时，选择 /Applications/Codex.app 或实际放置 Codex.app 的应用目录即可。"
-		guide["pathHint"] = "/Applications/Codex.app"
+		guide["detectionNote"] = "macOS 已安装但未识别时，选择 /Applications/ChatGPT.app 或实际放置 ChatGPT.app 的应用目录即可。"
+		guide["pathHint"] = "/Applications/ChatGPT.app"
 		guide["launchMethodLabel"] = "启动方式"
-		guide["launchTargetLabel"] = "Codex.app"
+		guide["launchTargetLabel"] = "ChatGPT.app"
 	case "windows":
 		guide["title"] = "Windows 新手引导"
-		guide["systemDescription"] = "Windows 会检查 Codex.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。"
+		guide["systemDescription"] = "Windows 会检查 ChatGPT.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。"
 		guide["desktopRuntimeDescription"] = "Windows 使用 WebView2 桌面窗口运行管理器。"
-		guide["installTitle"] = "Windows 镜像包解包"
-		guide["installActionLabel"] = "打开镜像下载页"
-		guide["installSourceLabel"] = "镜像项目"
-		guide["installDescription"] = "Windows Store/MSIX 版不能作为 Codex++ 启动目标；请用修复工具自动下载并解包镜像包，或手动选择解包后的 Codex.exe。"
-		guide["manualPrimaryLabel"] = "选择解包后的 Codex.exe"
+		guide["installTitle"] = "Windows 官方安装"
+		guide["installActionLabel"] = "打开 ChatGPT 下载页"
+		guide["installSourceLabel"] = "官方页面"
+		guide["installDescription"] = "请安装 ChatGPT 桌面应用；如自动检测失败，手动选择 ChatGPT.exe 或其安装目录。"
+		guide["manualPrimaryLabel"] = "选择 ChatGPT.exe"
 		guide["manualPrimaryMode"] = "file"
-		guide["manualSecondaryLabel"] = "选择解包目录"
+		guide["manualSecondaryLabel"] = "选择安装目录"
 		guide["manualSecondaryMode"] = "folder"
-		guide["detectionNote"] = "不要选择 Program Files\\WindowsApps 包目录；请点击“修复 Codex 程序”自动解包镜像包，或选择解包目录中的 app\\Codex.exe。"
-		guide["pathHint"] = `C:\Users\你\AppData\Local\Programs\Codex\Codex.exe`
+		guide["detectionNote"] = "优先选择可直接执行的 ChatGPT.exe；如果是 Microsoft Store/MSIX 版，可能无法稳定接收调试端口参数。"
+		guide["pathHint"] = `C:\Users\你\AppData\Local\Programs\ChatGPT\ChatGPT.exe`
 		guide["launchMethodLabel"] = "启动方式"
-		guide["launchTargetLabel"] = "Codex.exe"
+		guide["launchTargetLabel"] = "ChatGPT.exe"
 	default:
 		guide["title"] = platformDisplayName(goos) + " 受限引导"
 		guide["systemDescription"] = "当前平台只提供基础状态检查；完整新手引导重点支持 macOS 和 Windows。"
 		guide["desktopRuntimeDescription"] = "当前平台会按可用能力使用桌面窗口或浏览器模式。"
-		guide["installDescription"] = "请根据当前平台手动安装 Codex，并在修复工具里填写可启动路径。"
+		guide["installDescription"] = "请根据当前平台手动安装 ChatGPT，并在修复工具里填写可启动路径。"
 		guide["detectionNote"] = "此平台不在本次完整引导范围内，路径检测能力有限。"
 		guide["unsupported"] = true
 	}
@@ -961,122 +591,27 @@ func codexInstallURL(download map[string]any) string {
 	if url := stringFromAny(download["downloadUrl"]); url != "" {
 		return url
 	}
-	if runtime.GOOS == "darwin" {
-		return codexOfficialInstallURL
-	}
-	return codexAppMirrorReleaseURL
+	return codexOfficialInstallURL
 }
 
 func codexInstallSource(download map[string]any) string {
 	if source := stringFromAny(download["source"]); source != "" {
 		return source
 	}
-	if runtime.GOOS == "darwin" {
-		return "official"
-	}
-	return "mirror"
-}
-
-func codexMirrorLatestReleaseURL(download map[string]any) string {
-	if url := stringFromAny(download["releaseUrl"]); url != "" {
-		return url
-	}
-	return codexAppMirrorReleaseURL
+	return "official"
 }
 
 func latestCodexDownload(ctx context.Context, goos, goarch string) map[string]any {
+	_ = ctx
+	_ = goos
+	_ = goarch
 	payload := map[string]any{
-		"status":     "not_checked",
-		"source":     "mirror",
-		"projectUrl": codexAppMirrorProjectURL,
-		"releaseUrl": codexAppMirrorReleaseURL,
+		"status":      "available",
+		"source":      "official",
+		"downloadUrl": codexOfficialInstallURL,
+		"message":     "打开 ChatGPT 官方下载页面安装桌面应用。",
 	}
-	if goos == "darwin" {
-		payload["status"] = "available"
-		payload["source"] = "official"
-		payload["downloadUrl"] = codexOfficialInstallURL
-		payload["message"] = "macOS 默认打开 Codex 官方安装页面。"
-	}
-	release, err := getJSON[codexAppMirrorRelease](ctx, codexAppMirrorAPIURL)
-	if err != nil {
-		payload["status"] = "failed"
-		payload["message"] = "获取镜像最新版本失败：" + err.Error()
-		return payload
-	}
-	payload["releaseName"] = release.Name
-	payload["tagName"] = release.TagName
-	payload["publishedAt"] = release.PublishedAt
-	if release.HTMLURL != "" {
-		payload["releaseUrl"] = release.HTMLURL
-	}
-	if goos == "darwin" {
-		return payload
-	}
-	asset, ok := selectCodexMirrorAsset(release.Assets, goos, goarch)
-	if !ok {
-		payload["status"] = "missing"
-		payload["message"] = "最新镜像版本没有找到当前系统对应安装包。"
-		return payload
-	}
-	payload["status"] = "available"
-	payload["source"] = "mirror"
-	payload["assetName"] = asset.Name
-	payload["downloadUrl"] = asset.BrowserDownloadURL
-	payload["size"] = asset.Size
-	payload["contentType"] = asset.ContentType
-	payload["message"] = "已找到镜像项目最新对应系统安装包。"
 	return payload
-}
-
-func selectCodexMirrorAsset(assets []codexAppMirrorAsset, goos, goarch string) (codexAppMirrorAsset, bool) {
-	var candidates []codexAppMirrorAsset
-	for _, asset := range assets {
-		name := strings.ToLower(asset.Name)
-		url := strings.ToLower(asset.BrowserDownloadURL)
-		value := name + " " + url
-		if asset.BrowserDownloadURL == "" {
-			continue
-		}
-		switch goos {
-		case "windows":
-			if strings.HasSuffix(name, ".msix") || strings.HasSuffix(name, ".msixbundle") || strings.HasSuffix(name, ".appx") || strings.HasSuffix(name, ".appxbundle") || strings.Contains(value, "windows") || strings.Contains(value, "win") {
-				candidates = append(candidates, asset)
-			}
-		case "darwin":
-			if strings.HasSuffix(name, ".dmg") && (strings.Contains(value, "mac") || strings.Contains(value, "darwin")) {
-				candidates = append(candidates, asset)
-			}
-		}
-	}
-	if len(candidates) == 0 {
-		return codexAppMirrorAsset{}, false
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return codexAssetScore(candidates[i].Name, goarch) > codexAssetScore(candidates[j].Name, goarch)
-	})
-	return candidates[0], true
-}
-
-func codexAssetScore(name, goarch string) int {
-	lower := strings.ToLower(name)
-	score := 0
-	switch goarch {
-	case "arm64":
-		if strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64") {
-			score += 20
-		}
-	case "amd64":
-		if strings.Contains(lower, "x64") || strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") {
-			score += 20
-		}
-	}
-	if strings.HasSuffix(lower, ".msix") || strings.HasSuffix(lower, ".msixbundle") || strings.HasSuffix(lower, ".appx") || strings.HasSuffix(lower, ".appxbundle") || strings.HasSuffix(lower, ".dmg") {
-		score += 10
-	}
-	if strings.Contains(lower, "sha256") || strings.Contains(lower, "manifest") || strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".txt") || strings.HasSuffix(lower, ".json") {
-		score -= 100
-	}
-	return score
 }
 
 func errorString(err error) string {
@@ -1102,6 +637,8 @@ func pathState(path string) map[string]any {
 
 func codexPathState(path string) map[string]any {
 	state := pathState(path)
+	state["appKind"] = codexAppKind(path)
+	state["appDisplayName"] = codexAppDisplayName(path)
 	if path != "" && runtime.GOOS == "windows" {
 		executable := buildCodexExecutable(path)
 		state["executable"] = executable
@@ -1110,10 +647,59 @@ func codexPathState(path string) map[string]any {
 		}
 		if isWindowsProtectedCodexDirectLaunchPath(path, executable) {
 			state["status"] = "limited"
-			state["message"] = "Windows Store/MSIX 包目录不能作为 Codex++ 的直接启动路径。"
+			state["message"] = "Windows Store/MSIX 包目录不能作为 ChatGPT Codex 的直接启动路径。"
 		}
 	}
 	return state
+}
+
+func codexAppKind(path string) string {
+	lower := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	if strings.Contains(lower, "chatgpt") || strings.EqualFold(base, "chatgpt") {
+		return "chatgpt"
+	}
+	return "unknown"
+}
+
+func codexAppDisplayName(path string) string {
+	switch codexAppKind(path) {
+	case "chatgpt":
+		return "ChatGPT 桌面应用"
+	default:
+		return "ChatGPT 桌面应用"
+	}
+}
+
+func isWindowsTargetAppExecutableName(name string) bool {
+	return strings.EqualFold(name, "ChatGPT.exe") ||
+		strings.EqualFold(name, "chatgpt.exe")
+}
+
+func windowsTargetAppExecutableNames() []string {
+	return []string{"ChatGPT.exe", "chatgpt.exe"}
+}
+
+func hasWindowsTargetAppExecutable(path string) bool {
+	for _, name := range windowsTargetAppExecutableNames() {
+		if fileExists(filepath.Join(path, name)) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeOpenAIAppPackageIdentity(identity string) (string, bool) {
+	trimmed := strings.TrimSpace(identity)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "openai.chatgpt":
+		return "OpenAI.ChatGPT", true
+	}
+	if strings.HasPrefix(lower, "openai.chatgpt") {
+		return trimmed, true
+	}
+	return "", false
 }
 
 func shortcutState(path string) map[string]any {
@@ -1131,9 +717,11 @@ func resolveCodexApp(saved string) string {
 		return normalized
 	}
 	if runtime.GOOS == "darwin" {
-		candidates := []string{"/Applications/Codex.app"}
+		candidates := []string{"/Applications/ChatGPT.app"}
 		if home, err := os.UserHomeDir(); err == nil {
-			candidates = append(candidates, filepath.Join(home, "Applications", "Codex.app"))
+			candidates = append(candidates,
+				filepath.Join(home, "Applications", "ChatGPT.app"),
+			)
 		}
 		for _, candidate := range candidates {
 			if isDir(candidate) {
@@ -1160,10 +748,8 @@ func resolveWindowsCodexFromInstalledApps() string {
 		return ""
 	}
 	commands := [][]string{
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex* | Where-Object { @('OpenAI.Codex','OpenAI.CodexBeta') -contains $_.Name } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.CodexBeta -ErrorAction SilentlyContinue | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.CodexBeta' -or $_.PackageFullName -like 'OpenAI.Codex_*' -or $_.PackageFullName -like 'OpenAI.CodexBeta_*' } | Sort-Object Version | Select-Object -Last 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.ChatGPT* -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.ChatGPT*' -or $_.PackageFullName -like 'OpenAI.ChatGPT*' } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
 	}
 	for _, command := range commands {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1203,18 +789,21 @@ func resolveWindowsCodexFromCommonPaths() string {
 			candidates = append(candidates, path)
 		}
 	}
-	for _, key := range []string{"CODEX_APP_PATH", "CODEX_PATH", "CODEX_DESKTOP_PATH"} {
+	for _, key := range []string{"CHATGPT_APP_PATH", "CHATGPT_PATH", "CHATGPT_DESKTOP_PATH"} {
 		addCandidate(os.Getenv(key))
 	}
 	for _, root := range []string{os.Getenv("LOCALAPPDATA"), os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432")} {
 		if root == "" {
 			continue
 		}
-		addCandidate(filepath.Join(root, "Programs", "Codex"))
-		addCandidate(filepath.Join(root, "Codex"))
-		addCandidate(filepath.Join(root, "OpenAI", "Codex"))
-		addCandidate(filepath.Join(root, "OpenAI Codex"))
-		for _, alias := range []string{filepath.Join(root, "Microsoft", "WindowsApps", "Codex.exe"), filepath.Join(root, "Microsoft", "WindowsApps", "codex.exe")} {
+		addCandidate(filepath.Join(root, "Programs", "ChatGPT"))
+		addCandidate(filepath.Join(root, "ChatGPT"))
+		addCandidate(filepath.Join(root, "OpenAI", "ChatGPT"))
+		addCandidate(filepath.Join(root, "OpenAI ChatGPT"))
+		for _, alias := range []string{
+			filepath.Join(root, "Microsoft", "WindowsApps", "ChatGPT.exe"),
+			filepath.Join(root, "Microsoft", "WindowsApps", "chatgpt.exe"),
+		} {
 			if fileExists(alias) {
 				addCandidate(alias)
 			}
@@ -1244,32 +833,46 @@ func normalizeCodexAppPath(path string) string {
 		}
 		return ""
 	}
-	if strings.EqualFold(filepath.Base(path), "Codex.exe") || strings.EqualFold(filepath.Base(path), "codex.exe") {
+	if isWindowsTargetAppExecutableName(filepath.Base(path)) {
 		return filepath.Dir(path)
 	}
 	if strings.EqualFold(filepath.Ext(path), ".app") {
 		if isCodexToolsAppPath(path) {
 			return ""
 		}
-		return path
+		if strings.EqualFold(filepath.Base(path), "ChatGPT.app") {
+			return path
+		}
+		return ""
 	}
 	if fileExists(path) && !isDir(path) {
+		if runtime.GOOS == "darwin" && !strings.EqualFold(filepath.Base(path), "ChatGPT") {
+			return ""
+		}
 		return filepath.Dir(path)
 	}
-	if fileExists(filepath.Join(path, "Codex.exe")) || fileExists(filepath.Join(path, "codex.exe")) {
+	if hasWindowsTargetAppExecutable(path) {
 		return path
 	}
-	for _, subdir := range []string{"app", "VFS", filepath.Join("VFS", "ProgramFilesX64", "Codex"), filepath.Join("VFS", "ProgramFilesX64", "OpenAI", "Codex")} {
+	for _, subdir := range []string{
+		"app",
+		"VFS",
+		filepath.Join("VFS", "ProgramFilesX64", "ChatGPT"),
+		filepath.Join("VFS", "ProgramFilesX64", "OpenAI", "ChatGPT"),
+	} {
 		candidate := filepath.Join(path, subdir)
-		if fileExists(filepath.Join(candidate, "Codex.exe")) || fileExists(filepath.Join(candidate, "codex.exe")) {
+		if hasWindowsTargetAppExecutable(candidate) {
 			return candidate
 		}
 	}
 	nested := filepath.Join(path, "app")
-	if isDir(nested) && (fileExists(filepath.Join(nested, "Codex.exe")) || fileExists(filepath.Join(nested, "codex.exe"))) {
+	if isDir(nested) && hasWindowsTargetAppExecutable(nested) {
 		return nested
 	}
 	if runtime.GOOS == "windows" {
+		return ""
+	}
+	if runtime.GOOS == "darwin" {
 		return ""
 	}
 	if isDir(path) {
@@ -1283,7 +886,7 @@ func isCodexToolsAppPath(path string) bool {
 		return false
 	}
 	name := strings.TrimSuffix(filepath.Base(path), ".app")
-	for _, ownName := range []string{silentName, managerName, appName} {
+	for _, ownName := range []string{silentName, managerName, appName, "Codex++", "Codex++ 管理工具", "CodexTools"} {
 		if strings.EqualFold(name, ownName) {
 			return true
 		}
@@ -1295,7 +898,9 @@ func isCodexToolsAppPath(path string) bool {
 	}
 	text := string(data)
 	bundleID := strings.ToLower(plistStringAfterKey(text, "CFBundleIdentifier"))
-	if strings.HasPrefix(bundleID, "com.hereww.codextools") {
+	if strings.HasPrefix(bundleID, "com.hereww.chatgptcodextools") ||
+		strings.HasPrefix(bundleID, "com.hereww.codextools") ||
+		strings.HasPrefix(bundleID, "com.bigpizzav3.codexplusplus") {
 		return true
 	}
 	executable := strings.ToLower(plistStringAfterKey(text, "CFBundleExecutable"))
@@ -1307,7 +912,7 @@ func isWindowsAppsExecutionAlias(path string) bool {
 		return false
 	}
 	base := filepath.Base(path)
-	if !strings.EqualFold(base, "Codex.exe") && !strings.EqualFold(base, "codex.exe") {
+	if !isWindowsTargetAppExecutableName(base) {
 		return false
 	}
 	dir := strings.ToLower(filepath.ToSlash(filepath.Dir(path)))
@@ -1316,10 +921,8 @@ func isWindowsAppsExecutionAlias(path string) bool {
 
 func isWindowsProtectedAppPackagePath(path string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(filepath.ToSlash(strings.TrimSpace(path)), `\`, `/`))
-	return strings.Contains(normalized, "/program files/windowsapps/openai.codex_") ||
-		strings.Contains(normalized, "/program files/windowsapps/openai.codexbeta_") ||
-		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codex_") ||
-		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.codexbeta_")
+	return strings.Contains(normalized, "/program files/windowsapps/openai.chatgpt") ||
+		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.chatgpt")
 }
 
 func isWindowsProtectedCodexDirectLaunchPath(appPath, executable string) bool {
@@ -1338,7 +941,7 @@ func normalizeWindowsPackageAppPath(path string) string {
 			if strings.Contains(path, `\`) {
 				prefix = strings.Join(parts[:i+1], `\`)
 			}
-			if strings.HasSuffix(strings.ToLower(filepath.ToSlash(path)), "/app") || strings.EqualFold(filepath.Base(path), "Codex.exe") || strings.EqualFold(filepath.Base(path), "codex.exe") {
+			if strings.HasSuffix(strings.ToLower(filepath.ToSlash(path)), "/app") || isWindowsTargetAppExecutableName(filepath.Base(path)) {
 				return filepath.Join(prefix, "app")
 			}
 			return filepath.Join(prefix, "app")
@@ -1361,7 +964,13 @@ func windowsCodexExecutionAlias() string {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		return filepath.Join(root, "Microsoft", "WindowsApps", "Codex.exe")
+		for _, name := range []string{"ChatGPT.exe", "chatgpt.exe"} {
+			alias := filepath.Join(root, "Microsoft", "WindowsApps", name)
+			if fileExists(alias) {
+				return alias
+			}
+		}
+		return filepath.Join(root, "Microsoft", "WindowsApps", "ChatGPT.exe")
 	}
 	return ""
 }
@@ -1393,7 +1002,7 @@ func findLatestWindowsCodexAppDirFromRoots(roots []string) string {
 	var best string
 	for _, root := range roots {
 		if candidate := findLatestWindowsCodexAppDir(root); candidate != "" {
-			if best == "" || compareVersions(windowsPackageVersionFromPath(candidate), windowsPackageVersionFromPath(best)) > 0 {
+			if best == "" || compareWindowsAppPackagePath(candidate, best) > 0 {
 				best = candidate
 			}
 		}
@@ -1419,11 +1028,35 @@ func findLatestWindowsCodexAppDir(root string) string {
 		if app := filepath.Join(path, "app"); isDir(app) {
 			path = app
 		}
-		if best == "" || compareVersions(windowsPackageVersionFromPath(path), windowsPackageVersionFromPath(best)) > 0 {
+		if best == "" || compareWindowsAppPackagePath(path, best) > 0 {
 			best = path
 		}
 	}
 	return best
+}
+
+func compareWindowsAppPackagePath(left, right string) int {
+	leftPriority := windowsAppPackagePriority(left)
+	rightPriority := windowsAppPackagePriority(right)
+	if leftPriority != rightPriority {
+		if leftPriority > rightPriority {
+			return 1
+		}
+		return -1
+	}
+	return compareVersions(windowsPackageVersionFromPath(left), windowsPackageVersionFromPath(right))
+}
+
+func windowsAppPackagePriority(path string) int {
+	identity, _, _, ok := windowsCodexPackageParts(windowsPackageNameFromPath(path))
+	if !ok {
+		return 0
+	}
+	lower := strings.ToLower(identity)
+	if strings.HasPrefix(lower, "openai.chatgpt") {
+		return 2
+	}
+	return 0
 }
 
 func packagedWindowsAppUserModelID(path string) string {
@@ -1446,7 +1079,7 @@ func windowsPackageNameFromPath(path string) string {
 		return ""
 	}
 	last := parts[len(parts)-1]
-	if strings.EqualFold(last, "Codex.exe") || strings.EqualFold(last, "codex.exe") {
+	if isWindowsTargetAppExecutableName(last) {
 		if len(parts) >= 3 && strings.EqualFold(parts[len(parts)-2], "app") {
 			return parts[len(parts)-3]
 		}
@@ -1486,24 +1119,23 @@ func windowsPackageVersionFromName(name string) string {
 
 func windowsCodexPackageParts(name string) (identity string, version string, publisherID string, ok bool) {
 	trimmed := strings.TrimSpace(name)
-	lower := strings.ToLower(trimmed)
-	for _, canonicalIdentity := range []string{"OpenAI.Codex", "OpenAI.CodexBeta"} {
-		prefix := strings.ToLower(canonicalIdentity) + "_"
-		if !strings.HasPrefix(lower, prefix) {
-			continue
-		}
-		rest := trimmed[len(canonicalIdentity)+1:]
-		packageVersion, rest, hasArch := strings.Cut(rest, "_")
-		if !hasArch || packageVersion == "" {
-			return "", "", "", false
-		}
-		_, publisher, hasPublisher := strings.Cut(rest, "__")
-		if !hasPublisher || publisher == "" {
-			return "", "", "", false
-		}
-		return canonicalIdentity, packageVersion, publisher, true
+	identityPart, rest, hasIdentity := strings.Cut(trimmed, "_")
+	if !hasIdentity || identityPart == "" {
+		return "", "", "", false
 	}
-	return "", "", "", false
+	normalizedIdentity, supported := normalizeOpenAIAppPackageIdentity(identityPart)
+	if !supported {
+		return "", "", "", false
+	}
+	packageVersion, rest, hasArch := strings.Cut(rest, "_")
+	if !hasArch || packageVersion == "" {
+		return "", "", "", false
+	}
+	_, publisher, hasPublisher := strings.Cut(rest, "__")
+	if !hasPublisher || publisher == "" {
+		return "", "", "", false
+	}
+	return normalizedIdentity, packageVersion, publisher, true
 }
 
 func splitPathParts(path string) []string {
@@ -1514,27 +1146,29 @@ func splitPathParts(path string) []string {
 
 func codexDetectionPayload(saved, resolved string) map[string]any {
 	payload := map[string]any{
-		"savedPath":    nullableString(saved),
-		"resolvedPath": nullableString(resolved),
-		"status":       "missing",
-		"message":      "未检测到 Codex 应用。",
-		"candidates":   []string{},
+		"savedPath":      nullableString(saved),
+		"resolvedPath":   nullableString(resolved),
+		"status":         "missing",
+		"message":        "未检测到 ChatGPT 桌面应用。",
+		"candidates":     []string{},
+		"appKind":        codexAppKind(resolved),
+		"appDisplayName": codexAppDisplayName(resolved),
 	}
 	if resolved != "" {
 		payload["status"] = "found"
-		payload["message"] = "已检测到 Codex 应用。"
+		payload["message"] = "已检测到 " + codexAppDisplayName(resolved) + "。"
 		payload["executable"] = buildCodexExecutable(resolved)
 		if appUserModelID := packagedWindowsAppUserModelID(resolved); appUserModelID != "" {
 			payload["appUserModelId"] = appUserModelID
 		}
 		if runtime.GOOS == "windows" && isWindowsProtectedCodexDirectLaunchPath(resolved, stringFromAny(payload["executable"])) {
 			payload["status"] = "limited"
-			payload["message"] = "已检测到 Windows Store/MSIX 版 Codex，但 Program Files\\WindowsApps 包目录不能作为 Codex++ 的直接启动路径。请用修复工具自动下载/解包镜像包，或选择解包目录中的 app\\Codex.exe。"
+			payload["message"] = "已检测到 Windows Store/MSIX 版 " + codexAppDisplayName(resolved) + "，但 Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动路径。请安装官方桌面版或手动选择可直接执行的 ChatGPT.exe。"
 		}
 		return payload
 	}
 	if runtime.GOOS == "windows" {
-		payload["message"] = "Windows 自动探测没有找到 Codex。若 Codex 已安装，请手动选择 Codex.exe 或安装目录。"
+		payload["message"] = "Windows 自动探测没有找到 ChatGPT。若已安装，请手动选择 ChatGPT.exe 或安装目录。"
 		payload["candidates"] = windowsCodexDetectionHints()
 	}
 	return payload
@@ -1548,7 +1182,9 @@ func codexLaunchPayload(appPath string) map[string]any {
 		"path":           nullableString(appPath),
 		"executable":     "",
 		"appUserModelId": "",
-		"message":        "未检测到 Codex 应用，无法启动。",
+		"message":        "未检测到 ChatGPT 桌面应用，无法启动。",
+		"appKind":        codexAppKind(appPath),
+		"appDisplayName": codexAppDisplayName(appPath),
 	}
 	if appPath == "" {
 		return payload
@@ -1561,7 +1197,7 @@ func codexLaunchPayload(appPath string) map[string]any {
 			payload["method"] = "executable"
 			payload["methodLabel"] = "可执行文件启动"
 			payload["executable"] = executable
-			payload["message"] = "将直接启动 Codex.exe 并附加调试端口参数。"
+			payload["message"] = "将直接启动 " + filepath.Base(executable) + " 并附加调试端口参数。"
 			return payload
 		}
 		if appUserModelID := packagedWindowsAppUserModelID(appPath); appUserModelID != "" {
@@ -1570,7 +1206,7 @@ func codexLaunchPayload(appPath string) map[string]any {
 			if protectedPackage {
 				payload["method"] = "msix_unsupported"
 				payload["methodLabel"] = "MSIX 不支持"
-				payload["message"] = "检测到 Windows Store/MSIX 版 Codex；该包目录不能直接接收调试端口参数，请用修复工具自动解包镜像包，或选择解包目录中的 app\\Codex.exe。"
+				payload["message"] = "检测到 Windows Store/MSIX 版 " + codexAppDisplayName(appPath) + "；该包目录不能直接接收调试端口参数，请安装官方桌面版或选择可直接执行的 ChatGPT.exe。"
 			} else {
 				payload["method"] = "packaged_activation"
 				payload["methodLabel"] = "MSIX 应用激活"
@@ -1582,20 +1218,20 @@ func codexLaunchPayload(appPath string) map[string]any {
 	}
 	executable := buildCodexExecutable(appPath)
 	if strings.TrimSpace(executable) == "" {
-		payload["message"] = "已识别到 Codex 目录，但没有找到可执行文件。"
+		payload["message"] = "已识别到 ChatGPT 目录，但没有找到可执行文件。"
 		return payload
 	}
 	if runtime.GOOS == "windows" && !isWindowsAppsExecutionAlias(executable) && !fileExists(executable) {
 		payload["method"] = "executable_missing"
 		payload["executable"] = executable
-		payload["message"] = "已推断 Codex.exe 位置，但文件不存在。"
+		payload["message"] = "已推断应用可执行文件位置，但文件不存在。"
 		return payload
 	}
 	payload["ready"] = true
 	payload["method"] = "executable"
 	payload["methodLabel"] = "可执行文件启动"
 	payload["executable"] = executable
-	payload["message"] = "将通过可执行文件启动 Codex。"
+	payload["message"] = "将通过可执行文件启动 " + codexAppDisplayName(appPath) + "。"
 	return payload
 }
 
@@ -1685,18 +1321,17 @@ func windowsCodexDetectionHints() []string {
 	var hints []string
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		hints = append(hints,
-			filepath.Join(local, "Programs", "Codex"),
-			filepath.Join(local, "Microsoft", "WindowsApps", "Codex.exe"),
+			filepath.Join(local, "Programs", "ChatGPT"),
+			filepath.Join(local, "Microsoft", "WindowsApps", "ChatGPT.exe"),
 		)
 	}
 	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
 		hints = append(hints,
-			filepath.Join(programFiles, "WindowsApps", "OpenAI.Codex_*"),
-			filepath.Join(programFiles, "WindowsApps", "OpenAI.CodexBeta_*"),
-			filepath.Join(programFiles, "OpenAI", "Codex"),
+			filepath.Join(programFiles, "WindowsApps", "OpenAI.ChatGPT*"),
+			filepath.Join(programFiles, "OpenAI", "ChatGPT"),
 		)
 	}
-	hints = append(hints, "Get-AppxPackage OpenAI.Codex / OpenAI.CodexBeta")
+	hints = append(hints, "Get-AppxPackage OpenAI.ChatGPT*")
 	return hints
 }
 
@@ -1749,12 +1384,12 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	command := buildManagerLauncherCommand(launcher, appPath, debugPort, helperPort, restart)
 	launcherPayload := managerLauncherPayload(launcher, command, appPath, debugPort, helperPort)
 	if !fileExists(launcher) {
-		return failed("启动 Codex++ 失败：未找到静默启动器 "+launcher, launcherPayload)
+		return failed("启动 ChatGPT Codex 失败：未找到静默启动器 "+launcher, launcherPayload)
 	}
 	cmd := exec.Command(command[0], command[1:]...)
 	hideSubprocessWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return failed("启动 Codex++ 静默启动器失败："+err.Error(), launcherPayload)
+		return failed("启动 ChatGPT Codex 静默启动器失败："+err.Error(), launcherPayload)
 	}
 	latest := waitForLaunchStatusAfter(time.Now().Add(-200*time.Millisecond), managerLaunchWaitTimeout())
 	if latest != nil && latest.Status == "failed" {
@@ -1765,7 +1400,7 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	if latest == nil {
 		accepted := launchStatus{
 			Status:      "accepted",
-			Message:     "Go 管理器已启动 Codex++ 静默启动器。",
+			Message:     "Go 管理器已启动 ChatGPT Codex 静默启动器。",
 			StartedAtMS: uint64(time.Now().UnixMilli()),
 			DebugPort:   &debugPort,
 			HelperPort:  &helperPort,
@@ -1779,7 +1414,7 @@ func (s *server) launchCodex(args map[string]any, restart bool) commandResult {
 	}
 	message := "启动任务已在后台开始，可稍后查看概览状态。"
 	if restart {
-		message = "Codex 已请求重启，启动任务正在后台运行。"
+		message = "ChatGPT Codex 已请求重启，启动任务正在后台运行。"
 	}
 	result := commandResult{"status": "accepted", "message": message, "debugPort": debugPort, "helperPort": helperPort, "latest_launch": latest}
 	for key, value := range launcherPayload {
@@ -1889,7 +1524,7 @@ func preferredMacOSLauncherBinaryPath(fallback, currentExecutable string) string
 		fallback,
 		macOSCompanionAppCandidates(currentExecutable, silentName+".app"),
 		silentName+".app",
-		[]string{silentBinary, "CodexPlusPlus"},
+		[]string{"ChatGPTCodex", silentBinary},
 	)
 }
 
