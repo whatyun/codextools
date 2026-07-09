@@ -214,25 +214,25 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.2.1</strong>
+          <strong>Version 1.2.2</strong>
           <ul>
-            <li>Fixes macOS launcher discovery so the manager opens the sibling ChatGPT Codex.app launcher instead of falling back to a nested launcher inside the manager bundle.</li>
-            <li>Prefers the injected bridge for backend calls while keeping the HTTP helper fallback for status and repair routes, with clearer diagnostics when either transport is unavailable.</li>
-            <li>Downgrades missing service-tier assets to a non-fatal unavailable state instead of breaking the injected menu on unsupported ChatGPT builds.</li>
-            <li>Allows the local HTTP helper to answer private-network browser preflight requests and extends thread sort-key requests for larger history sets.</li>
-            <li>Improves Windows mirror repair by reusing matching packages already present in Downloads before downloading again.</li>
-            <li>Removes stale provider-sync locks automatically while keeping active locks protected, reducing stuck history/provider sync states.</li>
+            <li>Renames the desktop entry, app bundles, installers, and in-app copy to ChatGPT Codex Tools while cleaning up legacy Codex++ shortcuts and uninstall records.</li>
+            <li>Refactors the manager UI and data payloads for cleaner status cards, relay/provider settings, marketplace actions, and diagnostics.</li>
+            <li>Keeps plugin and site marketplace enhancements available for mixed API relay mode while disabling only the paths that are unsafe for pure relay/aggregate mode.</li>
+            <li>Improves ChatGPT desktop target detection, CDP page selection, launcher errors, and Windows startup/uninstall behavior.</li>
+            <li>Refreshes macOS pkg/zip and Windows setup/portable build metadata, including the offline installers and migration-friendly package names.</li>
+            <li>Updates README and localized UI text across Chinese, English, Japanese, and Korean documentation.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.2.1</strong>
+          <strong>版本 1.2.2</strong>
           <ul>
-            <li>修复 macOS 启动器发现逻辑，管理器会优先打开同级 ChatGPT Codex.app 启动器，不再回退到管理器 bundle 内部的嵌套启动器。</li>
-            <li>后端调用优先使用注入桥接，同时保留状态和修复路由的 HTTP helper 后备，并在任一传输不可用时写入更清晰诊断。</li>
-            <li>service-tier 资源缺失时会降级为非致命的不可用状态，不再让不支持的 ChatGPT 构建破坏注入菜单。</li>
-            <li>本地 HTTP helper 支持 private-network 预检请求，并延长历史排序 key 请求超时，适配更大的会话历史。</li>
-            <li>Windows 镜像修复会优先复用 Downloads 中已存在且匹配的安装包，避免重复下载。</li>
-            <li>Provider sync 会自动移除过期锁，同时保留活跃锁保护，减少历史/供应商同步卡住的情况。</li>
+            <li>桌面入口、app bundle、安装包和界面文案统一迁移到 ChatGPT Codex Tools，并清理旧的 Codex++ 快捷方式和卸载记录。</li>
+            <li>重构管理器 UI 和数据结构，优化状态卡片、中转/供应商设置、市场操作和诊断信息。</li>
+            <li>混合 API 中转模式下继续保留插件/站点市场增强，只在纯中转/聚合模式下关闭不安全的补丁路径。</li>
+            <li>改进 ChatGPT 桌面应用目标检测、CDP 页面选择、启动器错误提示，以及 Windows 启动和卸载流程。</li>
+            <li>刷新 macOS pkg/zip 与 Windows setup/便携构建元数据，继续提供离线安装包并使用更易迁移的包名。</li>
+            <li>同步更新中、英、日、韩 README 和界面翻译。</li>
           </ul>
         </div>
       </section>
@@ -242,13 +242,17 @@
           <strong>macOS first launch note</strong>
           <p>The macOS packages are unsigned community builds, including the pkg installers. If macOS blocks the first launch, run:</p>
           <pre><code>xattr -cr "/Applications/ChatGPT Codex 管理工具.app"
-xattr -cr "/Applications/ChatGPT Codex.app"</code></pre>
+xattr -cr "/Applications/ChatGPT Codex.app"
+xattr -cr "/Applications/Codex++ 管理工具.app"
+xattr -cr "/Applications/Codex++.app"</code></pre>
         </div>
         <div data-lang="zh">
           <strong>macOS 首次启动提醒</strong>
           <p>macOS 包是未签名的社区构建，pkg 安装包也一样。如果 macOS 阻止首次启动，请执行：</p>
           <pre><code>xattr -cr "/Applications/ChatGPT Codex 管理工具.app"
-xattr -cr "/Applications/ChatGPT Codex.app"</code></pre>
+xattr -cr "/Applications/ChatGPT Codex.app"
+xattr -cr "/Applications/Codex++ 管理工具.app"
+xattr -cr "/Applications/Codex++.app"</code></pre>
         </div>
       </section>
 

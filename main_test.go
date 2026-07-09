@@ -41,7 +41,7 @@ func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
 }
 
 func TestRuntimeVersionMatchesMacOSTestBuild(t *testing.T) {
-	if version != "1.2.1" {
+	if version != "1.2.2" {
 		t.Fatalf("runtime version should identify the macOS test build, got %q", version)
 	}
 }

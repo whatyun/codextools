@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="$ROOT/dist/releases"
 BUILD="$ROOT/dist/build/macos"
-VERSION="${VERSION:-1.2.1}"
+VERSION="${VERSION:-1.2.2}"
 TARGET_ARCHES="${TARGET_ARCHES:-arm64 amd64}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 export COPYFILE_DISABLE=1
@@ -118,6 +118,8 @@ ChatGPT Codex Tools macOS package (${label})
 
    xattr -cr "/Applications/ChatGPT Codex 管理工具.app"
    xattr -cr "/Applications/ChatGPT Codex.app"
+   xattr -cr "/Applications/Codex++ 管理工具.app"
+   xattr -cr "/Applications/Codex++.app"
 
 5. You can also right-click the app and choose Open.
 TXT
@@ -244,7 +246,9 @@ build_arch() {
     <p>This installer places <strong>ChatGPT Codex 管理工具.app</strong> and <strong>ChatGPT Codex.app</strong> in <code>/Applications</code>.</p>
     <p>The macOS packages are unsigned community builds, including this pkg installer. If macOS blocks the first launch, open Terminal and run:</p>
     <pre>xattr -cr "/Applications/ChatGPT Codex 管理工具.app"
-xattr -cr "/Applications/ChatGPT Codex.app"</pre>
+xattr -cr "/Applications/ChatGPT Codex.app"
+xattr -cr "/Applications/Codex++ 管理工具.app"
+xattr -cr "/Applications/Codex++.app"</pre>
     <p>You can also right-click each app and choose <strong>Open</strong>.</p>
   </body>
 </html>
