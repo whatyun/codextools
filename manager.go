@@ -49,14 +49,20 @@ func runManager() error {
 			}
 			close(serverErr)
 		}()
-		if err := runManagerDesktopWindow(managerName, url); err != nil {
-			return err
+		windowErr := runManagerDesktopWindow(managerName, url)
+		repairShutdownCtx, repairShutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := manager.shutdownConversationHistoryRepair(repairShutdownCtx); err != nil {
+			appendDiagnosticLog("manager.conversation_history_repair_shutdown_timeout", map[string]any{"error": err.Error()})
 		}
+		repairShutdownCancel()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 		if err, ok := <-serverErr; ok {
 			return err
+		}
+		if windowErr != nil {
+			return windowErr
 		}
 		return nil
 	}
@@ -190,6 +196,12 @@ func (s *server) dispatch(ctx context.Context, command string, args map[string]a
 		return s.dismissPendingProviderImport()
 	case "sync_providers_now":
 		return s.syncProvidersNow()
+	case "repair_conversation_history":
+		return s.repairConversationHistory()
+	case "conversation_history_repair_status":
+		return s.conversationHistoryRepairStatus(args)
+	case "cancel_conversation_history_repair":
+		return s.cancelConversationHistoryRepair(args)
 	case "repair_codex_plugins":
 		return s.repairCodexPlugins()
 	case "plugin_marketplace_status":

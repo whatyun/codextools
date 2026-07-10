@@ -121,7 +121,7 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "2";
-  const codexPluginMarketplaceUnlockVersion = "12";
+  const codexPluginMarketplaceUnlockVersion = "13";
   const codexPluginAutoExpandVersion = "1";
   const codexPluginAutoExpandMaxClicks = 8;
   const codexForcePluginInstallRefreshIntervalMs = 1000;
@@ -2503,14 +2503,17 @@
     return message;
   }
 
+  function consumePluginMarketplaceRequestId(requestIds, requestId) {
+    if (!(requestIds instanceof Set) || !requestIds.has(requestId)) return false;
+    requestIds.delete(requestId);
+    return true;
+  }
+
   function patchPluginMarketplaceResponseData(data) {
     if (data?.type === "fetch-response") {
       const requestId = data.requestId != null ? String(data.requestId) : "";
       const requestIds = window.__codexPluginMarketplaceFetchRequestIds;
-      if (requestIds instanceof Set && requestIds.size > 0) {
-        if (!requestIds.has(requestId)) return false;
-        requestIds.delete(requestId);
-      }
+      if (!consumePluginMarketplaceRequestId(requestIds, requestId)) return false;
       if (typeof data.bodyJsonString !== "string" || !data.bodyJsonString.trim()) return false;
       try {
         const result = JSON.parse(data.bodyJsonString);
@@ -2536,10 +2539,7 @@
     }
     const requestId = message?.id != null ? String(message.id) : "";
     const requestIds = window.__codexPluginMarketplaceRequestIds;
-    if (requestIds instanceof Set && requestIds.size > 0) {
-      if (!requestIds.has(requestId)) return false;
-      requestIds.delete(requestId);
-    }
+    if (!consumePluginMarketplaceRequestId(requestIds, requestId)) return false;
     const result = message?.result;
     if (!result || typeof result !== "object") return false;
     patchPluginMarketplaceResult("list-plugins", result);

@@ -773,12 +773,15 @@ func providerSyncLockStale(lockDir string, now time.Time) (bool, string) {
 		if owner.PID <= 0 && owner.StartedAt <= 0 {
 			return providerSyncUnknownOwnerLockStale(lockDir, now, "owner_invalid")
 		}
+		if owner.PID > 0 {
+			if providerSyncOwnerProcessRunning(owner.PID) {
+				return false, "owner_active"
+			}
+			return true, "owner_process_missing"
+		}
 		startedAt := time.Unix(owner.StartedAt, 0)
 		if owner.StartedAt > 0 && now.Sub(startedAt) > providerSyncLockTTL {
 			return true, "owner_timeout"
-		}
-		if owner.PID > 0 && !providerSyncOwnerProcessRunning(owner.PID) {
-			return true, "owner_process_missing"
 		}
 		return false, "owner_active"
 	}
@@ -803,11 +806,13 @@ func providerSyncOwnerProcessRunning(pid int) bool {
 	if pid == os.Getpid() {
 		return true
 	}
-	if currentRuntimeGOOS() == "windows" {
+	running, err := processIDRunning(pid)
+	if err != nil {
+		// A detection failure must not make another process's active lock look
+		// stale, because deleting a live maintenance lock can corrupt history.
 		return true
 	}
-	cmd := exec.Command("kill", "-0", strconv.Itoa(pid))
-	return cmd.Run() == nil
+	return running
 }
 
 func readCurrentProvider(path string) string {

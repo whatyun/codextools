@@ -514,6 +514,16 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 	}
 }
 
+func TestRendererInjectionOnlyPatchesMatchedPluginListResponses(t *testing.T) {
+	const strictCorrelation = `if (!consumePluginMarketplaceRequestId(requestIds, requestId)) return false;`
+	if count := strings.Count(rendererInjectScript, strictCorrelation); count != 2 {
+		t.Fatalf("plugin marketplace fetch and MCP responses must both require a matching list request id; found %d strict checks", count)
+	}
+	if strings.Contains(rendererInjectScript, `requestIds instanceof Set && requestIds.size > 0`) {
+		t.Fatal("plugin marketplace response patch must not fall through to unrelated responses when tracked request ids are empty")
+	}
+}
+
 func TestRendererInjectionPrefersBridgeAndKeepsHTTPHelperFallback(t *testing.T) {
 	for _, expected := range []string{
 		`async function fetchFromHelper(path, payload)`,

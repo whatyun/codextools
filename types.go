@@ -408,6 +408,9 @@ type server struct {
 	root   string
 	dist   string
 	distFS fs.FS
+
+	conversationHistoryRepairMu   sync.Mutex
+	conversationHistoryRepairTask *conversationHistoryRepairTask
 }
 
 type watcherInstallPlan struct {

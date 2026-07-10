@@ -44,6 +44,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  Square,
   Smartphone,
   Sparkles,
   Sun,
@@ -138,11 +139,11 @@ type LaunchStatus = {
 };
 
 type TaskProgress = {
-  id: "restart" | "relaySwitch";
+  id: "restart" | "relaySwitch" | "conversationHistoryRepair";
   label: string;
   detail: string;
   percent: number;
-  status: "running" | "ok" | "failed";
+  status: "running" | "ok" | "failed" | "cancelled";
 };
 
 type OverviewResult = CommandResult<{
@@ -693,6 +694,33 @@ type CodexConfigRepairResult = CommandResult<{
   codexHome?: string;
 }>;
 
+type ConversationHistoryRepairResult = CommandResult<{
+  taskId?: string;
+  taskStatus?: "idle" | "running" | "cancelling" | "ok" | "failed" | "cancelled";
+  phase?: string;
+  percent?: number;
+  detail?: string;
+  cancelRequested?: boolean;
+  processedFiles?: number;
+  totalFiles?: number;
+  processedBytes?: number;
+  totalBytes?: number;
+  currentFile?: string;
+  scannedFiles?: number;
+  scannedRecords?: number;
+  invalidRecords?: number;
+  changedFiles?: number;
+  changedRecords?: number;
+  repairedFiles?: number;
+  repairedRecords?: number;
+  changedBytes?: number;
+  maxChangedFileBytes?: number;
+  requiredSpaceBytes?: number;
+  freeSpaceBytes?: number;
+  activeProcesses?: string[];
+  backupDir?: string | null;
+}>;
+
 type InstallResult = CommandResult<{
   silent_shortcut: { installed: boolean; path: string | null };
   management_shortcut: { installed: boolean; path: string | null };
@@ -891,10 +919,15 @@ export function App() {
   const [settingsForm, setSettingsForm] = useState<BackendSettings>({ ...defaultSettings });
   const [restartProgress, setRestartProgress] = useState<TaskProgress | null>(null);
   const [relaySwitchProgress, setRelaySwitchProgress] = useState<TaskProgress | null>(null);
+  const [conversationHistoryRepair, setConversationHistoryRepair] = useState<ConversationHistoryRepairResult | null>(null);
   const [removeOwnedData, setRemoveOwnedData] = useState(false);
   const currentLanguage = normalizeLanguage(settingsForm.language);
   const restartInProgress = restartProgress?.status === "running";
   const relaySwitchInProgress = relaySwitchProgress?.status === "running";
+  const conversationHistoryRepairInProgress = isConversationHistoryRepairActive(conversationHistoryRepair);
+  const conversationHistoryRepairPollVersion = useRef(0);
+  const conversationHistoryRepairMounted = useRef(false);
+  const conversationHistoryRepairNoticeKey = useRef("");
   const languageRef = useRef(currentLanguage);
   languageRef.current = currentLanguage;
   const tr = (value: string) => translateText(value, languageRef.current);
@@ -1266,6 +1299,7 @@ export function App() {
     if (next === "maintenance") {
       await refreshOverview(true);
       await refreshWatcher(true);
+      void pollConversationHistoryRepair(false);
     }
     if (next === "about") {
       await refreshOverview(true);
@@ -1585,6 +1619,108 @@ export function App() {
     const result = await run(() => call<CommandResult<Record<string, never>>>("sync_providers_now"));
     if (result) {
       showNotice("历史会话修复", result.message, result.status);
+    }
+  };
+
+  const showConversationHistoryRepairOutcome = (result: ConversationHistoryRepairResult) => {
+    const taskStatus = result.taskStatus ?? (result.status === "failed" ? "failed" : "ok");
+    const repairedFiles = result.repairedFiles ?? result.changedFiles ?? 0;
+    const repairedRecords = result.repairedRecords ?? result.changedRecords ?? 0;
+    const summary = tr(
+      taskStatus === "ok"
+        ? `扫描 ${result.scannedFiles ?? 0} 个文件、${result.scannedRecords ?? 0} 条记录；修改 ${repairedFiles} 个文件、修复 ${repairedRecords} 条记录。`
+        : `扫描 ${result.scannedFiles ?? 0} 个文件、${result.scannedRecords ?? 0} 条记录；已修复 ${repairedFiles} 个文件、${repairedRecords} 条记录。`,
+    );
+    let outcome = result.message;
+    let noticeStatus: Status = result.status;
+    if (taskStatus === "ok") {
+      outcome = tr(repairedFiles > 0 ? "对话历史兼容修复已完成。" : "未发现需要修复的对话历史。");
+      noticeStatus = "ok";
+    } else if (taskStatus === "cancelled") {
+      outcome = tr(result.detail || "对话历史修复已取消，已完成且已备份的文件会保留。可以稍后重新执行以继续修复。");
+      noticeStatus = "not_checked";
+    } else if (taskStatus === "failed") {
+      outcome = tr(result.detail || result.message);
+      noticeStatus = "failed";
+    }
+    const backup = result.backupDir ? ` ${tr(`备份：${result.backupDir}`)}` : "";
+    showNotice(tr("对话历史兼容修复"), `${outcome} ${summary}${backup}`.trim(), noticeStatus);
+  };
+
+  const rememberConversationHistoryRepair = (result: ConversationHistoryRepairResult) => {
+    if (result.taskStatus === "idle") return;
+    setConversationHistoryRepair(result);
+  };
+
+  const pollConversationHistoryRepair = async (announceTerminal: boolean) => {
+    const version = ++conversationHistoryRepairPollVersion.current;
+    let shouldAnnounceTerminal = announceTerminal;
+    let firstRequest = true;
+    while (conversationHistoryRepairMounted.current && version === conversationHistoryRepairPollVersion.current) {
+      if (!firstRequest) await delay(650);
+      if (!conversationHistoryRepairMounted.current || version !== conversationHistoryRepairPollVersion.current) return;
+
+      let result: ConversationHistoryRepairResult;
+      try {
+        result = await call<ConversationHistoryRepairResult>("conversation_history_repair_status");
+      } catch (error) {
+        if (shouldAnnounceTerminal && version === conversationHistoryRepairPollVersion.current) {
+          showNotice("对话历史兼容修复", `读取修复进度失败：${stringifyError(error)}`, "failed");
+        }
+        return;
+      }
+      if (!conversationHistoryRepairMounted.current || version !== conversationHistoryRepairPollVersion.current) return;
+      rememberConversationHistoryRepair(result);
+      if (isConversationHistoryRepairActive(result)) {
+        shouldAnnounceTerminal = true;
+        firstRequest = false;
+        continue;
+      }
+
+      if (result.taskStatus !== "idle" && shouldAnnounceTerminal) {
+        const noticeKey = `${result.taskId ?? "history-repair"}:${result.taskStatus ?? result.status}`;
+        if (conversationHistoryRepairNoticeKey.current !== noticeKey) {
+          conversationHistoryRepairNoticeKey.current = noticeKey;
+          showConversationHistoryRepairOutcome(result);
+        }
+      }
+      return;
+    }
+  };
+
+  const repairConversationHistory = async () => {
+    if (conversationHistoryRepairInProgress) return;
+    if (
+      !confirmMessage(
+        "即将修复对话历史。必须先完全退出 ChatGPT 和 Codex；后端检测到活动进程时会拒绝执行。工具会先自动备份原始文件，并且只删除历史工具调用 response_item 的 payload 顶层 namespace；不会删除消息正文、工具输出或嵌套参数，也不会修改当前配置。是否继续？",
+      )
+    ) {
+      return;
+    }
+    const result = await run(() => call<ConversationHistoryRepairResult>("repair_conversation_history"));
+    if (!result) return;
+    conversationHistoryRepairNoticeKey.current = "";
+    rememberConversationHistoryRepair(result);
+    if (isConversationHistoryRepairActive(result)) {
+      void pollConversationHistoryRepair(true);
+    } else {
+      showConversationHistoryRepairOutcome(result);
+    }
+  };
+
+  const cancelConversationHistoryRepair = async () => {
+    if (!isConversationHistoryRepairActive(conversationHistoryRepair) || conversationHistoryRepair?.taskStatus === "cancelling") return;
+    const result = await run(() =>
+      call<ConversationHistoryRepairResult>("cancel_conversation_history_repair", {
+        taskId: conversationHistoryRepair?.taskId,
+      }),
+    );
+    if (!result) return;
+    rememberConversationHistoryRepair(result);
+    if (isConversationHistoryRepairActive(result)) {
+      void pollConversationHistoryRepair(true);
+    } else {
+      showConversationHistoryRepairOutcome(result);
     }
   };
 
@@ -1992,6 +2128,15 @@ export function App() {
   };
 
   useEffect(() => {
+    conversationHistoryRepairMounted.current = true;
+    void pollConversationHistoryRepair(false);
+    return () => {
+      conversationHistoryRepairMounted.current = false;
+      conversationHistoryRepairPollVersion.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
     void (async () => {
       await refreshOverview(true);
       await refreshSettings(true);
@@ -2090,6 +2235,8 @@ export function App() {
         }
       },
       syncProvidersNow,
+      repairConversationHistory,
+      cancelConversationHistoryRepair,
       repairCodexPlugins,
       repairCodexGoals,
       refreshComputerUse,
@@ -2160,7 +2307,7 @@ export function App() {
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
       confirm: confirmMessage,
     }),
-    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects, restartInProgress, relaySwitchInProgress],
+    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects, restartInProgress, relaySwitchInProgress, conversationHistoryRepair],
   );
 
   return (
@@ -2293,6 +2440,8 @@ export function App() {
               overview={overview}
               watcher={watcher}
               settings={settings}
+              conversationHistoryRepair={conversationHistoryRepair}
+              conversationHistoryRepairInProgress={conversationHistoryRepairInProgress}
               launchForm={launchForm}
               onLaunchFormChange={setLaunchForm}
               removeOwnedData={removeOwnedData}
@@ -2388,6 +2537,8 @@ type Actions = {
   clearCodexAppPath: () => Promise<void>;
   saveManualCodexAppPath: () => Promise<void>;
   syncProvidersNow: () => Promise<void>;
+  repairConversationHistory: () => Promise<void>;
+  cancelConversationHistoryRepair: () => Promise<void>;
   repairCodexPlugins: () => Promise<void>;
   repairCodexGoals: () => Promise<void>;
   refreshComputerUse: () => Promise<ComputerUseStatusResult | null>;
@@ -3362,6 +3513,70 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
+function isConversationHistoryRepairActive(result: ConversationHistoryRepairResult | null) {
+  return result?.taskStatus === "running" || result?.taskStatus === "cancelling";
+}
+
+function conversationHistoryRepairPhaseLabel(phase?: string) {
+  switch (phase) {
+    case "starting":
+    case "checking":
+    case "checking_processes":
+      return "检查运行状态";
+    case "discovering":
+      return "查找会话文件";
+    case "scanning":
+      return "扫描对话历史";
+    case "preflight":
+    case "preparing":
+      return "检查备份空间";
+    case "repairing":
+    case "backing_up":
+      return "备份并修复";
+    case "finalizing":
+    case "finishing":
+      return "完成修复";
+    case "completed":
+      return "修复已完成";
+    case "cancelled":
+      return "修复已取消";
+    case "failed":
+      return "修复失败";
+    default:
+      return phase || "准备修复";
+  }
+}
+
+function conversationHistoryTaskProgress(result: ConversationHistoryRepairResult | null): TaskProgress | null {
+  if (!result?.taskStatus || result.taskStatus === "idle") return null;
+  const status: TaskProgress["status"] =
+    result.taskStatus === "ok"
+      ? "ok"
+      : result.taskStatus === "failed"
+        ? "failed"
+        : result.taskStatus === "cancelled"
+          ? "cancelled"
+          : "running";
+  const label =
+    result.taskStatus === "cancelling"
+      ? "正在取消"
+      : result.taskStatus === "cancelled"
+        ? "修复已取消"
+        : result.taskStatus === "ok"
+          ? "修复已完成"
+          : result.taskStatus === "failed"
+            ? "修复失败"
+            : conversationHistoryRepairPhaseLabel(result.phase);
+  const terminalPercent = status === "running" ? 0 : 100;
+  return {
+    id: "conversationHistoryRepair",
+    label,
+    detail: result.detail || result.message || "正在处理对话历史。",
+    percent: typeof result.percent === "number" && Number.isFinite(result.percent) ? result.percent : terminalPercent,
+    status,
+  };
+}
+
 function formatBackupTime(value: string) {
   if (!value) return "未知时间";
   const date = new Date(value);
@@ -4084,6 +4299,8 @@ function MaintenanceScreen({
   overview,
   watcher,
   settings,
+  conversationHistoryRepair,
+  conversationHistoryRepairInProgress,
   launchForm,
   onLaunchFormChange,
   removeOwnedData,
@@ -4093,6 +4310,8 @@ function MaintenanceScreen({
   overview: OverviewResult | null;
   watcher: WatcherResult | null;
   settings: SettingsResult | null;
+  conversationHistoryRepair: ConversationHistoryRepairResult | null;
+  conversationHistoryRepairInProgress: boolean;
   launchForm: { appPath: string; debugPort: string; helperPort: string };
   onLaunchFormChange: (next: { appPath: string; debugPort: string; helperPort: string }) => void;
   removeOwnedData: boolean;
@@ -4103,6 +4322,8 @@ function MaintenanceScreen({
   const watcherPlatform = watcher?.platform ?? "unknown";
   const isWindows = watcherPlatform === "windows";
   const isMac = watcherPlatform === "darwin";
+  const conversationHistoryProgress = conversationHistoryTaskProgress(conversationHistoryRepair);
+  const conversationHistoryCancelling = conversationHistoryRepair?.taskStatus === "cancelling";
   const appPathPlaceholder = isWindows
     ? "选择 ChatGPT.exe 或 ChatGPT 安装目录"
     : isMac
@@ -4128,6 +4349,60 @@ function MaintenanceScreen({
             </Button>
             <Button variant="secondary" onClick={() => void actions.repairShortcuts()}>修复快捷方式</Button>
             <Button variant="secondary" onClick={() => void actions.repairBackend()}>修复后端</Button>
+          </Toolbar>
+        </CardContent>
+      </Panel>
+      <Panel>
+        <CardHead title="对话历史兼容修复" detail="清理旧对话中官方 Responses API 不接受的 namespace 字段" />
+        <CardContent>
+          <div className="platform-note limited">
+            <ShieldCheck className="h-4 w-4" />
+            <span>必须先完全退出 ChatGPT 和 Codex；后端检测到活动进程时会拒绝执行。执行前会自动备份原始会话文件；只删除 function_call / custom_tool_call 类型 response_item 的 payload 顶层 namespace，不会删除消息正文、工具输出或嵌套参数，也不会修改当前配置。</span>
+          </div>
+          <div className="relay-grid compact">
+            <Metric label="扫描文件" value={conversationHistoryRepair ? `${conversationHistoryRepair.scannedFiles ?? 0} 个` : "尚未执行"} />
+            <Metric label="扫描记录" value={conversationHistoryRepair ? `${conversationHistoryRepair.scannedRecords ?? 0} 条` : "尚未执行"} />
+            <Metric label="需修复文件" value={conversationHistoryRepair ? `${conversationHistoryRepair.changedFiles ?? 0} 个` : "尚未执行"} />
+            <Metric label="需修复记录" value={conversationHistoryRepair ? `${conversationHistoryRepair.changedRecords ?? 0} 条` : "尚未执行"} />
+            <Metric label="跳过异常记录" value={conversationHistoryRepair ? `${conversationHistoryRepair.invalidRecords ?? 0} 条` : "尚未执行"} />
+          </div>
+          {conversationHistoryProgress ? (
+            <div className="history-repair-progress">
+              <InlineTaskProgress progress={conversationHistoryProgress} />
+              <div className="history-repair-progress-meta" aria-live="polite">
+                <span>
+                  文件进度：{conversationHistoryRepair?.processedFiles ?? 0} / {conversationHistoryRepair?.totalFiles ?? 0}
+                </span>
+                <span>
+                  数据进度：{formatBytes(conversationHistoryRepair?.processedBytes ?? 0) || "0 B"} / {formatBytes(conversationHistoryRepair?.totalBytes ?? 0) || "0 B"}
+                </span>
+                {conversationHistoryRepair?.currentFile ? <span className="history-repair-current-file">当前文件：{conversationHistoryRepair.currentFile}</span> : null}
+              </div>
+            </div>
+          ) : null}
+          {conversationHistoryRepair ? (
+            <>
+              {conversationHistoryRepair.requiredSpaceBytes ? (
+                <div className="path-line compact-path">
+                  完整备份数据量：{formatBytes(conversationHistoryRepair.changedBytes ?? 0)} · 预检所需空间：{formatBytes(conversationHistoryRepair.requiredSpaceBytes)} · 当前可用：{formatBytes(conversationHistoryRepair.freeSpaceBytes ?? 0) || "0 B"}
+                </div>
+              ) : null}
+              <div className="path-line compact-path">
+                备份目录：{conversationHistoryRepair.backupDir || (conversationHistoryRepair.taskStatus === "ok" ? "无需创建（未发现需修复记录）" : conversationHistoryRepairInProgress ? "尚未创建" : "未创建（执行已安全停止）")}
+              </div>
+            </>
+          ) : null}
+          <Toolbar>
+            <Button disabled={conversationHistoryRepairInProgress} onClick={() => void actions.repairConversationHistory()} variant="secondary">
+              <Wrench className="h-4 w-4" />
+              {conversationHistoryCancelling ? "正在取消" : conversationHistoryRepairInProgress ? "修复中" : "修复对话历史格式"}
+            </Button>
+            {conversationHistoryRepairInProgress ? (
+              <Button disabled={conversationHistoryCancelling} onClick={() => void actions.cancelConversationHistoryRepair()} variant="outline">
+                <Square className="h-4 w-4" />
+                {conversationHistoryCancelling ? "正在取消" : "取消修复"}
+              </Button>
+            ) : null}
           </Toolbar>
         </CardContent>
       </Panel>
