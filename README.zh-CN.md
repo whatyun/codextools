@@ -6,14 +6,24 @@ ChatGPT Codex Tools 是一个独立的 Go + React 桌面管理器，用来集中
 
 ![ChatGPT Codex Tools 首页仪表盘](./docs/assets/screenshot-home.png)
 
+## 项目特点
+
+它不只是一个启动器，而是管理 ChatGPT Codex 本地运行状态的控制中心。切换 Provider 时，工具会同时处理连接配置、模型、会话归属和扩展配置；执行历史修复或 Skill/MCP 恢复前会先检查条件并创建备份，减少手动改配置造成的数据风险。
+
 ## 主要功能
 
-- 新手引导：检测系统与 ChatGPT 安装状态，导入 CCSwitch Provider，并完成首次启动配置。
-- 连接管理：支持官方登录、官方混合 API 和兼容中转 API，可保存多个 Provider 并测试连通性。
-- 界面增强：集中管理会话删除、Markdown 导出、项目移动、Timeline 和用户脚本等功能。
-- 修复维护：提供历史对话归属修复、路径与快捷方式修复、插件和配置恢复。
-- 日志诊断：记录启动状态与 Bridge 事件，并生成便于反馈问题的诊断报告。
-- 多平台发布：提供 macOS Apple Silicon、macOS Intel、Windows x64 和 Windows ARM64 安装包及便携版。
+- **引导与启动**：检测系统架构、ChatGPT 安装和本地路径；可导入 CCSwitch 中的 Codex Provider；创建专用的 **ChatGPT Codex** 启动入口，并显示运行状态、当前连接和修复入口。
+- **三种连接模式**：官方登录保持原生行为；官方混合 API 在保留官方账号、站点和插件能力的同时使用兼容 API；中转 API 可连接代理、聚合服务或自建端点。
+- **完整 Provider 配置**：保存多个 Provider，支持排序、连通性测试、协议选择、模型列表、上下文窗口、单 Provider 上游代理，以及多个 API Provider 的轮转聚合。
+- **Codex 界面增强**：解锁本地或上游模型、删除会话、带时间戳导出 Markdown、移动项目、显示 Timeline，并可从最新 `upstream/<base-branch>` 创建 Git worktree。
+- **MCP / Skills / Plugins 管理**：集中维护 Codex 工具与插件配置；切换 Provider 时合并相关 `config.toml` 配置；可扫描本地缓存并恢复插件、Marketplace 和 `node_repl` MCP 条目。
+- **脚本市场**：浏览、安装、更新、启用或停用市场脚本，同时管理本地用户脚本，无需手动修改 ChatGPT 应用文件。
+- **历史对话同步**：连接模式变化后更新本地对话的 Provider 归属和索引，让旧会话在新模式下继续可见；操作前自动完整备份，不删除消息正文。
+- **精确的历史修复**：针对异常工具调用记录，只移除 payload 顶层不兼容的 `namespace`，保留消息、工具输出和嵌套参数；执行前检查进程状态、候选文件和备份空间。
+- **备份与恢复**：创建、标记、查看、恢复和删除 Skill/MCP 快照；恢复前再次备份当前状态，只替换相关 TOML 表，保留无关配置。
+- **诊断与维护**：记录启动器、脚本注入、Bridge 请求响应和修复过程；生成包含版本、平台、路径和关键设置的诊断报告，并提供入口、路径、配置和插件状态修复。
+- **手机控制入口**：通过本地 Helper 暴露移动端控制入口，不再依赖外部 Relay 房间与密钥。
+- **多平台发布**：提供 macOS Apple Silicon、macOS Intel、Windows x64 和 Windows ARM64 安装包及便携版。
 
 ## 下载与使用
 

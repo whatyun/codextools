@@ -32,18 +32,72 @@ ChatGPT Codex Tools brings the scattered parts of a local Codex setup into one a
 
 </details>
 
-## Why ChatGPT Codex Tools?
+## What Makes It Different
 
-| Capability | What it gives you |
-| --- | --- |
-| **Guided setup** | Detects your system and ChatGPT installation, imports CCSwitch providers, and walks through the first launch. |
-| **Connection control** | Switches between official sign-in, hybrid official API, and compatible relay APIs from one place. |
-| **Provider profiles** | Stores multiple relay configurations, tests connectivity, and manages models and protocol options. |
-| **Codex enhancements** | Controls conversation deletion, Markdown export, project moves, Timeline, and other injected UI features. |
-| **Script marketplace** | Installs, enables, updates, and removes community or local user scripts. |
-| **Conversation repair** | Restores provider attribution so older conversations can become visible again. |
-| **Maintenance tools** | Repairs paths, shortcuts, configuration, plugins, skills, MCP data, and related local state. |
-| **Actionable diagnostics** | Collects launch state, bridge events, logs, and a support report you can share when something fails. |
+ChatGPT Codex Tools is more than an alternative launcher. It manages the local state around ChatGPT Codex and keeps connection settings, conversation ownership, extensions, and recovery workflows consistent when you change providers or desktop versions.
+
+- **One control plane instead of scattered config files.** Change providers, models, MCP servers, Skills, Plugins, enhancements, and scripts from a desktop UI. The manager applies the related local configuration together instead of requiring manual edits across several files.
+- **Official access and custom APIs can coexist.** Hybrid API mode keeps an official ChatGPT account bound for native capabilities while sending supported model requests through a configured API endpoint. Pure relay mode is also available when official sign-in is not required.
+- **Provider switching includes state migration.** When the active mode changes, the manager can synchronize provider attribution in local conversation history so existing threads remain visible under the new setup.
+- **Risky maintenance actions are backup-first.** Conversation repair and Skill/MCP restoration validate prerequisites, create recoverable snapshots, and limit changes to the relevant records or TOML tables.
+- **Enhancements live inside the Codex experience.** A local renderer bridge adds practical actions to the ChatGPT Codex interface rather than forcing every workflow back into a separate utility window.
+
+## Features
+
+### Guided setup and reliable launching
+
+- Detects the operating system, CPU architecture, ChatGPT installation, manager runtime, and required local paths.
+- Finds CCSwitch when installed and imports its Codex provider profiles; CCSwitch is optional and can be skipped.
+- Creates the dedicated **ChatGPT Codex** entry point and launches ChatGPT with the selected helper, bridge, and connection mode.
+- Shows readiness, active provider, enhancement mode, entry-point status, and common repairs on the home dashboard.
+- Handles restarts and single-instance coordination so stale helper processes are less likely to break a launch.
+
+### Three connection modes
+
+| Mode | Best for | Behavior |
+| --- | --- | --- |
+| **Official sign-in** | Using the standard ChatGPT account and native Codex behavior | Keeps requests and account state on the official path. |
+| **Official hybrid API** | Keeping official login-dependent features while using another compatible model endpoint | Binds a provider to an official account, preserves native site/plugin capabilities, and routes supported API traffic through the configured Base URL and key. |
+| **Relay API** | Using a compatible proxy, aggregator, or self-hosted endpoint without official login | Applies the selected provider, protocol, model list, context window, optional upstream proxy, and local relay settings. |
+
+Provider management includes reusable profiles, drag-to-reorder, connectivity tests with a chosen model, model-list and context-window overrides, protocol selection, optional per-provider proxies, and imported CCSwitch metadata. Aggregated profiles can rotate requests across multiple API providers according to the configured strategy.
+
+### Codex interface enhancements
+
+Enhancements can be enabled individually and are applied to the ChatGPT Codex renderer through the local bridge:
+
+- Unlock locally configured and upstream-discovered models in the model picker.
+- Delete conversations and export them as timestamped Markdown.
+- Move projects and add a conversation Timeline for easier navigation.
+- Create a Git worktree from the latest `upstream/<base-branch>` instead of the current local `HEAD`.
+- Load local user scripts and marketplace scripts without manually editing the desktop application bundle.
+- Expose a local mobile-control entry point through the built-in helper.
+
+The manager distinguishes full, hybrid, and compatible enhancement modes. In particular, hybrid mode preserves official account-dependent site and plugin behavior, while pure relay mode avoids enabling features that require official access.
+
+### MCP, Skills, Plugins, and scripts
+
+- Manage Codex MCP servers, Skills, Plugins, marketplaces, and related feature flags from one screen.
+- Merge provider-specific configuration into `config.toml` during provider changes while preserving unrelated common configuration.
+- Scan locally cached plugins and restore missing plugin, marketplace, and `node_repl` MCP entries.
+- Create, label, list, restore, and delete Skill/MCP snapshots stored under `~/.codex/backups_state/skill-mcp`.
+- Browse the script marketplace, install or update scripts, toggle them individually, and manage local scripts alongside marketplace items.
+
+### Conversation history repair
+
+Two focused repair flows address common cases where older Codex threads disappear or fail to load:
+
+- **Mode-history synchronization** updates provider ownership and local indexes after a connection-mode change. It creates a full backup first and does not delete message content.
+- **Response-item repair** removes only the incompatible top-level `namespace` field from affected historical tool-call payloads. It leaves message text, tool output, and nested arguments untouched.
+
+Before writing, the repair flow requires ChatGPT and Codex to be closed, scans candidate files, calculates the required backup space, and stops safely when prerequisites are not met. Progress, changed-file counts, repaired-record counts, and the backup directory are shown in the UI.
+
+### Diagnostics and recovery
+
+- Live logs cover launcher activity, renderer script loading, bridge requests, bridge responses, and repair operations.
+- The generated diagnostic report includes application version, platform, important paths, and relevant settings for support requests.
+- Maintenance actions repair desktop entry points, configuration paths, provider synchronization, plugin state, and other local integration problems.
+- Backups are surfaced in the UI so a repair or restore operation has a clear recovery path rather than being a one-way mutation.
 
 ## Download
 
