@@ -332,8 +332,11 @@ func expandLocalPluginMarketplace(marketplace map[string]any, root string, insta
 		if _, exists := plugin["keywords"]; !exists {
 			plugin["keywords"] = []any{}
 		}
+		pluginRoot := filepath.Join(root, "plugins", name)
 		plugin["installed"] = installed[name+"@"+marketplaceName]
-		absolutizePluginAssetPaths(plugin, filepath.Join(root, "plugins", name))
+		plugin["enabled"] = installed[name+"@"+marketplaceName]
+		plugin["__codexPlusLocalPluginPath"] = pluginRoot
+		absolutizePluginAssetPaths(plugin, pluginRoot)
 	}
 }
 

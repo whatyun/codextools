@@ -214,25 +214,25 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.2.2</strong>
+          <strong>Version 1.2.3</strong>
           <ul>
-            <li>Renames the desktop entry, app bundles, installers, and in-app copy to ChatGPT Codex Tools while cleaning up legacy Codex++ shortcuts and uninstall records.</li>
-            <li>Refactors the manager UI and data payloads for cleaner status cards, relay/provider settings, marketplace actions, and diagnostics.</li>
-            <li>Keeps plugin and site marketplace enhancements available for mixed API relay mode while disabling only the paths that are unsafe for pure relay/aggregate mode.</li>
-            <li>Improves ChatGPT desktop target detection, CDP page selection, launcher errors, and Windows startup/uninstall behavior.</li>
-            <li>Refreshes macOS pkg/zip and Windows setup/portable build metadata, including the offline installers and migration-friendly package names.</li>
-            <li>Updates README and localized UI text across Chinese, English, Japanese, and Korean documentation.</li>
+            <li>Fixes plugin cards failing when opened on recent Codex builds by normalizing injected local marketplace entries to the current plugin summary format.</li>
+            <li>Adds a guarded conversation-history compatibility repair for unsupported legacy namespace fields, with preflight checks, backups, progress, and cancellation.</li>
+            <li>Tightens plugin-list response correlation so unrelated app-server messages are never modified by the marketplace patch.</li>
+            <li>Improves provider-sync lock recovery while protecting active maintenance work on macOS, Linux, and Windows.</li>
+            <li>Improves native macOS dialogs and clean shutdown of background repair tasks.</li>
+            <li>Expands automated coverage for history repair safety and modern local plugin payload compatibility.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.2.2</strong>
+          <strong>版本 1.2.3</strong>
           <ul>
-            <li>桌面入口、app bundle、安装包和界面文案统一迁移到 ChatGPT Codex Tools，并清理旧的 Codex++ 快捷方式和卸载记录。</li>
-            <li>重构管理器 UI 和数据结构，优化状态卡片、中转/供应商设置、市场操作和诊断信息。</li>
-            <li>混合 API 中转模式下继续保留插件/站点市场增强，只在纯中转/聚合模式下关闭不安全的补丁路径。</li>
-            <li>改进 ChatGPT 桌面应用目标检测、CDP 页面选择、启动器错误提示，以及 Windows 启动和卸载流程。</li>
-            <li>刷新 macOS pkg/zip 与 Windows setup/便携构建元数据，继续提供离线安装包并使用更易迁移的包名。</li>
-            <li>同步更新中、英、日、韩 README 和界面翻译。</li>
+            <li>将注入的本地插件市场条目转换为当前插件摘要结构，修复新版 Codex 中插件卡片点开异常。</li>
+            <li>新增带进程/磁盘预检、自动备份、进度和取消能力的对话历史兼容修复，用于清理旧记录中不受支持的 namespace 字段。</li>
+            <li>严格关联插件列表请求与响应，避免市场补丁误改无关 app-server 消息。</li>
+            <li>改进 macOS、Linux 和 Windows 的供应商同步锁恢复，同时保护仍在运行的维护任务。</li>
+            <li>改进 macOS 原生确认弹窗，并在退出时安全停止后台修复任务。</li>
+            <li>补充历史修复安全性和现代本地插件数据兼容性的自动化测试。</li>
           </ul>
         </div>
       </section>

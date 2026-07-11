@@ -40,9 +40,9 @@ func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
 	}
 }
 
-func TestRuntimeVersionMatchesMacOSTestBuild(t *testing.T) {
-	if version != "1.2.2" {
-		t.Fatalf("runtime version should identify the macOS test build, got %q", version)
+func TestRuntimeVersionMatchesReleaseBuild(t *testing.T) {
+	if version != "1.2.3" {
+		t.Fatalf("runtime version should identify the release build, got %q", version)
 	}
 }
 
@@ -521,6 +521,20 @@ func TestRendererInjectionOnlyPatchesMatchedPluginListResponses(t *testing.T) {
 	}
 	if strings.Contains(rendererInjectScript, `requestIds instanceof Set && requestIds.size > 0`) {
 		t.Fatal("plugin marketplace response patch must not fall through to unrelated responses when tracked request ids are empty")
+	}
+}
+
+func TestRendererInjectionNormalizesModernLocalPluginSummaries(t *testing.T) {
+	for _, expected := range []string{
+		`normalizeModernLocalPluginInterface`,
+		`source: { type: "local", path: localPluginPath }`,
+		`localVersion: pluginMarketplaceStringOrNull(cloned.localVersion || cloned.version)`,
+		`availability: cloned.availability === "DISABLED_BY_ADMIN" ? "DISABLED_BY_ADMIN" : "AVAILABLE"`,
+		`delete cloned.__codexPlusLocalPluginPath`,
+	} {
+		if !strings.Contains(rendererInjectScript, expected) {
+			t.Fatalf("renderer injection must normalize modern local plugin summaries; missing %q", expected)
+		}
 	}
 }
 

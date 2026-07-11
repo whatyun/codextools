@@ -121,7 +121,7 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "2";
-  const codexPluginMarketplaceUnlockVersion = "13";
+  const codexPluginMarketplaceUnlockVersion = "14";
   const codexPluginAutoExpandVersion = "1";
   const codexPluginAutoExpandMaxClicks = 8;
   const codexForcePluginInstallRefreshIntervalMs = 1000;
@@ -2210,7 +2210,43 @@
     return String(plugin.name || plugin.id || plugin.pluginName || "").trim();
   }
 
-  function normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName) {
+  function pluginMarketplaceStringOrNull(value) {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text || null;
+  }
+
+  function normalizeModernLocalPluginInterface(value, fallbackName) {
+    const iface = value && typeof value === "object" ? value : {};
+    const defaultPrompt = Array.isArray(iface.defaultPrompt)
+      ? iface.defaultPrompt
+          .map((prompt) => String(prompt || "").trim())
+          .filter((prompt) => prompt && prompt.length <= 128)
+          .slice(0, 3)
+      : null;
+    return {
+      displayName: pluginMarketplaceStringOrNull(iface.displayName) || fallbackName,
+      shortDescription: pluginMarketplaceStringOrNull(iface.shortDescription),
+      longDescription: pluginMarketplaceStringOrNull(iface.longDescription),
+      developerName: pluginMarketplaceStringOrNull(iface.developerName),
+      category: pluginMarketplaceStringOrNull(iface.category),
+      capabilities: Array.isArray(iface.capabilities) ? iface.capabilities.map(String).filter(Boolean) : [],
+      websiteUrl: pluginMarketplaceStringOrNull(iface.websiteUrl || iface.websiteURL),
+      privacyPolicyUrl: pluginMarketplaceStringOrNull(iface.privacyPolicyUrl || iface.privacyPolicyURL),
+      termsOfServiceUrl: pluginMarketplaceStringOrNull(iface.termsOfServiceUrl || iface.termsOfServiceURL),
+      defaultPrompt: defaultPrompt?.length ? defaultPrompt : null,
+      brandColor: pluginMarketplaceStringOrNull(iface.brandColor),
+      composerIcon: pluginMarketplaceStringOrNull(iface.composerIcon),
+      composerIconUrl: pluginMarketplaceStringOrNull(iface.composerIconUrl),
+      logo: pluginMarketplaceStringOrNull(iface.logo),
+      logoDark: pluginMarketplaceStringOrNull(iface.logoDark),
+      logoUrl: pluginMarketplaceStringOrNull(iface.logoUrl),
+      logoUrlDark: pluginMarketplaceStringOrNull(iface.logoUrlDark),
+      screenshots: Array.isArray(iface.screenshots) ? iface.screenshots.map(String).filter(Boolean) : [],
+      screenshotUrls: Array.isArray(iface.screenshotUrls) ? iface.screenshotUrls.map(String).filter(Boolean) : [],
+    };
+  }
+
+  function normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName, modernSummary) {
     const cloned = cloneCodexPluginMarketplace(plugin);
     if (!cloned || typeof cloned !== "object") return null;
     const name = String(cloned.name || cloned.id || cloned.pluginName || "").trim();
@@ -2220,10 +2256,40 @@
     if (!cloned.interface || typeof cloned.interface !== "object") cloned.interface = {};
     if (!cloned.interface.displayName) cloned.interface.displayName = name;
     if (!Array.isArray(cloned.keywords)) cloned.keywords = [];
+    const localPluginPath = pluginMarketplaceStringOrNull(cloned.__codexPlusLocalPluginPath);
+    delete cloned.__codexPlusLocalPluginPath;
+    if (modernSummary && localPluginPath) {
+      const installed = cloned.installed === true;
+      const installPolicy = ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"].includes(cloned.installPolicy)
+        ? cloned.installPolicy
+        : ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"].includes(cloned.policy?.installation)
+          ? cloned.policy.installation
+          : "AVAILABLE";
+      const authPolicy = cloned.authPolicy === "ON_USE" || cloned.policy?.authentication === "ON_USE"
+        ? "ON_USE"
+        : "ON_INSTALL";
+      return {
+        id: cloned.id,
+        remotePluginId: null,
+        version: null,
+        localVersion: pluginMarketplaceStringOrNull(cloned.localVersion || cloned.version),
+        name,
+        shareContext: null,
+        source: { type: "local", path: localPluginPath },
+        installed,
+        enabled: cloned.enabled === true || installed,
+        installPolicy,
+        installPolicySource: null,
+        authPolicy,
+        availability: cloned.availability === "DISABLED_BY_ADMIN" ? "DISABLED_BY_ADMIN" : "AVAILABLE",
+        interface: normalizeModernLocalPluginInterface(cloned.interface, name),
+        keywords: cloned.keywords.map(String).filter(Boolean),
+      };
+    }
     return cloned;
   }
 
-  function mergePluginMarketplacePlugins(target, source) {
+  function mergePluginMarketplacePlugins(target, source, modernSummary) {
     if (!target || !source || !Array.isArray(source.plugins)) return 0;
     if (!Array.isArray(target.plugins)) target.plugins = [];
     const marketplaceName = restorePluginMarketplaceName(target.name || source.name || "");
@@ -2232,7 +2298,7 @@
     source.plugins.forEach((plugin) => {
       const key = pluginMarketplacePluginKey(plugin);
       if (!key || existing.has(key)) return;
-      const cloned = normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName);
+      const cloned = normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName, modernSummary);
       if (!cloned) return;
       target.plugins.push(cloned);
       existing.add(key);
@@ -2249,6 +2315,8 @@
       ? window.__CODEX_PLUS_PLUGIN_MARKETPLACES__
       : [];
     if (!localMarketplaces.length) return { addedMarketplaces: 0, addedPlugins: 0 };
+    const modernSummary = codexPluginUnlockStrategy() === "modern"
+      || result.marketplaces.some((marketplace) => marketplace?.plugins?.some((plugin) => plugin?.source?.type));
     const byName = new Map();
     result.marketplaces.forEach((marketplace) => {
       const name = restorePluginMarketplaceName(marketplace?.name || "");
@@ -2261,13 +2329,13 @@
       if (!name) return;
       const existing = byName.get(name);
       if (existing) {
-        addedPlugins += mergePluginMarketplacePlugins(existing, marketplace);
+        addedPlugins += mergePluginMarketplacePlugins(existing, marketplace, modernSummary);
         return;
       }
       const cloned = cloneCodexPluginMarketplace(marketplace);
       if (!cloned) return;
       cloned.plugins = Array.isArray(cloned.plugins)
-        ? cloned.plugins.map((plugin) => normalizeLocalPluginMarketplacePlugin(plugin, name)).filter(Boolean)
+        ? cloned.plugins.map((plugin) => normalizeLocalPluginMarketplacePlugin(plugin, name, modernSummary)).filter(Boolean)
         : [];
       result.marketplaces.push(cloned);
       byName.set(name, cloned);
