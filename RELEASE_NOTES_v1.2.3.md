@@ -2,12 +2,13 @@
 
 ### Changes
 
-- Fixes plugin cards failing when opened on recent Codex builds by converting injected local marketplace entries to the current `PluginSummary` format, including local source paths, version state, policy fields, and normalized interface metadata.
-- Tightens plugin marketplace response correlation so only responses belonging to tracked plugin-list requests are modified, preventing unrelated app-server messages from being patched.
+- Removes the obsolete plugin/Sites marketplace unlock patch and automatic expansion scanner. Recent Codex builds provide the marketplace natively; avoiding request/response rewrites, global `Array.prototype.filter` replacement, local payload injection, and repeated DOM scans prevents the marketplace renderer crash seen after several seconds.
+- Removes the corresponding settings and injected marketplace payload while retaining native marketplace access, plugin configuration repair, legacy entry compatibility, and the separate force-install control.
 - Adds a conversation-history compatibility repair for legacy tool-call records containing unsupported top-level `namespace` fields, with process and disk-space preflight checks, automatic backups, progress reporting, cancellation, and concurrent-write protection.
 - Improves provider-sync lock ownership checks across macOS, Linux, and Windows so active maintenance locks stay protected while locks from missing processes can be recovered safely.
 - Improves the native macOS manager window with working JavaScript alert/confirm dialogs and orderly shutdown of background history-repair work before the local server exits.
-- Expands automated coverage for history scanning and repair, backup safety, cancellation, disk-space validation, process guards, plugin response matching, and modern local plugin payloads.
+- Updates Vite, Babel, and Tailwind build dependencies to patched versions with a clean npm audit, and splits React, drag-and-drop, UI, and Tauri dependencies into cacheable chunks so production builds complete without deprecation or oversized-chunk warnings.
+- Expands automated coverage for history scanning and repair, backup safety, cancellation, disk-space validation, process guards, and the absence of retired marketplace/auto-expand runtime patches.
 
 ### macOS unsigned build notice
 

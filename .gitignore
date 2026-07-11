@@ -4,6 +4,7 @@ web/dist/
 codextools
 codextools.exe
 dist/build/
+dist/cache/
 dist/releases/
 *.log
 .DS_Store

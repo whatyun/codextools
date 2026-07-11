@@ -121,9 +121,6 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "2";
-  const codexPluginMarketplaceUnlockVersion = "14";
-  const codexPluginAutoExpandVersion = "1";
-  const codexPluginAutoExpandMaxClicks = 8;
   const codexForcePluginInstallRefreshIntervalMs = 1000;
   const codexPlusImageOverlayId = "codex-plus-image-overlay";
   const codexThreadScrollMaxEntries = 120;
@@ -735,13 +732,11 @@
   }
 
   function defaultCodexPlusSettings() {
-    return { pluginAutoExpand: true, pluginEntryUnlock: false, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, pasteFix: false, projectMove: true, conversationTimeline: false, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, nativeMenuLocalization: true, serviceTierControls: false };
+    return { pluginEntryUnlock: false, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, pasteFix: false, projectMove: true, conversationTimeline: false, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, nativeMenuLocalization: true, serviceTierControls: false };
   }
 
   const codexPlusBackendSettingMap = {
-    pluginAutoExpand: "codexAppPluginAutoExpand",
     pluginEntryUnlock: "codexAppPluginEntryUnlock",
-    pluginMarketplaceUnlock: "codexAppPluginMarketplaceUnlock",
     forcePluginInstall: "codexAppForcePluginInstall",
     modelWhitelistUnlock: "codexAppModelWhitelistUnlock",
     sessionDelete: "codexAppSessionDelete",
@@ -774,8 +769,6 @@
     if (codexPlusBackendSettings.enhancementsEnabled === false) {
       return {
         pluginEntryUnlock: false,
-        pluginAutoExpand: false,
-        pluginMarketplaceUnlock: false,
         forcePluginInstall: false,
         modelWhitelistUnlock: false,
         sessionDelete: false,
@@ -798,8 +791,6 @@
       const settings = { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}"), ...backendCodexPlusSettings() };
       if (relayPatchDisabled) {
         settings.pluginEntryUnlock = false;
-        settings.pluginAutoExpand = false;
-        settings.pluginMarketplaceUnlock = false;
         settings.forcePluginInstall = false;
       }
       return settings;
@@ -807,7 +798,6 @@
       const settings = { ...defaultCodexPlusSettings(), ...backendCodexPlusSettings() };
       if (relayPatchDisabled) {
         settings.pluginEntryUnlock = false;
-        settings.pluginMarketplaceUnlock = false;
         settings.forcePluginInstall = false;
       }
       return settings;
@@ -846,12 +836,6 @@
         removeCodexServiceTierBadges();
         refreshCodexServiceTierControls();
       }
-    }
-    if (key === "pluginAutoExpand" && !value) {
-      clearTimeout(window.__codexPluginAutoExpandTimer);
-      window.__codexPluginAutoExpandTimer = null;
-      window.__codexPluginAutoExpandRunning = false;
-      window.__codexPluginAutoExpandLastSignature = "";
     }
     renderCodexPlusMenu();
     scan();
@@ -897,7 +881,6 @@
 
   let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", activeRelayMode: "official", activeRelayID: "", codexAppVersion: "" };
   const codexPluginLegacyEntryUnlockBeforeVersion = "26.601.2237";
-  const codexPluginBridgeRequestUnlockFromVersion = "26.616.0";
 
   function parseCodexVersionParts(version) {
     const raw = String(version || "").trim();
@@ -939,15 +922,6 @@
       codexAppVersion,
       cutoff: codexPluginLegacyEntryUnlockBeforeVersion,
     });
-  }
-
-  function codexPluginMarketplaceRequestPatchStrategy() {
-    const pluginStrategy = codexPluginUnlockStrategy();
-    if (pluginStrategy === "legacy") return "none";
-    const version = String(codexPlusBackendSettings.codexAppVersion || "").trim();
-    const comparison = compareCodexVersions(version, codexPluginBridgeRequestUnlockFromVersion);
-    if (comparison == null) return "unknown";
-    return comparison >= 0 ? "bridge" : "client";
   }
 
   let codexPlusBackendSettingsLoaded = false;
@@ -1779,14 +1753,6 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="enhancementsEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">插件/站点市场解锁</div><div class="codex-plus-row-description">API Key 或混合模式下扩展插件/站点市场请求，尽量显示完整列表；纯中转/聚合兼容路径会自动关闭。</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginMarketplaceUnlock" ${pluginPatchDisabledInRelayMode() ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
-            </div>
-            <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">插件/站点自动展开</div><div class="codex-plus-row-description">按上游新策略自动展开插件/站点市场里的更多按钮；纯中转/聚合兼容路径会自动关闭。</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="pluginAutoExpand" ${pluginPatchDisabledInRelayMode() ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
-            </div>
-            <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">特殊插件/站点强制安装</div><div class="codex-plus-row-description">解除 App unavailable / 应用不可用导致的前端安装禁用；纯中转/聚合兼容路径会自动关闭。</div></div>
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="forcePluginInstall" ${pluginPatchDisabledInRelayMode() ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
@@ -1867,7 +1833,7 @@
               <button type="button" class="codex-plus-toggle" data-codex-backend-setting="providerSyncEnabled"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">页面增强模式</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? (activeRelayModeSupportsOfficialSites() ? "混合 API 增强：保留官方登录能力，站点/插件市场和页面能力可用。" : "兼容增强：纯中转/聚合使用更保守路径，站点/插件解锁保持关闭。") : "完整增强：加载会话删除、导出、项目路径移动等全部页面能力。"}</div></div>
+              <div><div class="codex-plus-row-title">页面增强模式</div><div class="codex-plus-row-description">${codexPlusBackendSettings.launchMode === "relay" ? (activeRelayModeSupportsOfficialSites() ? "混合 API 增强：保留官方登录能力和页面功能。" : "兼容增强：纯中转/聚合使用更保守的页面功能路径。") : "完整增强：加载会话删除、导出、项目路径移动等全部页面能力。"}</div></div>
               <button type="button" class="codex-plus-action-button" data-codex-open-manager="true">打开管理工具</button>
             </div>
             <div class="codex-plus-row">
@@ -2142,560 +2108,12 @@
     removeDuplicateCodexPlusMenus(menu);
   }
 
-  function appServerModelRequestMethod(method, params) {
-    if (method === "send-cli-request-for-host" && params?.method) return String(params.method);
-    if (method === "vscode://codex/list-plugins") return "list-plugins";
-    if (method === "vscode://codex/plugin/install") return "install-plugin";
-    if (method === "vscode://codex/plugin/uninstall") return "uninstall-plugin";
-    if (method === "plugin/list") return "list-plugins";
-    if (method === "plugin/install") return "install-plugin";
-    if (method === "plugin/uninstall") return "uninstall-plugin";
-    return String(method || "");
-  }
-
   function pluginPatchDisabledInRelayMode() {
     return !codexPlusBackendSettingsLoaded || (codexPlusBackendSettings.launchMode === "relay" && !activeRelayModeSupportsOfficialSites());
   }
 
   function activeRelayModeSupportsOfficialSites() {
     return String(codexPlusBackendSettings.activeRelayMode || "").trim() === "mixedApi";
-  }
-
-  function patchPluginMarketplaceRequestParams(method, params) {
-    if (method !== "list-plugins" || !params || typeof params !== "object") return params;
-    const next = { ...params };
-    const hadMarketplaceKinds = Object.prototype.hasOwnProperty.call(next, "marketplaceKinds");
-    if (hadMarketplaceKinds) delete next.marketplaceKinds;
-    sendCodexPlusDiagnostic("plugin_marketplace_request_expanded", {
-      hadMarketplaceKinds,
-      cwdCount: Array.isArray(next.cwds) ? next.cwds.length : 0,
-    });
-    return next;
-  }
-
-  function displayNameForPluginMarketplaceName(name, fallback) {
-    if (name === "openai-bundled") return "OpenAI插件1(ChatGPT Codex)";
-    if (name === "openai-curated") return "OpenAI插件2(ChatGPT Codex)";
-    if (name === "openai-primary-runtime") return "OpenAI插件3(ChatGPT Codex)";
-    return fallback;
-  }
-
-  function patchPluginMarketplaceObject(marketplace) {
-    if (!marketplace || typeof marketplace !== "object" || marketplace.__codexPlusMarketplaceUnlockPatched) return false;
-    const displayName = displayNameForPluginMarketplaceName(marketplace.name, marketplace.displayName || marketplace.title || marketplace.label || marketplace.name);
-    if (!displayName || displayName === marketplace.name) return false;
-    marketplace.displayName = displayName;
-    marketplace.title = displayName;
-    marketplace.label = displayName;
-    if (marketplace.interface && typeof marketplace.interface === "object") {
-      marketplace.interface = { ...marketplace.interface, displayName, name: displayName, title: displayName, label: displayName };
-    } else {
-      marketplace.interface = { displayName, name: displayName, title: displayName, label: displayName };
-    }
-    marketplace.__codexPlusMarketplaceUnlockPatched = true;
-    return true;
-  }
-
-  function cloneCodexPluginMarketplace(value) {
-    if (!value || typeof value !== "object") return null;
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return null;
-    }
-  }
-
-  function pluginMarketplacePluginKey(plugin) {
-    if (!plugin || typeof plugin !== "object") return "";
-    return String(plugin.name || plugin.id || plugin.pluginName || "").trim();
-  }
-
-  function pluginMarketplaceStringOrNull(value) {
-    const text = typeof value === "string" ? value.trim() : "";
-    return text || null;
-  }
-
-  function normalizeModernLocalPluginInterface(value, fallbackName) {
-    const iface = value && typeof value === "object" ? value : {};
-    const defaultPrompt = Array.isArray(iface.defaultPrompt)
-      ? iface.defaultPrompt
-          .map((prompt) => String(prompt || "").trim())
-          .filter((prompt) => prompt && prompt.length <= 128)
-          .slice(0, 3)
-      : null;
-    return {
-      displayName: pluginMarketplaceStringOrNull(iface.displayName) || fallbackName,
-      shortDescription: pluginMarketplaceStringOrNull(iface.shortDescription),
-      longDescription: pluginMarketplaceStringOrNull(iface.longDescription),
-      developerName: pluginMarketplaceStringOrNull(iface.developerName),
-      category: pluginMarketplaceStringOrNull(iface.category),
-      capabilities: Array.isArray(iface.capabilities) ? iface.capabilities.map(String).filter(Boolean) : [],
-      websiteUrl: pluginMarketplaceStringOrNull(iface.websiteUrl || iface.websiteURL),
-      privacyPolicyUrl: pluginMarketplaceStringOrNull(iface.privacyPolicyUrl || iface.privacyPolicyURL),
-      termsOfServiceUrl: pluginMarketplaceStringOrNull(iface.termsOfServiceUrl || iface.termsOfServiceURL),
-      defaultPrompt: defaultPrompt?.length ? defaultPrompt : null,
-      brandColor: pluginMarketplaceStringOrNull(iface.brandColor),
-      composerIcon: pluginMarketplaceStringOrNull(iface.composerIcon),
-      composerIconUrl: pluginMarketplaceStringOrNull(iface.composerIconUrl),
-      logo: pluginMarketplaceStringOrNull(iface.logo),
-      logoDark: pluginMarketplaceStringOrNull(iface.logoDark),
-      logoUrl: pluginMarketplaceStringOrNull(iface.logoUrl),
-      logoUrlDark: pluginMarketplaceStringOrNull(iface.logoUrlDark),
-      screenshots: Array.isArray(iface.screenshots) ? iface.screenshots.map(String).filter(Boolean) : [],
-      screenshotUrls: Array.isArray(iface.screenshotUrls) ? iface.screenshotUrls.map(String).filter(Boolean) : [],
-    };
-  }
-
-  function normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName, modernSummary) {
-    const cloned = cloneCodexPluginMarketplace(plugin);
-    if (!cloned || typeof cloned !== "object") return null;
-    const name = String(cloned.name || cloned.id || cloned.pluginName || "").trim();
-    if (!name) return null;
-    if (!cloned.name) cloned.name = name;
-    if (!cloned.id) cloned.id = `${name}@${marketplaceName}`;
-    if (!cloned.interface || typeof cloned.interface !== "object") cloned.interface = {};
-    if (!cloned.interface.displayName) cloned.interface.displayName = name;
-    if (!Array.isArray(cloned.keywords)) cloned.keywords = [];
-    const localPluginPath = pluginMarketplaceStringOrNull(cloned.__codexPlusLocalPluginPath);
-    delete cloned.__codexPlusLocalPluginPath;
-    if (modernSummary && localPluginPath) {
-      const installed = cloned.installed === true;
-      const installPolicy = ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"].includes(cloned.installPolicy)
-        ? cloned.installPolicy
-        : ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"].includes(cloned.policy?.installation)
-          ? cloned.policy.installation
-          : "AVAILABLE";
-      const authPolicy = cloned.authPolicy === "ON_USE" || cloned.policy?.authentication === "ON_USE"
-        ? "ON_USE"
-        : "ON_INSTALL";
-      return {
-        id: cloned.id,
-        remotePluginId: null,
-        version: null,
-        localVersion: pluginMarketplaceStringOrNull(cloned.localVersion || cloned.version),
-        name,
-        shareContext: null,
-        source: { type: "local", path: localPluginPath },
-        installed,
-        enabled: cloned.enabled === true || installed,
-        installPolicy,
-        installPolicySource: null,
-        authPolicy,
-        availability: cloned.availability === "DISABLED_BY_ADMIN" ? "DISABLED_BY_ADMIN" : "AVAILABLE",
-        interface: normalizeModernLocalPluginInterface(cloned.interface, name),
-        keywords: cloned.keywords.map(String).filter(Boolean),
-      };
-    }
-    return cloned;
-  }
-
-  function mergePluginMarketplacePlugins(target, source, modernSummary) {
-    if (!target || !source || !Array.isArray(source.plugins)) return 0;
-    if (!Array.isArray(target.plugins)) target.plugins = [];
-    const marketplaceName = restorePluginMarketplaceName(target.name || source.name || "");
-    const existing = new Set(target.plugins.map(pluginMarketplacePluginKey).filter(Boolean));
-    let added = 0;
-    source.plugins.forEach((plugin) => {
-      const key = pluginMarketplacePluginKey(plugin);
-      if (!key || existing.has(key)) return;
-      const cloned = normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName, modernSummary);
-      if (!cloned) return;
-      target.plugins.push(cloned);
-      existing.add(key);
-      added += 1;
-    });
-    return added;
-  }
-
-  function mergeLocalPluginMarketplaces(result) {
-    if (!result || typeof result !== "object" || !Array.isArray(result.marketplaces)) {
-      return { addedMarketplaces: 0, addedPlugins: 0 };
-    }
-    const localMarketplaces = Array.isArray(window.__CODEX_PLUS_PLUGIN_MARKETPLACES__)
-      ? window.__CODEX_PLUS_PLUGIN_MARKETPLACES__
-      : [];
-    if (!localMarketplaces.length) return { addedMarketplaces: 0, addedPlugins: 0 };
-    const modernSummary = codexPluginUnlockStrategy() === "modern"
-      || result.marketplaces.some((marketplace) => marketplace?.plugins?.some((plugin) => plugin?.source?.type));
-    const byName = new Map();
-    result.marketplaces.forEach((marketplace) => {
-      const name = restorePluginMarketplaceName(marketplace?.name || "");
-      if (name) byName.set(name, marketplace);
-    });
-    let addedMarketplaces = 0;
-    let addedPlugins = 0;
-    localMarketplaces.forEach((marketplace) => {
-      const name = restorePluginMarketplaceName(marketplace?.name || "");
-      if (!name) return;
-      const existing = byName.get(name);
-      if (existing) {
-        addedPlugins += mergePluginMarketplacePlugins(existing, marketplace, modernSummary);
-        return;
-      }
-      const cloned = cloneCodexPluginMarketplace(marketplace);
-      if (!cloned) return;
-      cloned.plugins = Array.isArray(cloned.plugins)
-        ? cloned.plugins.map((plugin) => normalizeLocalPluginMarketplacePlugin(plugin, name, modernSummary)).filter(Boolean)
-        : [];
-      result.marketplaces.push(cloned);
-      byName.set(name, cloned);
-      addedMarketplaces += 1;
-      addedPlugins += Array.isArray(cloned.plugins) ? cloned.plugins.length : 0;
-    });
-    if (addedMarketplaces > 0 || addedPlugins > 0) {
-      sendCodexPlusDiagnostic("plugin_marketplace_local_merged", { addedMarketplaces, addedPlugins });
-    }
-    return { addedMarketplaces, addedPlugins };
-  }
-
-  function restorePluginMarketplaceName(name) {
-    if (name === "codex-plus-openai-bundled") return "openai-bundled";
-    if (name === "codex-plus-openai-curated") return "openai-curated";
-    if (name === "codex-plus-openai-primary-runtime") return "openai-primary-runtime";
-    return name;
-  }
-
-  function codexPluginOfficialMarketplaceName(name) {
-    const restored = restorePluginMarketplaceName(name);
-    return restored === "openai-bundled" || restored === "openai-curated" || restored === "openai-primary-runtime";
-  }
-
-  function isCodexPluginBuildFlavorFilter(callback, sample) {
-    if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
-    let source = "";
-    try {
-      source = Function.prototype.toString.call(callback);
-    } catch {
-      return false;
-    }
-    const isKnownFilterSource = source.includes("!u(e.marketplaceName)||e.marketplaceName===r")
-      || source.includes("!ne(e.marketplaceName)||e.marketplaceName===n");
-    if (!isKnownFilterSource) return false;
-    if (!sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName))) return false;
-    return sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName) && !callback(plugin));
-  }
-
-  function isCodexPluginMarketplaceHiddenFilter(callback, sample) {
-    if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
-    let source = "";
-    try {
-      source = Function.prototype.toString.call(callback);
-    } catch {
-      return false;
-    }
-    if (!source.includes("!t.includes(e.name)")) return false;
-    if (!sample.some((marketplace) => codexPluginOfficialMarketplaceName(marketplace?.name))) return false;
-    return sample.some((marketplace) => codexPluginOfficialMarketplaceName(marketplace?.name) && !callback(marketplace));
-  }
-
-  function installPluginBuildFlavorFilterPatch() {
-    if (window.__codexPluginBuildFlavorFilterPatch === codexPluginMarketplaceUnlockVersion) return;
-    if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
-    const originalFilter = Array.prototype.__codexPluginBuildFlavorOriginalFilter || Array.prototype.filter;
-    if (!Array.prototype.__codexPluginBuildFlavorOriginalFilter) {
-      Object.defineProperty(Array.prototype, "__codexPluginBuildFlavorOriginalFilter", {
-        value: originalFilter,
-        configurable: true,
-        writable: true,
-      });
-    }
-    if (Array.prototype.filter.__codexPluginBuildFlavorPatched === codexPluginMarketplaceUnlockVersion) {
-      window.__codexPluginBuildFlavorFilterPatch = codexPluginMarketplaceUnlockVersion;
-      return;
-    }
-    const patchedFilter = function codexPluginBuildFlavorFilterPatch(callback, thisArg) {
-      if (isCodexPluginBuildFlavorFilter(callback, this)) {
-        sendCodexPlusDiagnostic("plugin_build_flavor_filter_bypassed", { pluginCount: this.length });
-        return Array.from(this);
-      }
-      if (isCodexPluginMarketplaceHiddenFilter(callback, this)) {
-        sendCodexPlusDiagnostic("plugin_marketplace_hidden_filter_bypassed", { marketplaceCount: this.length });
-        return Array.from(this);
-      }
-      return originalFilter.call(this, callback, thisArg);
-    };
-    patchedFilter.__codexPluginBuildFlavorPatched = codexPluginMarketplaceUnlockVersion;
-    Array.prototype.filter = patchedFilter;
-    window.__codexPluginBuildFlavorFilterPatch = codexPluginMarketplaceUnlockVersion;
-    sendCodexPlusDiagnostic("plugin_build_flavor_filter_patch_installed", {});
-  }
-
-  function restorePluginMarketplaceRequestParams(params, method = "") {
-    if (!params || typeof params !== "object") return params;
-    let next = params;
-    if (Array.isArray(params.marketplaceKinds)) {
-      const nextKinds = params.marketplaceKinds.map((kind) => kind === "remote:openai-curated" ? "openai-curated" : restorePluginMarketplaceName(kind));
-      next = { ...next, marketplaceKinds: Array.from(new Set(nextKinds)) };
-    }
-    if (method === "install-plugin") {
-      next = next === params ? { ...params } : { ...next };
-      if (next.remoteMarketplaceName) next.remoteMarketplaceName = restorePluginMarketplaceName(next.remoteMarketplaceName);
-      if (typeof next.marketplacePath === "string" && next.marketplacePath.startsWith("remote:")) {
-        const remoteMarketplaceName = next.marketplacePath.slice("remote:".length);
-        delete next.marketplacePath;
-        next.remoteMarketplaceName = restorePluginMarketplaceName(remoteMarketplaceName);
-      }
-    }
-    return next;
-  }
-
-  function patchPluginMarketplaceResult(method, result) {
-    if (method !== "list-plugins") return result;
-    try {
-      let patchedCount = 0;
-      if (Array.isArray(result?.marketplaces)) {
-        mergeLocalPluginMarketplaces(result);
-        result.marketplaces.forEach((marketplace) => {
-          if (patchPluginMarketplaceObject(marketplace)) patchedCount += 1;
-        });
-      }
-      if (patchedCount > 0) sendCodexPlusDiagnostic("plugin_marketplace_response_expanded", { patchedCount });
-    } catch (error) {
-      sendCodexPlusDiagnostic("plugin_marketplace_response_patch_failed", { errorName: error?.name || "", errorMessage: error?.message || String(error) });
-    }
-    return result;
-  }
-
-  function patchPluginMarketplaceRequestClient(client) {
-    if (!client || typeof client.sendRequest !== "function") return false;
-    if (client.__codexPluginMarketplaceUnlockPatch === codexPluginMarketplaceUnlockVersion) return true;
-    const originalSendRequest = client.__codexPluginMarketplaceOriginalSendRequest || client.sendRequest.bind(client);
-    client.__codexPluginMarketplaceOriginalSendRequest = originalSendRequest;
-    client.sendRequest = async function codexPluginMarketplacePatchedSendRequest(method, params, options) {
-      const requestMethod = appServerModelRequestMethod(String(method || ""), params);
-      const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restorePluginMarketplaceRequestParams(params, requestMethod));
-      const result = await originalSendRequest(method, requestParams, options);
-      return patchPluginMarketplaceResult(requestMethod, result);
-    };
-    client.__codexPluginMarketplaceUnlockPatch = codexPluginMarketplaceUnlockVersion;
-    return true;
-  }
-
-  function installPluginMarketplaceRequestPatch() {
-    if (window.__codexPluginMarketplaceUnlockInstalled === codexPluginMarketplaceUnlockVersion) return;
-    if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
-    const patch = async () => {
-      try {
-        const module = await loadCodexAppModule("app-server-manager-signals-");
-        const candidates = Object.values(module).filter((value) => value && typeof value === "object");
-        let patchedCount = 0;
-        for (const candidate of candidates) {
-          if (patchPluginMarketplaceRequestClient(candidate)) patchedCount += 1;
-          if (typeof candidate.sendRequest !== "function" && typeof candidate.get === "function") {
-            try {
-              if (patchPluginMarketplaceRequestClient(candidate.get())) patchedCount += 1;
-            } catch (_) {}
-          }
-        }
-        if (patchedCount > 0) {
-          window.__codexPluginMarketplaceUnlockInstalled = codexPluginMarketplaceUnlockVersion;
-          sendCodexPlusDiagnostic("plugin_marketplace_request_patch_installed", { candidateCount: candidates.length, patchedCount });
-        }
-      } catch (error) {
-        sendCodexPlusDiagnostic("plugin_marketplace_request_patch_failed", { errorName: error?.name || "", errorMessage: error?.message || String(error) });
-      }
-    };
-    void patch();
-  }
-
-  function patchPluginMarketplaceRequestMessage(message) {
-    if (!message || typeof message !== "object") return message;
-    if (message.type === "fetch" && typeof message.url === "string") {
-      const requestMethod = appServerModelRequestMethod(message.url, message.body);
-      if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
-      let requestBody = message.body;
-      let params = null;
-      if (typeof requestBody === "string" && requestBody.trim()) {
-        try {
-          params = JSON.parse(requestBody);
-        } catch {
-          params = null;
-        }
-      } else if (requestBody && typeof requestBody === "object") {
-        params = requestBody;
-      }
-      const requestParams = patchPluginMarketplaceRequestParams(
-        requestMethod,
-        restorePluginMarketplaceRequestParams(params, requestMethod)
-      );
-      if (requestMethod === "list-plugins" && message.requestId != null) {
-        window.__codexPluginMarketplaceFetchRequestIds = window.__codexPluginMarketplaceFetchRequestIds || new Set();
-        window.__codexPluginMarketplaceFetchRequestIds.add(String(message.requestId));
-      }
-      if (requestParams === params) return message;
-      if (requestMethod === "install-plugin") {
-        sendCodexPlusDiagnostic("plugin_install_request_debug", {
-          method: message.url,
-          requestMethod,
-          originalMarketplacePath: params?.marketplacePath || null,
-          originalRemoteMarketplaceName: params?.remoteMarketplaceName || null,
-          originalPluginName: params?.pluginName || null,
-          requestMarketplacePath: requestParams?.marketplacePath || null,
-          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
-          requestPluginName: requestParams?.pluginName || null,
-        });
-      }
-      return {
-        ...message,
-        body: typeof requestBody === "string" ? JSON.stringify(requestParams) : requestParams,
-      };
-    }
-    if (message.type === "mcp-request" && message.request && typeof message.request === "object") {
-      const requestMethod = appServerModelRequestMethod(String(message.request.method || ""), message.request.params);
-      if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
-      const requestParams = patchPluginMarketplaceRequestParams(
-        requestMethod,
-        restorePluginMarketplaceRequestParams(message.request.params, requestMethod)
-      );
-      if (requestMethod === "list-plugins" && message.request.id != null) {
-        window.__codexPluginMarketplaceRequestIds = window.__codexPluginMarketplaceRequestIds || new Set();
-        window.__codexPluginMarketplaceRequestIds.add(String(message.request.id));
-      }
-      if (requestParams === message.request.params) return message;
-      if (requestMethod === "install-plugin") {
-        sendCodexPlusDiagnostic("plugin_install_request_debug", {
-          method: String(message.request.method || ""),
-          requestMethod,
-          originalMarketplacePath: message.request.params?.marketplacePath || null,
-          originalRemoteMarketplaceName: message.request.params?.remoteMarketplaceName || null,
-          originalPluginName: message.request.params?.pluginName || null,
-          requestMarketplacePath: requestParams?.marketplacePath || null,
-          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
-          requestPluginName: requestParams?.pluginName || null,
-        });
-      }
-      return { ...message, request: { ...message.request, params: requestParams } };
-    }
-    return message;
-  }
-
-  function consumePluginMarketplaceRequestId(requestIds, requestId) {
-    if (!(requestIds instanceof Set) || !requestIds.has(requestId)) return false;
-    requestIds.delete(requestId);
-    return true;
-  }
-
-  function patchPluginMarketplaceResponseData(data) {
-    if (data?.type === "fetch-response") {
-      const requestId = data.requestId != null ? String(data.requestId) : "";
-      const requestIds = window.__codexPluginMarketplaceFetchRequestIds;
-      if (!consumePluginMarketplaceRequestId(requestIds, requestId)) return false;
-      if (typeof data.bodyJsonString !== "string" || !data.bodyJsonString.trim()) return false;
-      try {
-        const result = JSON.parse(data.bodyJsonString);
-        if (result && typeof result === "object") {
-          patchPluginMarketplaceResult("list-plugins", result);
-          patchPluginMarketplaceResult("list-plugins", result.data);
-        }
-        data.bodyJsonString = JSON.stringify(result);
-        return true;
-      } catch (error) {
-        sendCodexPlusDiagnostic("plugin_marketplace_fetch_response_patch_failed", {
-          errorName: error?.name || "",
-          errorMessage: error?.message || String(error),
-        });
-      }
-      return false;
-    }
-    if (data?.type !== "mcp-response") return false;
-    const message = data.message || data.response;
-    const method = String(message?.method || data.method || "");
-    if (appServerModelRequestMethod(method) === "install-plugin") {
-      clearPluginMarketplaceQueryCache();
-    }
-    const requestId = message?.id != null ? String(message.id) : "";
-    const requestIds = window.__codexPluginMarketplaceRequestIds;
-    if (!consumePluginMarketplaceRequestId(requestIds, requestId)) return false;
-    const result = message?.result;
-    if (!result || typeof result !== "object") return false;
-    patchPluginMarketplaceResult("list-plugins", result);
-    patchPluginMarketplaceResult("list-plugins", result.data);
-    return true;
-  }
-
-  function clearPluginMarketplaceQueryCache() {
-    try {
-      const queryClient = window.__REACT_QUERY_CLIENT__ || window.__codexQueryClient;
-      if (queryClient && typeof queryClient.invalidateQueries === "function") {
-        queryClient.invalidateQueries({ queryKey: ["plugins"] });
-      }
-    } catch {
-    }
-  }
-
-  function installPluginMarketplaceBridgePatch() {
-    if (window.__codexPluginMarketplaceBridgePatch === codexPluginMarketplaceUnlockVersion) return;
-    if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
-    installPluginMarketplaceWindowEventPatchOnly();
-    const bridge = window.electronBridge;
-    if (!bridge || typeof bridge.sendMessageFromView !== "function") {
-      sendCodexPlusDiagnostic("plugin_marketplace_bridge_patch_not_found", {});
-      return;
-    }
-    if (!bridge.__codexPluginMarketplaceOriginalSendMessageFromView) {
-      bridge.__codexPluginMarketplaceOriginalSendMessageFromView = bridge.sendMessageFromView.bind(bridge);
-      bridge.sendMessageFromView = function codexPluginMarketplacePatchedSendMessageFromView(message) {
-        let nextMessage = message;
-        try {
-          nextMessage = patchPluginMarketplaceRequestMessage(message);
-        } catch (error) {
-          sendCodexPlusDiagnostic("plugin_marketplace_bridge_request_patch_failed", {
-            errorName: error?.name || "",
-            errorMessage: error?.message || String(error),
-          });
-        }
-        return bridge.__codexPluginMarketplaceOriginalSendMessageFromView(nextMessage);
-      };
-    }
-    bridge.__codexPluginMarketplaceBridgePatch = codexPluginMarketplaceUnlockVersion;
-    window.__codexPluginMarketplaceBridgePatch = codexPluginMarketplaceUnlockVersion;
-    sendCodexPlusDiagnostic("plugin_marketplace_bridge_patch_installed", {});
-  }
-
-  function installPluginMarketplaceWindowEventPatchOnly() {
-    if (window.__codexPluginMarketplaceWindowEventPatch === codexPluginMarketplaceUnlockVersion) return;
-    if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
-    const originalDispatchEvent = window.__codexPluginMarketplaceOriginalDispatchEvent || window.dispatchEvent;
-    if (!window.__codexPluginMarketplaceOriginalDispatchEvent) {
-      window.__codexPluginMarketplaceOriginalDispatchEvent = originalDispatchEvent;
-      window.dispatchEvent = function patchedCodexPluginMarketplaceDispatchEvent(event) {
-        try {
-          const detail = event?.detail;
-          if (event?.type === "codex-message-from-view" && detail?.type === "mcp-request") {
-            const patched = patchPluginMarketplaceRequestMessage(detail);
-            if (patched !== detail) {
-              Object.keys(detail).forEach((key) => delete detail[key]);
-              Object.assign(detail, patched);
-            }
-          }
-          if (event?.type === "message") patchPluginMarketplaceResponseData(event.data);
-        } catch (error) {
-          sendCodexPlusDiagnostic("plugin_marketplace_dispatch_event_patch_failed", {
-            errorName: error?.name || "",
-            errorMessage: error?.message || String(error),
-          });
-        }
-        return originalDispatchEvent.call(this, event);
-      };
-    }
-    if (!window.__codexPluginMarketplaceResponseListenerInstalled) {
-      window.__codexPluginMarketplaceResponseListenerInstalled = true;
-      window.addEventListener("message", (event) => {
-        try {
-          patchPluginMarketplaceResponseData(event?.data);
-        } catch (error) {
-          sendCodexPlusDiagnostic("plugin_marketplace_response_message_patch_failed", {
-            errorName: error?.name || "",
-            errorMessage: error?.message || String(error),
-          });
-        }
-      }, true);
-    }
-    window.__codexPluginMarketplaceWindowEventPatch = codexPluginMarketplaceUnlockVersion;
   }
 
   function reactFiberFrom(element) {
@@ -2762,100 +2180,6 @@
       pluginButton.addEventListener("click", () => spoofChatGPTAuthMethod(pluginButton), true);
     }
     sendCodexPlusDiagnostic("plugin_entry_unlock_applied", { spoofed });
-  }
-
-  function pluginAutoExpandVisibleElement(el) {
-    if (!(el instanceof HTMLElement) || !el.isConnected) return false;
-    const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-
-  function pluginAutoExpandPageLooksRelevant() {
-    const text = String(document.body?.innerText || "");
-    return /插件|Plugins?|Marketplace|市场/i.test(text) && !!document.querySelector('button, [role="button"]');
-  }
-
-  function pluginAutoExpandButtonText(button) {
-    return String(button?.textContent || button?.getAttribute?.("aria-label") || button?.getAttribute?.("title") || "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function pluginAutoExpandButtonLooksScoped(button) {
-    let node = button;
-    for (let depth = 0; node instanceof HTMLElement && node !== document.body && depth < 8; depth += 1, node = node.parentElement) {
-      const text = String(node.innerText || "");
-      if (text.length > 16000) continue;
-      if (/插件|Plugins?|Marketplace|市场/i.test(text)) return true;
-    }
-    return false;
-  }
-
-  function pluginAutoExpandButtonLooksLikeMore(button) {
-    const text = pluginAutoExpandButtonText(button);
-    if (!text || text.length > 120) return false;
-    if (/^(更多|显示更多|查看更多|加载更多|Show more|Load more|More)$/i.test(text)) return true;
-    if (/^查看\s+.+以及另外\s*\d+\s*个$/i.test(text)) return true;
-    if (/^View\s+.+\s+and\s+\d+\s+more$/i.test(text)) return true;
-    if (/^Show\s+.+\s+and\s+\d+\s+more$/i.test(text)) return true;
-    return false;
-  }
-
-  function pluginAutoExpandButtonCandidates() {
-    if (!codexPlusSettings().pluginAutoExpand || !pluginAutoExpandPageLooksRelevant()) return [];
-    return Array.from(document.querySelectorAll('button, [role="button"]'))
-      .filter(pluginAutoExpandVisibleElement)
-      .filter((button) => !button.disabled && button.getAttribute("aria-disabled") !== "true")
-      .filter(pluginAutoExpandButtonLooksLikeMore)
-      .filter(pluginAutoExpandButtonLooksScoped)
-      .filter((button) => !button.closest?.(`.${moreMenuClass}, #${codexPlusMenuId}, .codex-plus-modal-overlay`));
-  }
-
-  function pluginAutoExpandSignature() {
-    return pluginAutoExpandButtonCandidates()
-      .map((button) => {
-        const rect = button.getBoundingClientRect();
-        return `${pluginAutoExpandButtonText(button)}:${Math.round(rect.top)}:${Math.round(rect.left)}`;
-      })
-      .join("|");
-  }
-
-  function schedulePluginAutoExpand(force = false) {
-    if (!codexPlusSettings().pluginAutoExpand) return;
-    if (window.__codexPluginAutoExpandRunning && !force) return;
-    clearTimeout(window.__codexPluginAutoExpandTimer);
-    window.__codexPluginAutoExpandTimer = setTimeout(() => runPluginAutoExpand(force), force ? 30 : 180);
-  }
-
-  function runPluginAutoExpand(force = false) {
-    if (!codexPlusSettings().pluginAutoExpand) return;
-    const currentSignature = pluginAutoExpandSignature();
-    if (!force && currentSignature && currentSignature === window.__codexPluginAutoExpandLastSignature) return;
-    window.__codexPluginAutoExpandLastSignature = currentSignature;
-    window.__codexPluginAutoExpandRunning = true;
-    window.__codexPluginAutoExpandClicks = 0;
-    const clickNext = () => {
-      if (!codexPlusSettings().pluginAutoExpand) {
-        window.__codexPluginAutoExpandRunning = false;
-        return;
-      }
-      const button = pluginAutoExpandButtonCandidates()[0];
-      if (!button || window.__codexPluginAutoExpandClicks >= codexPluginAutoExpandMaxClicks) {
-        window.__codexPluginAutoExpandRunning = false;
-        sendCodexPlusDiagnostic("plugin_auto_expand_finished", {
-          version: codexPluginAutoExpandVersion,
-          clicks: window.__codexPluginAutoExpandClicks || 0,
-          exhausted: !!button,
-        });
-        return;
-      }
-      window.__codexPluginAutoExpandClicks += 1;
-      button.click();
-      window.setTimeout(clickNext, 120);
-    };
-    clickNext();
   }
 
   function installPasteFix() {
@@ -7207,23 +6531,9 @@
       if ((pluginUnlockStrategy === "legacy" || pluginUnlockStrategy === "unknown") && settings.pluginEntryUnlock) {
         enablePluginEntry();
       }
-      if ((pluginUnlockStrategy === "modern" || pluginUnlockStrategy === "unknown") && settings.pluginMarketplaceUnlock) {
-        const marketplaceRequestPatchStrategy = codexPluginMarketplaceRequestPatchStrategy();
-        installPluginBuildFlavorFilterPatch();
-        if (marketplaceRequestPatchStrategy === "bridge") {
-          installPluginMarketplaceBridgePatch();
-        } else if (marketplaceRequestPatchStrategy === "client") {
-          installPluginMarketplaceRequestPatch();
-        } else {
-          installPluginMarketplaceWindowEventPatchOnly();
-          installPluginMarketplaceBridgePatch();
-          installPluginMarketplaceRequestPatch();
-        }
-      }
       unblockPluginInstallButtons();
       refreshForcePluginInstallUnlockLoop();
     }
-    schedulePluginAutoExpand();
     sessionRows().forEach(tryAttachButton);
     syncActionGroupsLayout();
     refreshThreadIdBadges();

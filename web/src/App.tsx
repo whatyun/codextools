@@ -252,9 +252,7 @@ type BackendSettings = {
   relayProfilesEnabled: boolean;
   ccsLinkEnabled: boolean;
   enhancementsEnabled: boolean;
-  codexAppPluginAutoExpand: boolean;
   codexAppPluginEntryUnlock: boolean;
-  codexAppPluginMarketplaceUnlock: boolean;
   codexAppForcePluginInstall: boolean;
   codexAppModelWhitelistUnlock: boolean;
   codexAppSessionDelete: boolean;
@@ -806,9 +804,7 @@ const defaultSettings: BackendSettings = {
   relayProfilesEnabled: true,
   ccsLinkEnabled: false,
   enhancementsEnabled: true,
-  codexAppPluginAutoExpand: true,
   codexAppPluginEntryUnlock: false,
-  codexAppPluginMarketplaceUnlock: true,
   codexAppForcePluginInstall: true,
   codexAppModelWhitelistUnlock: true,
   codexAppSessionDelete: true,
@@ -3953,12 +3949,10 @@ function EnhanceScreen({
           {form.launchMode === "relay" ? (
             <div className="hint-line">
               <ShieldCheck className="h-4 w-4" />
-              <span>{mixedRelayMode ? "当前为混合 API 增强：保留官方登录能力，站点/插件市场、自动展开和强制安装可继续使用。" : "当前为兼容增强模式：纯中转/聚合会关闭插件/站点市场解锁、强制入口解锁和强制安装，其它页面功能仍可用。"}</span>
+              <span>{mixedRelayMode ? "当前为混合 API 增强：保留官方登录能力，原生站点/插件市场和强制安装可继续使用。" : "当前为兼容增强模式：纯中转/聚合会关闭强制入口解锁和强制安装，其它页面功能仍可用。"}</span>
             </div>
           ) : null}
           <div className="feature-switch-grid">
-            <FeatureToggle title="插件/站点市场解锁" detail="API Key 或混合模式下扩展插件/站点市场请求，尽量显示完整列表。" checked={form.codexAppPluginMarketplaceUnlock} disabled={!masterEnabled || !pluginPatchAllowed} onChange={(value) => setEnhanceFlag("codexAppPluginMarketplaceUnlock", value)} />
-            <FeatureToggle title="插件/站点自动展开" detail="按上游新策略自动展开插件/站点区域，不再依赖旧入口强制解锁。" checked={form.codexAppPluginAutoExpand} disabled={!masterEnabled || !pluginPatchAllowed} onChange={(value) => setEnhanceFlag("codexAppPluginAutoExpand", value)} />
             <FeatureToggle title="特殊插件/站点强制安装" detail="解除 App unavailable / 应用不可用导致的前端安装禁用。" checked={form.codexAppForcePluginInstall} disabled={!masterEnabled || !pluginPatchAllowed} onChange={(value) => setEnhanceFlag("codexAppForcePluginInstall", value)} />
             <FeatureToggle title="模型白名单解锁" detail="读取本地和上游模型目录，补进 Codex 模型选择列表。" checked={form.codexAppModelWhitelistUnlock} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppModelWhitelistUnlock", value)} />
             <FeatureToggle title="Fast 按钮" detail="显示服务模式切换入口，控制 Standard / Fast / priority。" checked={form.codexAppServiceTierControls} disabled={!masterEnabled} onChange={(value) => setEnhanceFlag("codexAppServiceTierControls", value)} />

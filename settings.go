@@ -106,8 +106,6 @@ func defaultSettings() backendSettings {
 		ProviderSyncManualProviders:     []string{},
 		RelayProfilesEnabled:            true,
 		Enhancements:                    true,
-		CodexAppPluginAutoExpand:        true,
-		CodexAppPluginMarketplaceUnlock: true,
 		CodexAppForcePluginInstall:      true,
 		CodexAppModelWhitelistUnlock:    true,
 		CodexAppSessionDelete:           true,
@@ -315,12 +313,6 @@ func normalizeDefaultEnabledSettings(settings backendSettings) backendSettings {
 	if !settings.Enhancements && !defaults["enhancementsEnabled"] {
 		settings.Enhancements = true
 	}
-	if !settings.CodexAppPluginAutoExpand && !defaults["codexAppPluginAutoExpand"] {
-		settings.CodexAppPluginAutoExpand = true
-	}
-	if !settings.CodexAppPluginMarketplaceUnlock && !defaults["codexAppPluginMarketplaceUnlock"] {
-		settings.CodexAppPluginMarketplaceUnlock = true
-	}
 	if !settings.CodexAppForcePluginInstall && !defaults["codexAppForcePluginInstall"] {
 		settings.CodexAppForcePluginInstall = true
 	}
@@ -385,8 +377,6 @@ func defaultEnabledSettingsFromRaw() map[string]bool {
 	for _, key := range []string{
 		"relayProfilesEnabled",
 		"enhancementsEnabled",
-		"codexAppPluginAutoExpand",
-		"codexAppPluginMarketplaceUnlock",
 		"codexAppForcePluginInstall",
 		"codexAppModelWhitelistUnlock",
 		"codexAppSessionDelete",

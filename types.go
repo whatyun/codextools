@@ -19,9 +19,7 @@ type backendSettings struct {
 	RelayProfilesEnabled             bool                    `json:"relayProfilesEnabled"`
 	CCSLinkEnabled                   bool                    `json:"ccsLinkEnabled"`
 	Enhancements                     bool                    `json:"enhancementsEnabled"`
-	CodexAppPluginAutoExpand         bool                    `json:"codexAppPluginAutoExpand"`
 	CodexAppPluginEntryUnlock        bool                    `json:"codexAppPluginEntryUnlock"`
-	CodexAppPluginMarketplaceUnlock  bool                    `json:"codexAppPluginMarketplaceUnlock"`
 	CodexAppForcePluginInstall       bool                    `json:"codexAppForcePluginInstall"`
 	CodexAppModelWhitelistUnlock     bool                    `json:"codexAppModelWhitelistUnlock"`
 	CodexAppSessionDelete            bool                    `json:"codexAppSessionDelete"`

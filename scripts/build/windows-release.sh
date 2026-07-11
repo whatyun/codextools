@@ -10,6 +10,7 @@ ICON_PNG="$ROOT/assets/icons/codextools-1024.png"
 ICON_ICO="$BUILD/codextools.ico"
 RESOURCE_PREFIX="$ROOT/codextools"
 NSIS_SCRIPT="$BUILD/codextools-installer.nsi"
+NPM_CACHE="${NPM_CACHE:-$ROOT/dist/cache/npm}"
 
 rm -rf "$BUILD"
 mkdir -p "$BUILD" "$DIST"
@@ -110,7 +111,7 @@ else
 fi
 
 pushd "$ROOT/web" >/dev/null
-npm install
+npm ci --cache "$NPM_CACHE"
 npm run check
 npm run vite:build
 popd >/dev/null

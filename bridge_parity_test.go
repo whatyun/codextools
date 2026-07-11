@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -186,23 +185,17 @@ func TestBridgeSettingsIncludesRuntimeCodexAppVersion(t *testing.T) {
 	}
 }
 
-func TestInjectionScriptIncludesLocalPluginMarketplaces(t *testing.T) {
+func TestInjectionScriptDoesNotInjectLocalPluginMarketplaces(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	manifest := filepath.Join(home, ".codex", ".tmp", "plugins", ".agents", "plugins", "marketplace.json")
 	writeTestFile(t, manifest, `{"name":"openai-curated","plugins":[{"name":"writer"}]}`)
-	pluginRoot := filepath.Join(home, ".codex", ".tmp", "plugins", "plugins", "writer")
-	writeTestFile(t, filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), `{"version":"1.2.3","interface":{"displayName":"Writer"}}`)
 	script := injectionScript(57321, defaultSettings())
 
-	if !strings.Contains(script, "window.__CODEX_PLUS_PLUGIN_MARKETPLACES__") {
-		t.Fatal("injection should include local plugin marketplaces")
-	}
-	if !strings.Contains(script, `"openai-curated"`) || !strings.Contains(script, `"writer"`) {
-		t.Fatalf("injection should include local marketplace payload: %s", script[:min(len(script), 500)])
-	}
-	if !strings.Contains(script, `"__codexPlusLocalPluginPath":`+strconv.Quote(pluginRoot)) {
-		t.Fatalf("injection should include the absolute local plugin path required by modern PluginSummary payloads")
+	for _, forbidden := range []string{"window.__CODEX_PLUS_PLUGIN_MARKETPLACES__", `"openai-curated"`, `"writer"`} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("injection should rely on Codex's native marketplace instead of injecting local payload %q", forbidden)
+		}
 	}
 }
 
@@ -218,8 +211,6 @@ func TestInjectionScriptIncludesV1224RuntimeConfig(t *testing.T) {
 		"__CODEX_PLUS_FAST_STARTUP__",
 		"__CODEX_PLUS_FORCE_CHINESE_LOCALE__",
 		"__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__",
-		"codexAppPluginAutoExpand",
-		"plugin_auto_expand_finished",
 		"codexAppPasteFix",
 	} {
 		if !strings.Contains(script, expected) {

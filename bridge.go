@@ -143,9 +143,7 @@ func (r *launcherRuntime) bridgeSettingsValue(settings backendSettings) map[stri
 		"relayProfilesEnabled":            settings.RelayProfilesEnabled,
 		"ccsLinkEnabled":                  settings.CCSLinkEnabled,
 		"enhancementsEnabled":             settings.Enhancements,
-		"codexAppPluginAutoExpand":        settings.CodexAppPluginAutoExpand,
 		"codexAppPluginEntryUnlock":       settings.CodexAppPluginEntryUnlock,
-		"codexAppPluginMarketplaceUnlock": settings.CodexAppPluginMarketplaceUnlock,
 		"codexAppForcePluginInstall":      settings.CodexAppForcePluginInstall,
 		"codexAppModelWhitelistUnlock":    settings.CodexAppModelWhitelistUnlock,
 		"codexAppSessionDelete":           settings.CodexAppSessionDelete,
@@ -208,9 +206,7 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	applyBool("relayProfilesEnabled", &settings.RelayProfilesEnabled)
 	applyBool("ccsLinkEnabled", &settings.CCSLinkEnabled)
 	applyBool("enhancementsEnabled", &settings.Enhancements)
-	applyBool("codexAppPluginAutoExpand", &settings.CodexAppPluginAutoExpand)
 	applyBool("codexAppPluginEntryUnlock", &settings.CodexAppPluginEntryUnlock)
-	applyBool("codexAppPluginMarketplaceUnlock", &settings.CodexAppPluginMarketplaceUnlock)
 	applyBool("codexAppForcePluginInstall", &settings.CodexAppForcePluginInstall)
 	applyBool("codexAppModelWhitelistUnlock", &settings.CodexAppModelWhitelistUnlock)
 	applyBool("codexAppSessionDelete", &settings.CodexAppSessionDelete)
@@ -548,13 +544,12 @@ func injectionScript(helperPort uint16, settings backendSettings) string {
 	helperURL := fmt.Sprintf("http://127.0.0.1:%d", helperPort)
 	helperJSON, _ := json.Marshal(helperURL)
 	versionJSON, _ := json.Marshal(version)
-	buildJSON, _ := json.Marshal("go-20260524-1")
+	buildJSON, _ := json.Marshal("go-20260711-1")
 	imageOverlayJSON, _ := json.Marshal(imageOverlayConfig(helperPort, settings))
-	pluginMarketplacesJSON, _ := json.Marshal(localPluginMarketplacesValue(codexHomeDir()))
 	fastStartupJSON, _ := json.Marshal(map[string]any{"enabled": settings.CodexAppFastStartup, "statsigTimeoutMs": 800})
 	chineseLocaleJSON, _ := json.Marshal(map[string]any{"enabled": settings.CodexAppForceChineseLocale, "locale": "zh-CN"})
 	nativeMenuLocalizationJSON, _ := json.Marshal(map[string]any{"enabled": settings.CodexAppNativeMenuLocalization, "locale": "zh-CN"})
-	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = %s;\nwindow.__CODEX_PLUS_FAST_STARTUP__ = %s;\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = %s;\nwindow.__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, pluginMarketplacesJSON, fastStartupJSON, chineseLocaleJSON, nativeMenuLocalizationJSON, rendererInjectScript)
+	return fmt.Sprintf("window.__CODEX_SESSION_DELETE_HELPER__ = %s;\nwindow.__CODEX_PLUS_VERSION__ = %s;\nwindow.__CODEX_PLUS_BUILD__ = %s;\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = %s;\nwindow.__CODEX_PLUS_FAST_STARTUP__ = %s;\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = %s;\nwindow.__CODEX_PLUS_NATIVE_MENU_LOCALIZATION__ = %s;\n%s", helperJSON, versionJSON, buildJSON, imageOverlayJSON, fastStartupJSON, chineseLocaleJSON, nativeMenuLocalizationJSON, rendererInjectScript)
 }
 
 func imageOverlayConfig(helperPort uint16, settings backendSettings) map[string]any {

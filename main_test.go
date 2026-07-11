@@ -453,10 +453,8 @@ func TestNormalizeCodexAppPathRejectsCodexToolsMacApps(t *testing.T) {
 	}
 }
 
-func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
+func TestRendererInjectionKeepsPluginInstallWithoutMarketplaceRuntimePatches(t *testing.T) {
 	for _, required := range []string{
-		`pluginAutoExpand`,
-		`pluginMarketplaceUnlock`,
 		`forcePluginInstall`,
 		`pluginPatchDisabledInRelayMode`,
 		`activeRelayModeSupportsOfficialSites`,
@@ -471,23 +469,12 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`codexAppNativeMenuLocalization`,
 		`codexPluginLegacyEntryUnlockBeforeVersion`,
 		`26.601.2237`,
-		`codexPluginBridgeRequestUnlockFromVersion`,
-		`26.616.0`,
-		`codexPluginMarketplaceRequestPatchStrategy`,
-		`installPluginMarketplaceBridgePatch`,
-		`installPluginMarketplaceWindowEventPatchOnly`,
-		`mergeLocalPluginMarketplaces`,
-		`__CODEX_PLUS_PLUGIN_MARKETPLACES__`,
 		`parseCodexVersionParts`,
 		`compareCodexVersions`,
 		`codexPluginUnlockStrategy`,
 		`plugin_unlock_strategy_selected`,
 		`pluginUnlockStrategy === "legacy"`,
-		`pluginUnlockStrategy === "modern"`,
 		`pluginUnlockStrategy === "unknown"`,
-		`plugin_auto_expand_finished`,
-		`schedulePluginAutoExpand`,
-		`installPluginMarketplaceRequestPatch`,
 		`unblockPluginInstallButtons`,
 		`threadIdBadge`,
 		`showSaveFilePicker`,
@@ -495,10 +482,20 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`强制安装`,
 	} {
 		if !strings.Contains(rendererInjectScript, required) {
-			t.Fatalf("renderer injection should include plugin unlock capability; missing %q", required)
+			t.Fatalf("renderer injection should keep supported plugin controls; missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{
+		`pluginAutoExpand`,
+		`pluginMarketplaceUnlock`,
+		`installPluginBuildFlavorFilterPatch`,
+		`installPluginMarketplaceBridgePatch`,
+		`installPluginMarketplaceWindowEventPatchOnly`,
+		`installPluginMarketplaceRequestPatch`,
+		`mergeLocalPluginMarketplaces`,
+		`__CODEX_PLUS_PLUGIN_MARKETPLACES__`,
+		`plugin_auto_expand_finished`,
+		`schedulePluginAutoExpand`,
 		`/ads`,
 		`load_ads`,
 		`RecommendationsScreen`,
@@ -509,31 +506,7 @@ func TestRendererInjectionPatchesPluginAvailabilityWithoutAds(t *testing.T) {
 		`请作者喝咖啡`,
 	} {
 		if strings.Contains(rendererInjectScript, forbidden) {
-			t.Fatalf("renderer injection should not include ads or recommendations; found %q", forbidden)
-		}
-	}
-}
-
-func TestRendererInjectionOnlyPatchesMatchedPluginListResponses(t *testing.T) {
-	const strictCorrelation = `if (!consumePluginMarketplaceRequestId(requestIds, requestId)) return false;`
-	if count := strings.Count(rendererInjectScript, strictCorrelation); count != 2 {
-		t.Fatalf("plugin marketplace fetch and MCP responses must both require a matching list request id; found %d strict checks", count)
-	}
-	if strings.Contains(rendererInjectScript, `requestIds instanceof Set && requestIds.size > 0`) {
-		t.Fatal("plugin marketplace response patch must not fall through to unrelated responses when tracked request ids are empty")
-	}
-}
-
-func TestRendererInjectionNormalizesModernLocalPluginSummaries(t *testing.T) {
-	for _, expected := range []string{
-		`normalizeModernLocalPluginInterface`,
-		`source: { type: "local", path: localPluginPath }`,
-		`localVersion: pluginMarketplaceStringOrNull(cloned.localVersion || cloned.version)`,
-		`availability: cloned.availability === "DISABLED_BY_ADMIN" ? "DISABLED_BY_ADMIN" : "AVAILABLE"`,
-		`delete cloned.__codexPlusLocalPluginPath`,
-	} {
-		if !strings.Contains(rendererInjectScript, expected) {
-			t.Fatalf("renderer injection must normalize modern local plugin summaries; missing %q", expected)
+			t.Fatalf("renderer injection should not include removed marketplace/auto-expand patches or ads; found %q", forbidden)
 		}
 	}
 }
@@ -939,7 +912,6 @@ func TestSettingsDefaultsIncludeCodexPlusV1224Fields(t *testing.T) {
 	value := (&launcherRuntime{}).bridgeSettingsValue(settings)
 
 	for _, key := range []string{
-		"codexAppPluginAutoExpand",
 		"codexAppForceChineseLocale",
 		"codexAppFastStartup",
 		"codexAppNativeMenuLocalization",

@@ -7,6 +7,7 @@ BUILD="$ROOT/dist/build/macos"
 VERSION="${VERSION:-1.2.3}"
 TARGET_ARCHES="${TARGET_ARCHES:-arm64 amd64}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
+NPM_CACHE="${NPM_CACHE:-$ROOT/dist/cache/npm}"
 export COPYFILE_DISABLE=1
 export MACOSX_DEPLOYMENT_TARGET
 
@@ -292,7 +293,7 @@ XML
 }
 
 pushd "$ROOT/web" >/dev/null
-npm install
+npm ci --cache "$NPM_CACHE"
 npm run check
 npm run vite:build
 popd >/dev/null
