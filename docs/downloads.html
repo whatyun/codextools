@@ -214,27 +214,27 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.2.3</strong>
+          <strong>Version 1.2.4</strong>
           <ul>
-            <li>Removes the obsolete plugin/Sites marketplace unlock and auto-expand injection. Recent Codex builds use the native marketplace without request/response rewrites, global filter replacement, local payload injection, or repeated DOM scans, preventing the delayed renderer crash.</li>
-            <li>Adds a guarded conversation-history compatibility repair for unsupported legacy namespace fields, with preflight checks, backups, progress, and cancellation.</li>
-            <li>Removes the two corresponding settings while retaining native marketplace access, plugin configuration repair, legacy entry compatibility, and force install.</li>
-            <li>Improves provider-sync lock recovery while protecting active maintenance work on macOS, Linux, and Windows.</li>
-            <li>Improves native macOS dialogs and clean shutdown of background repair tasks.</li>
-            <li>Updates vulnerable build dependencies and splits frontend vendor code into cacheable chunks, eliminating npm audit, Node deprecation, and oversized-chunk warnings.</li>
-            <li>Expands automated coverage for history repair safety and the absence of retired marketplace runtime patches.</li>
+            <li>Adds reliable support for the unified Windows ChatGPT/Codex Microsoft Store app by resolving official OpenAI MSIX manifests, using declared launch entrypoints, and verifying the package, process, and debugging connection.</li>
+            <li>Synchronizes conversation-history ownership when switching official, mixed API, or relay modes, with visible status, backup locations, manual retry, and a reapply-current-provider action.</li>
+            <li>Makes history synchronization failure-safe with shared maintenance locks, complete backups, atomic writes, SQLite transactions, concurrent-change checks, and rollback across session, index, and global state files.</li>
+            <li>Separates saving a relay profile from applying it, reloads current Windows relay settings without rewriting mode files, normalizes legacy profile data, and reports upstream disconnect and failover errors clearly.</li>
+            <li>Expands privacy-safe diagnostics with stronger credential redaction, sanitized app references, structured Windows launch attempts, and clearer launch and relay failure categories.</li>
+            <li>Waits for backend confirmation before committing injected setting changes, restores the previous UI state on save failure, and preserves TOML byte-order marks and line endings during mode updates.</li>
+            <li>Adds extensive regression coverage for Windows activation, mode round trips, provider synchronization, rollback behavior, relay settings, diagnostics, and asynchronous UI state.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.2.3</strong>
+          <strong>版本 1.2.4</strong>
           <ul>
-            <li>移除已不再需要的插件/站点市场解锁和自动展开注入。新版 Codex 直接使用原生市场，不再改写请求/响应、替换全局 filter、注入本地市场数据或持续扫描 DOM，避免打开数秒后渲染进程崩溃。</li>
-            <li>新增带进程/磁盘预检、自动备份、进度和取消能力的对话历史兼容修复，用于清理旧记录中不受支持的 namespace 字段。</li>
-            <li>同步移除两个设置项，同时保留原生市场、插件配置修复、旧版入口兼容和独立的强制安装能力。</li>
-            <li>改进 macOS、Linux 和 Windows 的供应商同步锁恢复，同时保护仍在运行的维护任务。</li>
-            <li>改进 macOS 原生确认弹窗，并在退出时安全停止后台修复任务。</li>
-            <li>升级存在漏洞的构建依赖并拆分前端 vendor chunk，消除 npm audit、Node 弃用和超大 chunk 警告。</li>
-            <li>补充历史修复安全性，以及已退役市场运行时补丁不会重新进入注入脚本的自动化测试。</li>
+            <li>可靠支持 Windows 合并版 ChatGPT/Codex 商店应用：读取官方 OpenAI MSIX 清单，只使用已声明的启动入口，并校验包身份、进程与调试连接。</li>
+            <li>切换官方、混合 API 或中转模式时同步对话历史归属，并显示同步状态、备份位置、手动重试入口和“重新应用当前供应商”操作。</li>
+            <li>强化历史同步安全性：统一维护锁、完整备份、原子写入、SQLite 事务、并发改动检测，以及会话、索引和全局状态的整体回滚。</li>
+            <li>将“保存供应商配置”与“应用供应商”分开；Windows 当前中转可直接加载新服务器参数，同时修复旧配置规范化，并清楚说明上游断连和故障切换结果。</li>
+            <li>扩展隐私安全诊断：更严格地隐藏密钥与认证信息，净化应用引用，记录结构化 Windows 启动尝试，并给出更明确的启动和中转失败分类。</li>
+            <li>注入设置只有在后端确认保存成功后才更新，失败时恢复原 UI 状态；模式写入时保留 TOML 的 BOM 与换行格式。</li>
+            <li>大幅补充 Windows 激活、模式往返、供应商同步、回滚、中转设置、诊断和异步 UI 状态的回归测试。</li>
           </ul>
         </div>
       </section>
