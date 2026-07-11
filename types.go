@@ -131,6 +131,7 @@ type launchStatus struct {
 }
 
 type launcherRuntime struct {
+	settingsMu   sync.RWMutex
 	settings     backendSettings
 	debugPort    uint16
 	codexAppPath string
@@ -212,6 +213,8 @@ type providerSyncResult struct {
 	BackupDir           *string `json:"backupDir"`
 	ChangedSessionFiles int     `json:"changedSessionFiles"`
 	SQLiteRowsUpdated   int     `json:"sqliteRowsUpdated"`
+	Partial             bool    `json:"partial"`
+	RollbackStatus      string  `json:"rollbackStatus,omitempty"`
 }
 
 type codexConfigRepairResult struct {

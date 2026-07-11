@@ -21,6 +21,26 @@ func (r relayProfile) needsLocalRelayProxy() bool {
 	return r.Protocol == "responses" && (disablesImageGeneration(r) || usesSeparateImageGenerationAPI(r))
 }
 
+func (r *launcherRuntime) runtimeSettingsSnapshot() backendSettings {
+	r.settingsMu.RLock()
+	defer r.settingsMu.RUnlock()
+	return r.settings
+}
+
+func (r *launcherRuntime) setRuntimeSettings(settings backendSettings) {
+	r.settingsMu.Lock()
+	r.settings = settings
+	r.settingsMu.Unlock()
+}
+
+func (r *launcherRuntime) relaySettingsForRequest() backendSettings {
+	settings := r.runtimeSettingsSnapshot()
+	if currentRuntimeGOOS() != "windows" {
+		return settings
+	}
+	return loadRuntimeRelaySettings(settings)
+}
+
 func (r *launcherRuntime) startHelper(helperPort uint16) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", r.handleHelperHTTP)
@@ -288,15 +308,16 @@ func (r *launcherRuntime) writeOverlayImage(w http.ResponseWriter) {
 }
 
 func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Request, body []byte) {
+	settings := r.relaySettingsForRequest()
 	requestJSON := map[string]any{}
 	_ = json.Unmarshal(body, &requestJSON)
-	profile, selectErr := selectRelayForRequest(r.settings, rotationContext{ConversationID: conversationIDFromRelayRequest(requestJSON)})
+	profile, selectErr := selectRelayForRequest(settings, rotationContext{ConversationID: conversationIDFromRelayRequest(requestJSON)})
 	if selectErr != nil {
 		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": selectErr.Error()}})
 		return
 	}
 	profiles := []relayProfile{profile}
-	if fallbacks, err := fallbackRelaysAfter(r.settings, profile.ID); err == nil {
+	if fallbacks, err := fallbackRelaysAfter(settings, profile.ID); err == nil {
 		profiles = append(profiles, fallbacks...)
 	}
 	var lastErr error
@@ -309,7 +330,7 @@ func (r *launcherRuntime) forwardRelayProxy(w http.ResponseWriter, req *http.Req
 				"candidateCount": len(profiles),
 			})
 		}
-		if forwardRelayProxyAttempt(r.settings, w, req, body, candidate, attempt+1, len(profiles)) {
+		if forwardRelayProxyAttempt(settings, w, req, body, candidate, attempt+1, len(profiles)) {
 			return
 		}
 		lastErr = errors.New("upstream returned failure")
@@ -373,7 +394,7 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 		if attempt < candidateCount {
 			return false
 		}
-		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "ChatGPT Codex relay proxy request failed: " + err.Error()}})
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": relayProxyRequestFailureMessage(err, candidateCount)}})
 		return true
 	}
 	resp, err := client.Do(upstreamReq)
@@ -391,7 +412,7 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 		if attempt < candidateCount {
 			return false
 		}
-		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "ChatGPT Codex relay proxy request failed: " + err.Error()}})
+		writeHelperJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"message": relayProxyRequestFailureMessage(err, candidateCount)}})
 		return true
 	}
 	defer resp.Body.Close()
@@ -440,6 +461,18 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 	}
 	appendDiagnosticLog("relay_proxy.response", logDetail)
 	return true
+}
+
+func relayProxyRequestFailureMessage(err error, candidateCount int) string {
+	detail := err.Error()
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		detail = "upstream disconnected before returning an HTTP response (EOF)"
+	}
+	message := "ChatGPT Codex relay proxy request failed: " + detail
+	if candidateCount <= 1 {
+		return message + "; no failover candidate is configured"
+	}
+	return message + "; all configured failover candidates failed"
 }
 
 func relayRotationEventForStatus(statusCode int) rotationEvent {

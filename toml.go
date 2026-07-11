@@ -3,6 +3,7 @@ package main
 import "strings"
 
 func rootKeyString(contents, key string) string {
+	_, contents = splitTomlBOM(contents)
 	for _, line := range strings.Split(contents, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[") {
@@ -20,6 +21,7 @@ func rootKeyString(contents, key string) string {
 }
 
 func upsertRootKey(contents, key, value string) string {
+	bom, contents := splitTomlBOM(contents)
 	lines := splitLines(contents)
 	rootEnd := len(lines)
 	for i, line := range lines {
@@ -31,14 +33,15 @@ func upsertRootKey(contents, key, value string) string {
 	for i := 0; i < rootEnd; i++ {
 		if rootLineKey(lines[i]) == key {
 			lines[i] = key + " = " + value
-			return ensureTrailingNewline(strings.Join(lines, "\n"))
+			return bom + ensureTrailingNewline(strings.Join(lines, "\n"))
 		}
 	}
 	lines = append(lines[:rootEnd], append([]string{key + " = " + value}, lines[rootEnd:]...)...)
-	return ensureTrailingNewline(strings.Join(lines, "\n"))
+	return bom + ensureTrailingNewline(strings.Join(lines, "\n"))
 }
 
 func removeRootKey(contents, key string) string {
+	bom, contents := splitTomlBOM(contents)
 	var lines []string
 	inRoot := true
 	for _, line := range splitLines(contents) {
@@ -50,11 +53,11 @@ func removeRootKey(contents, key string) string {
 		}
 		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	return bom + strings.Join(lines, "\n")
 }
 
 func rootLineKey(line string) string {
-	trimmed := strings.TrimSpace(line)
+	trimmed := strings.TrimPrefix(strings.TrimSpace(line), "\ufeff")
 	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "[") {
 		return ""
 	}
@@ -66,6 +69,7 @@ func rootLineKey(line string) string {
 }
 
 func tableValues(contents, table string) map[string]string {
+	_, contents = splitTomlBOM(contents)
 	values := map[string]string{}
 	header := "[" + table + "]"
 	inTable := false
@@ -90,6 +94,7 @@ func tableValues(contents, table string) map[string]string {
 }
 
 func removeTable(contents, table string) string {
+	bom, contents := splitTomlBOM(contents)
 	header := "[" + table + "]"
 	var lines []string
 	skipping := false
@@ -106,7 +111,14 @@ func removeTable(contents, table string) string {
 			lines = append(lines, line)
 		}
 	}
-	return strings.Join(lines, "\n")
+	return bom + strings.Join(lines, "\n")
+}
+
+func splitTomlBOM(contents string) (string, string) {
+	if strings.HasPrefix(contents, "\ufeff") {
+		return "\ufeff", strings.TrimPrefix(contents, "\ufeff")
+	}
+	return "", contents
 }
 
 func upsertTomlTable(contents, table string, body []string) string {

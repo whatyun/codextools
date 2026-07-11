@@ -257,7 +257,7 @@ func (r *launcherRuntime) setBridgeSettings(payload map[string]any) map[string]a
 	if err := saveSettings(settings); err != nil {
 		return map[string]any{"status": "failed", "message": err.Error()}
 	}
-	r.settings = settings
+	r.setRuntimeSettings(settings)
 	result := r.bridgeSettingsValue(settings)
 	result["status"] = "ok"
 	return result
@@ -519,7 +519,7 @@ func (r *launcherRuntime) installBridge(ctx context.Context, websocketURL string
 		_ = conn.Close()
 		return err
 	}
-	scripts := []string{injectionScript(helperPort, r.settings)}
+	scripts := []string{injectionScript(helperPort, r.runtimeSettingsSnapshot())}
 	if bundle := enabledUserScriptBundle(); strings.TrimSpace(bundle) != "" {
 		scripts = append(scripts, bundle)
 	}

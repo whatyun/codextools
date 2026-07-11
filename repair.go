@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,9 @@ type codexCommandOutput struct {
 
 var runCodexPluginCommand = defaultRunCodexPluginCommand
 var currentRuntimeGOOS = func() string { return runtime.GOOS }
+var detectProviderSyncActiveProcesses = defaultConversationHistoryDirectProcesses
+var applyProviderSyncGlobalStateUpdate = applyGlobalStateUpdate
+var acquireProviderSyncLauncherGuard = defaultConversationHistoryLauncherGuard
 
 const (
 	providerSyncLockTTL             = 30 * time.Minute
@@ -36,41 +41,41 @@ const (
 
 func (s *server) syncProvidersNow() commandResult {
 	result := runProviderSync(codexHomeDir())
-	repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
-	payload := map[string]any{
+	status := "ok"
+	if result.Status == "skipped" {
+		status = "not_checked"
+	} else if result.Status == "failed" {
+		status = "failed"
+	}
+	message := "模式对话历史已检查，无需更新。"
+	if result.Status == "skipped" {
+		message = "模式对话历史同步暂未执行且未修改聊天记录，可重试。"
+		if detail := providerSyncExtraMessage(result.Message); detail != "" {
+			message += " " + detail
+		}
+	} else if result.Status == "failed" {
+		switch {
+		case result.Partial:
+			message = "模式对话历史同步失败且回滚失败，可能处于部分同步状态。 " + result.Message
+		case result.RollbackStatus == "rolled_back":
+			message = "模式对话历史同步失败，已回滚本次聊天记录改动。 " + result.Message
+		default:
+			message = "模式对话历史同步失败，未完成同步。 " + result.Message
+		}
+	} else if result.ChangedSessionFiles > 0 || result.SQLiteRowsUpdated > 0 {
+		message = fmt.Sprintf("模式对话历史已同步：%d 个会话文件，%d 行索引。", result.ChangedSessionFiles, result.SQLiteRowsUpdated)
+	}
+	return commandResult{
+		"status":              status,
+		"message":             strings.TrimSpace(message),
 		"syncStatus":          result.Status,
 		"targetProvider":      result.TargetProvider,
 		"changedSessionFiles": result.ChangedSessionFiles,
 		"sqliteRowsUpdated":   result.SQLiteRowsUpdated,
 		"backupDir":           result.BackupDir,
 		"syncMessage":         result.Message,
-	}
-	status := "ok"
-	if result.Status == "skipped" {
-		status = "not_checked"
-	}
-	if repairResult.Status == "failed" {
-		status = "failed"
-	}
-	message := fmt.Sprintf("供应商已同步一次：%d 个会话文件，%d 行索引。%s", result.ChangedSessionFiles, result.SQLiteRowsUpdated, providerSyncExtraMessage(result.Message))
-	if strings.TrimSpace(repairResult.Message) != "" {
-		message = strings.TrimSpace(message + " " + repairResult.Message)
-	}
-	return commandResult{
-		"status":                    status,
-		"message":                   message,
-		"syncStatus":                payload["syncStatus"],
-		"targetProvider":            payload["targetProvider"],
-		"changedSessionFiles":       payload["changedSessionFiles"],
-		"sqliteRowsUpdated":         payload["sqliteRowsUpdated"],
-		"backupDir":                 payload["backupDir"],
-		"syncMessage":               payload["syncMessage"],
-		"pluginCount":               repairResult.PluginCount,
-		"marketplaceCount":          repairResult.MarketplaceCount,
-		"pluginBackupPath":          repairResult.BackupPath,
-		"marketplaceRefreshStatus":  repairResult.MarketplaceRefreshStatus,
-		"marketplaceRefreshSummary": repairResult.MarketplaceRefreshSummary,
-		"marketplaceRefreshError":   repairResult.MarketplaceRefreshError,
+		"partial":             result.Partial,
+		"rollbackStatus":      result.RollbackStatus,
 	}
 }
 
@@ -703,32 +708,39 @@ func upsertTableKey(contents, table, key, value string) string {
 }
 
 func runProviderSync(home string) providerSyncResult {
+	return runProviderSyncWithLock(home, true)
+}
+
+// runProviderSyncWithHeldLauncherGuard is used by the managed launcher, which
+// already holds the launcher single-instance guard for its full lifetime.
+func runProviderSyncWithHeldLauncherGuard(home string) providerSyncResult {
+	return runProviderSyncWithLock(home, false)
+}
+
+func runProviderSyncWithLock(home string, acquireLauncherGuard bool) providerSyncResult {
 	if !isDir(home) {
 		return providerSyncResult{Status: "skipped", Message: "Codex home not found: " + home, TargetProvider: "openai"}
 	}
-	targetProvider := readCurrentProvider(filepath.Join(home, "config.toml"))
-	lockDir := filepath.Join(home, "tmp", "provider-sync.lock")
-	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
-		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider}
+	releaseLock, err := acquireProviderSyncLock(home, "provider-sync")
+	if err != nil {
+		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error()}
 	}
-	lockAcquired := false
-	if err := os.Mkdir(lockDir, 0o755); err != nil {
-		if stale, reason := providerSyncLockStale(lockDir, time.Now()); stale {
-			appendDiagnosticLog("provider_sync.stale_lock_removed", map[string]any{"lock": lockDir, "reason": reason})
-			_ = os.RemoveAll(lockDir)
-			if retryErr := os.Mkdir(lockDir, 0o755); retryErr == nil {
-				lockAcquired = true
-			}
+	defer releaseLock()
+	if acquireLauncherGuard {
+		releaseLauncherGuard, err := acquireProviderSyncLauncherGuard()
+		if err != nil {
+			return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error()}
 		}
-		if !lockAcquired {
-			return providerSyncResult{Status: "skipped", Message: "Provider sync lock exists: " + lockDir, TargetProvider: targetProvider}
-		}
-	} else {
-		lockAcquired = true
+		defer releaseLauncherGuard()
 	}
-	defer os.RemoveAll(lockDir)
-	_ = os.WriteFile(filepath.Join(lockDir, "owner.json"), []byte(fmt.Sprintf(`{"pid":%d,"startedAt":%d}`, os.Getpid(), time.Now().Unix())), 0o644)
+	return runProviderSyncLocked(home)
+}
 
+// runProviderSyncLocked synchronizes history while the caller holds the
+// provider-sync lock. It reads the provider only after that lock is held so a
+// mode switch cannot change config.toml between provider selection and sync.
+func runProviderSyncLocked(home string) providerSyncResult {
+	targetProvider := readCurrentProvider(filepath.Join(home, "config.toml"))
 	changes, err := collectSessionChanges(home, targetProvider)
 	if err != nil {
 		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider}
@@ -740,28 +752,178 @@ func runProviderSync(home string) providerSyncResult {
 		}
 	}
 	sqliteCount := countSQLiteUpdates(filepath.Join(home, "state_5.sqlite"), targetProvider, changes)
-	globalCount := countGlobalStateUpdates(filepath.Join(home, ".codex-global-state.json"), changes)
+	globalCount, err := countGlobalStateUpdates(filepath.Join(home, ".codex-global-state.json"), changes)
+	if err != nil {
+		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider}
+	}
 	if len(rewriteChanges) == 0 && sqliteCount == 0 && globalCount == 0 {
 		return providerSyncResult{Status: "synced", Message: "Provider sync already up to date", TargetProvider: targetProvider}
+	}
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider}
 	}
 	backupDir, err := createProviderSyncBackup(home, targetProvider, rewriteChanges)
 	if err != nil {
 		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider}
 	}
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		return providerSyncFailureBeforeMutation(targetProvider, backupDir, err)
+	}
+	globalPath := filepath.Join(home, ".codex-global-state.json")
+	globalSnapshot, err := captureProviderSyncFileSnapshot(globalPath)
+	if err != nil {
+		return providerSyncFailureBeforeMutation(targetProvider, backupDir, err)
+	}
 	if err := applySessionChanges(rewriteChanges); err != nil {
-		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider, BackupDir: &backupDir}
+		return providerSyncSessionFailure(targetProvider, backupDir, err)
+	}
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		rollbackErr := rollbackProviderSyncFiles(rewriteChanges, globalSnapshot)
+		return providerSyncRollbackFailure(targetProvider, backupDir, err, rollbackErr)
+	}
+	if _, err := applyProviderSyncGlobalStateUpdate(globalPath, changes); err != nil {
+		rollbackErr := rollbackProviderSyncFiles(rewriteChanges, globalSnapshot)
+		return providerSyncRollbackFailure(targetProvider, backupDir, err, rollbackErr)
+	}
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		rollbackErr := rollbackProviderSyncFiles(rewriteChanges, globalSnapshot)
+		return providerSyncRollbackFailure(targetProvider, backupDir, err, rollbackErr)
 	}
 	sqliteRows, sqliteErr := applySQLiteUpdates(filepath.Join(home, "state_5.sqlite"), targetProvider, changes)
 	if sqliteErr != nil {
-		_ = restoreSessionChanges(rewriteChanges)
-		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + sqliteErr.Error(), TargetProvider: targetProvider, BackupDir: &backupDir}
-	}
-	if _, err := applyGlobalStateUpdate(filepath.Join(home, ".codex-global-state.json"), changes); err != nil {
-		_ = restoreSessionChanges(rewriteChanges)
-		return providerSyncResult{Status: "skipped", Message: "Provider sync skipped: " + err.Error(), TargetProvider: targetProvider, BackupDir: &backupDir}
+		rollbackErr := rollbackProviderSyncFiles(rewriteChanges, globalSnapshot)
+		return providerSyncRollbackFailure(targetProvider, backupDir, sqliteErr, rollbackErr)
 	}
 	pruneProviderSyncBackups(home)
 	return providerSyncResult{Status: "synced", Message: "Provider sync complete", TargetProvider: targetProvider, BackupDir: &backupDir, ChangedSessionFiles: len(rewriteChanges), SQLiteRowsUpdated: sqliteRows}
+}
+
+func acquireProviderSyncLock(home, operation string) (func(), error) {
+	lockDir := filepath.Join(home, "tmp", "provider-sync.lock")
+	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
+		return nil, err
+	}
+	lockAcquired := false
+	if err := os.Mkdir(lockDir, 0o755); err != nil {
+		if stale, reason := providerSyncLockStale(lockDir, time.Now()); stale {
+			appendDiagnosticLog("provider_sync.stale_lock_removed", map[string]any{"lock": lockDir, "reason": reason})
+			_ = os.RemoveAll(lockDir)
+			if retryErr := os.Mkdir(lockDir, 0o755); retryErr == nil {
+				lockAcquired = true
+			}
+		}
+		if !lockAcquired {
+			return nil, fmt.Errorf("Provider sync lock exists: %s", lockDir)
+		}
+	} else {
+		lockAcquired = true
+	}
+	release := func() { _ = os.RemoveAll(lockDir) }
+	owner := map[string]any{"pid": os.Getpid(), "startedAt": time.Now().Unix(), "operation": strings.TrimSpace(operation)}
+	ownerData, err := json.Marshal(owner)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "owner.json"), ownerData, 0o644); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+func acquireProviderSyncMutationGuards(home, operation string) (func(), error) {
+	releaseProviderLock, err := acquireProviderSyncLock(home, operation)
+	if err != nil {
+		return nil, err
+	}
+	releaseLauncherGuard, err := acquireProviderSyncLauncherGuard()
+	if err != nil {
+		releaseProviderLock()
+		return nil, err
+	}
+	return func() {
+		releaseLauncherGuard()
+		releaseProviderLock()
+	}, nil
+}
+
+func ensureProviderSyncWritersStopped() error {
+	active, err := detectProviderSyncActiveProcesses()
+	if err != nil {
+		return fmt.Errorf("检查 ChatGPT/Codex 运行状态失败：%w", err)
+	}
+	active = uniqueConversationHistoryProcessNames(active)
+	if len(active) > 0 {
+		return fmt.Errorf("请先完全退出 ChatGPT 和 Codex 后重试（仍在运行：%s）", strings.Join(active, "、"))
+	}
+	return nil
+}
+
+func providerSyncFailureBeforeMutation(targetProvider, backupDir string, operationErr error) providerSyncResult {
+	return providerSyncResult{
+		Status:         "failed",
+		Message:        "Provider sync failed before history changes: " + operationErr.Error(),
+		TargetProvider: targetProvider,
+		BackupDir:      &backupDir,
+		RollbackStatus: "not_started",
+	}
+}
+
+func providerSyncSessionFailure(targetProvider, backupDir string, operationErr error) providerSyncResult {
+	var mutationErr *providerSyncMutationError
+	if errors.As(operationErr, &mutationErr) {
+		if mutationErr.RollbackErr == nil {
+			rollbackStatus := "rolled_back"
+			message := "Provider sync failed: " + mutationErr.OperationErr.Error() + "; provider sync changes were rolled back"
+			if mutationErr.AppliedFiles == 0 {
+				rollbackStatus = "not_started"
+				message = "Provider sync failed before a session file was changed: " + mutationErr.OperationErr.Error()
+			}
+			return providerSyncResult{
+				Status:         "failed",
+				Message:        message,
+				TargetProvider: targetProvider,
+				BackupDir:      &backupDir,
+				RollbackStatus: rollbackStatus,
+			}
+		}
+		return providerSyncResult{
+			Status:         "failed",
+			Message:        "Provider sync failed: " + mutationErr.OperationErr.Error() + "; rollback failed and history may be partially synchronized: " + mutationErr.RollbackErr.Error(),
+			TargetProvider: targetProvider,
+			BackupDir:      &backupDir,
+			Partial:        true,
+			RollbackStatus: "rollback_failed",
+		}
+	}
+	return providerSyncResult{
+		Status:         "failed",
+		Message:        "Provider sync failed and history state may be partial: " + operationErr.Error(),
+		TargetProvider: targetProvider,
+		BackupDir:      &backupDir,
+		Partial:        true,
+		RollbackStatus: "rollback_unknown",
+	}
+}
+
+func providerSyncRollbackFailure(targetProvider, backupDir string, operationErr, rollbackErr error) providerSyncResult {
+	message := "Provider sync failed: " + operationErr.Error()
+	if rollbackErr == nil {
+		message += "; provider sync changes were rolled back"
+		return providerSyncResult{Status: "failed", Message: message, TargetProvider: targetProvider, BackupDir: &backupDir, RollbackStatus: "rolled_back"}
+	}
+	message += "; rollback failed and history may be partially synchronized: " + rollbackErr.Error()
+	return providerSyncResult{Status: "failed", Message: message, TargetProvider: targetProvider, BackupDir: &backupDir, Partial: true, RollbackStatus: "rollback_failed"}
+}
+
+func rollbackProviderSyncFiles(changes []sessionChange, globalSnapshot providerSyncFileSnapshot) error {
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		return fmt.Errorf("rollback not attempted because a history writer is active: %w", err)
+	}
+	globalErr := restoreProviderSyncFileSnapshot(globalSnapshot)
+	sessionErr := restoreSessionChanges(changes)
+	return errors.Join(globalErr, sessionErr)
 }
 
 func providerSyncLockStale(lockDir string, now time.Time) (bool, string) {
@@ -864,7 +1026,9 @@ func collectSessionChanges(home, targetProvider string) ([]sessionChange, error)
 			continue
 		}
 		var record map[string]any
-		if json.Unmarshal([]byte(firstLine), &record) != nil {
+		decoder := json.NewDecoder(strings.NewReader(firstLine))
+		decoder.UseNumber()
+		if decoder.Decode(&record) != nil {
 			continue
 		}
 		payload, ok := record["payload"].(map[string]any)
@@ -1090,27 +1254,192 @@ func createProviderSyncBackup(home, targetProvider string, changes []sessionChan
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return "", err
 	}
+	fail := func(err error) (string, error) {
+		_ = os.RemoveAll(backupDir)
+		return "", err
+	}
 	for _, name := range []string{"config.toml", ".codex-global-state.json", ".codex-global-state.json.bak"} {
-		_ = copyFileIfExists(filepath.Join(home, name), filepath.Join(backupDir, name))
+		if _, err := copyProviderSyncBackupFileIfExists(filepath.Join(home, name), filepath.Join(backupDir, name)); err != nil {
+			return fail(fmt.Errorf("备份 %s 失败：%w", name, err))
+		}
 	}
 	dbDir := filepath.Join(backupDir, "db")
 	for _, name := range []string{"state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"} {
-		if fileExists(filepath.Join(home, name)) {
-			_ = os.MkdirAll(dbDir, 0o755)
-			_ = copyFileIfExists(filepath.Join(home, name), filepath.Join(dbDir, name))
+		if _, err := copyProviderSyncBackupFileIfExists(filepath.Join(home, name), filepath.Join(dbDir, name)); err != nil {
+			return fail(fmt.Errorf("备份 %s 失败：%w", name, err))
 		}
 	}
 	manifest := make([]map[string]any, 0, len(changes))
 	for _, change := range changes {
-		manifest = append(manifest, map[string]any{"path": change.Path, "originalFirstLine": change.OriginalFirstLine, "separator": change.Separator})
+		relative, err := filepath.Rel(home, change.Path)
+		if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			if err == nil {
+				err = fmt.Errorf("会话文件不在 Codex home 内")
+			}
+			return fail(fmt.Errorf("无法为 %s 创建安全备份路径：%w", change.Path, err))
+		}
+		backupRelative := filepath.Join("history", relative)
+		backupPath := filepath.Join(backupDir, backupRelative)
+		if err := copyProviderSyncBackupFile(change.Path, backupPath); err != nil {
+			return fail(fmt.Errorf("备份会话文件 %s 失败：%w", change.Path, err))
+		}
+		info, err := os.Stat(backupPath)
+		if err != nil {
+			return fail(fmt.Errorf("读取会话备份状态 %s 失败：%w", backupPath, err))
+		}
+		manifest = append(manifest, map[string]any{
+			"path":              change.Path,
+			"backupPath":        filepath.ToSlash(backupRelative),
+			"originalFirstLine": change.OriginalFirstLine,
+			"size":              info.Size(),
+			"mode":              uint32(info.Mode().Perm()),
+		})
 	}
 	if err := atomicWriteJSON(filepath.Join(backupDir, "session-meta-backup.json"), manifest); err != nil {
-		return "", err
+		return fail(err)
 	}
 	if err := atomicWriteJSON(filepath.Join(backupDir, "metadata.json"), map[string]any{"managedBy": "ChatGPT Codex Tools provider sync", "targetProvider": targetProvider}); err != nil {
-		return "", err
+		return fail(err)
 	}
 	return backupDir, nil
+}
+
+func copyProviderSyncBackupFileIfExists(source, target string) (bool, error) {
+	info, err := os.Stat(source)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("%s 是目录", source)
+	}
+	return true, copyProviderSyncBackupFile(source, target)
+}
+
+func copyProviderSyncBackupFile(source, target string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	inputClosed := false
+	defer func() {
+		if !inputClosed {
+			_ = input.Close()
+		}
+	}()
+	before, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	if !before.Mode().IsRegular() {
+		return fmt.Errorf("%s 不是普通文件", source)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(target), ".provider-sync-backup-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := io.Copy(temp, input); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	after, err := input.Stat()
+	if err != nil {
+		_ = temp.Close()
+		return err
+	}
+	pathInfo, err := os.Stat(source)
+	if err != nil || !os.SameFile(before, pathInfo) || after.Size() != before.Size() || after.ModTime().UnixNano() != before.ModTime().UnixNano() || pathInfo.Size() != before.Size() || pathInfo.ModTime().UnixNano() != before.ModTime().UnixNano() {
+		_ = temp.Close()
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%s 在备份期间发生变化", source)
+	}
+	if err := input.Close(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	inputClosed = true
+	if err := prepareConversationHistoryTemp(temp, before.Mode()); err != nil {
+		return err
+	}
+	return replaceFile(tempPath, target)
+}
+
+type providerSyncFileSnapshot struct {
+	Path     string
+	Exists   bool
+	Contents []byte
+	Mode     os.FileMode
+}
+
+func captureProviderSyncFileSnapshot(path string) (providerSyncFileSnapshot, error) {
+	snapshot := providerSyncFileSnapshot{Path: path}
+	before, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return snapshot, nil
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	if !before.Mode().IsRegular() {
+		return snapshot, fmt.Errorf("%s 不是普通文件", path)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return snapshot, err
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		return snapshot, err
+	}
+	if !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime().UnixNano() != after.ModTime().UnixNano() {
+		return snapshot, fmt.Errorf("%s 在读取期间发生变化", path)
+	}
+	snapshot.Exists = true
+	snapshot.Contents = contents
+	snapshot.Mode = before.Mode()
+	return snapshot, nil
+}
+
+func restoreProviderSyncFileSnapshot(snapshot providerSyncFileSnapshot) error {
+	if !snapshot.Exists {
+		if err := os.Remove(snapshot.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return writeProviderSyncAtomicFile(snapshot.Path, snapshot.Contents, snapshot.Mode)
+}
+
+func writeProviderSyncAtomicFile(path string, contents []byte, mode os.FileMode) error {
+	if mode.Perm() == 0 {
+		mode = 0o644
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".provider-sync-file-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(contents); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := prepareConversationHistoryTemp(temp, mode); err != nil {
+		return err
+	}
+	return replaceFile(tempPath, path)
 }
 
 func copyFileIfExists(source, target string) error {
@@ -1124,22 +1453,131 @@ func copyFileIfExists(source, target string) error {
 	return os.WriteFile(target, data, 0o644)
 }
 
+type providerSyncMutationError struct {
+	OperationErr error
+	RollbackErr  error
+	AppliedFiles int
+}
+
+func (e *providerSyncMutationError) Error() string {
+	if e.RollbackErr != nil {
+		return fmt.Sprintf("%v; rollback failed: %v", e.OperationErr, e.RollbackErr)
+	}
+	if e.AppliedFiles > 0 {
+		return e.OperationErr.Error() + "；已回滚本次已修改文件"
+	}
+	return e.OperationErr.Error()
+}
+
+func (e *providerSyncMutationError) Unwrap() error {
+	return e.OperationErr
+}
+
 func applySessionChanges(changes []sessionChange) error {
+	applied := make([]sessionChange, 0, len(changes))
 	for _, change := range changes {
-		if err := os.WriteFile(change.Path, []byte(change.NextFirstLine+change.Separator), 0o644); err != nil {
-			return err
+		if err := rewriteProviderSyncSessionFirstLine(change.Path, change.OriginalFirstLine, change.NextFirstLine); err != nil {
+			rollbackErr := restoreSessionChanges(applied)
+			return &providerSyncMutationError{
+				OperationErr: fmt.Errorf("更新会话文件 %s 失败：%w", change.Path, err),
+				RollbackErr:  rollbackErr,
+				AppliedFiles: len(applied),
+			}
 		}
+		applied = append(applied, change)
 	}
 	return nil
 }
 
 func restoreSessionChanges(changes []sessionChange) error {
-	for _, change := range changes {
-		if err := os.WriteFile(change.Path, []byte(change.OriginalFirstLine+change.Separator), 0o644); err != nil {
-			return err
+	var rollbackErrors []error
+	for index := len(changes) - 1; index >= 0; index-- {
+		change := changes[index]
+		if err := rewriteProviderSyncSessionFirstLine(change.Path, change.NextFirstLine, change.OriginalFirstLine); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("%s: %w", change.Path, err))
 		}
 	}
-	return nil
+	return errors.Join(rollbackErrors...)
+}
+
+func rewriteProviderSyncSessionFirstLine(path, expectedFirstLine, replacementFirstLine string) error {
+	input, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	inputClosed := false
+	defer func() {
+		if !inputClosed {
+			_ = input.Close()
+		}
+	}()
+	before, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	contents, err := io.ReadAll(input)
+	if err != nil {
+		return err
+	}
+	after, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	if after.Size() != before.Size() || after.ModTime().UnixNano() != before.ModTime().UnixNano() {
+		return fmt.Errorf("%s 在读取期间发生变化", path)
+	}
+	firstLine, separator := splitFirstLine(string(contents))
+	firstLineBody, firstLineSuffix := providerSyncFirstLineParts(firstLine)
+	expectedBody, _ := providerSyncFirstLineParts(expectedFirstLine)
+	replacementBody, _ := providerSyncFirstLineParts(replacementFirstLine)
+	if firstLineBody == replacementBody {
+		return nil
+	}
+	if firstLineBody != expectedBody {
+		return fmt.Errorf("%s 的会话元数据已变化", path)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".provider-sync-session-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := io.WriteString(temp, replacementBody+firstLineSuffix+separator); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := prepareConversationHistoryTemp(temp, before.Mode()); err != nil {
+		return err
+	}
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, pathInfo) || pathInfo.Size() != before.Size() || pathInfo.ModTime().UnixNano() != before.ModTime().UnixNano() {
+		return fmt.Errorf("%s 在原子替换前发生变化", path)
+	}
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		return err
+	}
+	finalInfo, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, finalInfo) || finalInfo.Size() != before.Size() || finalInfo.ModTime().UnixNano() != before.ModTime().UnixNano() {
+		return fmt.Errorf("%s 在最终原子替换前发生变化", path)
+	}
+	if err := input.Close(); err != nil {
+		return err
+	}
+	inputClosed = true
+	return replaceFile(tempPath, path)
+}
+
+func providerSyncFirstLineParts(line string) (string, string) {
+	if strings.HasSuffix(line, "\r") {
+		return strings.TrimSuffix(line, "\r"), "\r"
+	}
+	return line, ""
 }
 
 func countSQLiteUpdates(path, targetProvider string, changes []sessionChange) int {
@@ -1201,69 +1639,100 @@ func countMissingSQLiteThreads(path string, changes []sessionChange) int {
 }
 
 func applySQLiteUpdates(path, targetProvider string, changes []sessionChange) (int, error) {
-	if !fileExists(path) || !sqliteHasColumn(path, "threads", "id") {
+	if !fileExists(path) {
 		return 0, nil
 	}
-	providerRows := 0
-	if sqliteHasColumn(path, "threads", "model_provider") {
-		rows, err := sqliteExecRows(path, "UPDATE threads SET model_provider = ? WHERE COALESCE(model_provider, '') <> ?", targetProvider, targetProvider)
-		providerRows = rows
-		if err != nil {
-			return 0, err
-		}
-	}
-	totalRows := providerRows
-	if sqliteHasColumn(path, "threads", "thread_source") {
-		for _, change := range changes {
-			if !change.HasUserEvent || change.ThreadID == "" {
-				continue
-			}
-			rows, err := sqliteExecRows(path, "UPDATE threads SET thread_source = 'user' WHERE id = ? AND COALESCE(thread_source, '') = ''", change.ThreadID)
-			totalRows += rows
-			if err != nil {
-				return totalRows, err
-			}
-		}
-	}
-	if sqliteHasColumn(path, "threads", "has_user_event") {
-		for _, change := range changes {
-			if !change.HasUserEvent || change.ThreadID == "" {
-				continue
-			}
-			rows, err := sqliteExecRows(path, "UPDATE threads SET has_user_event = 1 WHERE id = ? AND COALESCE(has_user_event, 0) <> 1", change.ThreadID)
-			totalRows += rows
-			if err != nil {
-				return totalRows, err
-			}
-		}
-	}
-	if sqliteHasColumn(path, "threads", "cwd") {
-		for _, change := range changes {
-			if change.ThreadID == "" || change.CWD == "" {
-				continue
-			}
-			rows, err := sqliteExecRows(path, "UPDATE threads SET cwd = ? WHERE id = ? AND COALESCE(cwd, '') <> ?", change.CWD, change.ThreadID, change.CWD)
-			totalRows += rows
-			if err != nil {
-				return totalRows, err
-			}
-		}
-	}
-	inserted, err := insertMissingSQLiteThreads(path, targetProvider, changes)
-	totalRows += inserted
-	return totalRows, err
-}
-
-func insertMissingSQLiteThreads(path, targetProvider string, changes []sessionChange) (int, error) {
 	db, err := openSQLite(path)
 	if err != nil {
 		return 0, err
 	}
 	defer db.Close()
 	columns, err := sqliteTableColumns(db, "threads")
-	if err != nil || len(columns) == 0 || !containsString(columns, "id") {
+	if err != nil {
 		return 0, err
 	}
+	if len(columns) == 0 || !containsString(columns, "id") {
+		return 0, nil
+	}
+	columnSet := map[string]bool{}
+	for _, column := range columns {
+		columnSet[column] = true
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	execRows := func(query string, args ...any) (int, error) {
+		result, execErr := tx.Exec(query, args...)
+		if execErr != nil {
+			return 0, execErr
+		}
+		rows, _ := result.RowsAffected()
+		return int(rows), nil
+	}
+	totalRows := 0
+	if columnSet["model_provider"] {
+		rows, err := execRows("UPDATE threads SET model_provider = ? WHERE COALESCE(model_provider, '') <> ?", targetProvider, targetProvider)
+		if err != nil {
+			return 0, err
+		}
+		totalRows += rows
+	}
+	if columnSet["thread_source"] {
+		for _, change := range changes {
+			if !change.HasUserEvent || change.ThreadID == "" {
+				continue
+			}
+			rows, err := execRows("UPDATE threads SET thread_source = 'user' WHERE id = ? AND COALESCE(thread_source, '') = ''", change.ThreadID)
+			if err != nil {
+				return 0, err
+			}
+			totalRows += rows
+		}
+	}
+	if columnSet["has_user_event"] {
+		for _, change := range changes {
+			if !change.HasUserEvent || change.ThreadID == "" {
+				continue
+			}
+			rows, err := execRows("UPDATE threads SET has_user_event = 1 WHERE id = ? AND COALESCE(has_user_event, 0) <> 1", change.ThreadID)
+			if err != nil {
+				return 0, err
+			}
+			totalRows += rows
+		}
+	}
+	if columnSet["cwd"] {
+		for _, change := range changes {
+			if change.ThreadID == "" || change.CWD == "" {
+				continue
+			}
+			rows, err := execRows("UPDATE threads SET cwd = ? WHERE id = ? AND COALESCE(cwd, '') <> ?", change.CWD, change.ThreadID, change.CWD)
+			if err != nil {
+				return 0, err
+			}
+			totalRows += rows
+		}
+	}
+	inserted, err := insertMissingSQLiteThreadsTx(tx, columns, targetProvider, changes)
+	if err != nil {
+		return 0, err
+	}
+	totalRows += inserted
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	committed = true
+	return totalRows, nil
+}
+
+func insertMissingSQLiteThreadsTx(tx *sql.Tx, columns []string, targetProvider string, changes []sessionChange) (int, error) {
 	columnSet := map[string]bool{}
 	for _, column := range columns {
 		columnSet[column] = true
@@ -1276,7 +1745,7 @@ func insertMissingSQLiteThreads(path, targetProvider string, changes []sessionCh
 		}
 		seen[change.ThreadID] = true
 		var exists int
-		if err := db.QueryRow("SELECT COUNT(*) FROM threads WHERE id = ?", change.ThreadID).Scan(&exists); err != nil {
+		if err := tx.QueryRow("SELECT COUNT(*) FROM threads WHERE id = ?", change.ThreadID).Scan(&exists); err != nil {
 			return inserted, err
 		}
 		if exists > 0 {
@@ -1302,7 +1771,7 @@ func insertMissingSQLiteThreads(path, targetProvider string, changes []sessionCh
 			quoted[index] = quoteSQLiteIdentifier(column)
 		}
 		query := "INSERT INTO threads (" + strings.Join(quoted, ", ") + ") VALUES (" + sqlitePlaceholders(len(insertColumns)) + ")"
-		if _, err := db.Exec(query, args...); err != nil {
+		if _, err := tx.Exec(query, args...); err != nil {
 			return inserted, err
 		}
 		inserted++
@@ -1483,12 +1952,31 @@ func sqliteArgs(args []string) []any {
 	return values
 }
 
-func loadGlobalState(path string) map[string]any {
-	var state map[string]any
-	if err := readJSON(path, &state); err != nil || state == nil {
-		return map[string]any{}
+func loadGlobalState(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]any{}, nil
 	}
-	return state
+	if err != nil {
+		return nil, fmt.Errorf("读取 global state 失败：%w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var state map[string]any
+	if err := decoder.Decode(&state); err != nil {
+		return nil, fmt.Errorf("解析 global state 失败：%w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("存在多余 JSON 值")
+		}
+		return nil, fmt.Errorf("解析 global state 失败：%w", err)
+	}
+	if state == nil {
+		return nil, errors.New("解析 global state 失败：根值必须是 JSON 对象")
+	}
+	return state, nil
 }
 
 func normalizedGlobalState(state map[string]any, changes []sessionChange) map[string]any {
@@ -1532,8 +2020,11 @@ func normalizedGlobalState(state map[string]any, changes []sessionChange) map[st
 	return next
 }
 
-func countGlobalStateUpdates(path string, changes []sessionChange) int {
-	state := loadGlobalState(path)
+func countGlobalStateUpdates(path string, changes []sessionChange) (int, error) {
+	state, err := loadGlobalState(path)
+	if err != nil {
+		return 0, err
+	}
 	next := normalizedGlobalState(state, changes)
 	count := 0
 	for key, value := range next {
@@ -1541,11 +2032,14 @@ func countGlobalStateUpdates(path string, changes []sessionChange) int {
 			count++
 		}
 	}
-	return count
+	return count, nil
 }
 
 func applyGlobalStateUpdate(path string, changes []sessionChange) (int, error) {
-	state := loadGlobalState(path)
+	state, err := loadGlobalState(path)
+	if err != nil {
+		return 0, err
+	}
 	next := normalizedGlobalState(state, changes)
 	count := 0
 	for key, value := range next {

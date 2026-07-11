@@ -1580,11 +1580,31 @@
   }
 
   async function setBackendSetting(key, value) {
+    const previousSettings = codexPlusBackendSettings;
     codexPlusBackendSettings = { ...codexPlusBackendSettings, [key]: value };
     refreshCodexPlusBackendToggles();
     try {
-      const settings = await postJson("/settings/set", { [key]: value });
+      const settings = await postJson("/settings/set", { [key]: value }, { timeoutMs: 15000 });
+      if (!settings || settings.status !== "ok") {
+        codexPlusBackendSettings = previousSettings;
+        sendCodexPlusDiagnostic("backend_setting_save_failed", {
+          key,
+          status: settings?.status || "failed",
+          message: settings?.message || "设置保存失败",
+          timeout: !!settings?.timeout,
+        });
+        return false;
+      }
       codexPlusBackendSettings = { ...codexPlusBackendSettings, ...settings };
+      return true;
+    } catch (error) {
+      codexPlusBackendSettings = previousSettings;
+      sendCodexPlusDiagnostic("backend_setting_save_failed", {
+        key,
+        status: "failed",
+        message: error?.message || String(error),
+      });
+      return false;
     } finally {
       refreshCodexPlusBackendToggles();
     }

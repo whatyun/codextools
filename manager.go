@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -18,7 +19,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+)
+
+const openAIDesktopPublisherID = "2p2nqsd0c76g0"
+
+var (
+	windowsPackagedAUMIDCache      sync.Map
+	windowsPackagedLaunchInfoCache sync.Map
 )
 
 func runManager() error {
@@ -108,7 +117,8 @@ func (s *server) handleCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func commandTimeout(command string) time.Duration {
-	if command == "install_update" {
+	switch command {
+	case "install_update", "sync_providers_now", "apply_relay_injection", "apply_pure_api_injection", "clear_relay_injection":
 		return 5 * time.Minute
 	}
 	return 45 * time.Second
@@ -326,6 +336,14 @@ func failed(message string, payload map[string]any) commandResult {
 	return result
 }
 
+func warning(message string, payload map[string]any) commandResult {
+	result := commandResult{"status": "not_checked", "message": message}
+	for key, value := range payload {
+		result[key] = value
+	}
+	return result
+}
+
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("content-type", "application/json; charset=utf-8")
 	encoder := json.NewEncoder(w)
@@ -359,6 +377,9 @@ func (s *server) repairCodexApp(ctx context.Context) commandResult {
 	if len(candidates) == 0 {
 		payload := settingsPayloadValue(settings)
 		attachChatGPTInstallPayload(payload, candidates, download)
+		if runtime.GOOS == "windows" {
+			return failed("未找到 Codex 与 ChatGPT 合并后的 Windows 新版应用。请先从 Microsoft Store 更新/安装 ChatGPT；也可选择 WindowsApps 外的 ChatGPT.exe 或 Codex.exe。", payload)
+		}
 		return failed("未找到可直接启动的 ChatGPT 桌面应用。请安装 ChatGPT 桌面应用，或手动选择 ChatGPT.app / ChatGPT.exe。", payload)
 	}
 	selected := candidates[0]
@@ -386,7 +407,7 @@ func codexAppRepairCandidates(saved string) []string {
 		if path == "" {
 			return
 		}
-		if runtime.GOOS == "windows" && !windowsCodexPathSupportsDirectLaunch(path) {
+		if runtime.GOOS == "windows" && !windowsCodexPathSupportsLaunch(path) {
 			return
 		}
 		for _, existing := range candidates {
@@ -400,17 +421,11 @@ func codexAppRepairCandidates(saved string) []string {
 		add(normalized)
 	}
 	if runtime.GOOS == "windows" {
-		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
-			add(local)
-		}
 		if installed := resolveWindowsCodexFromInstalledApps(); installed != "" {
 			add(installed)
 		}
-		if latest := findLatestWindowsCodexAppDirFromRoots(windowsAppPackageRoots()); latest != "" {
-			add(latest)
-		}
-		if alias := windowsCodexExecutionAlias(); alias != "" && fileExists(alias) {
-			add(alias)
+		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
+			add(local)
 		}
 	}
 	if installed := resolveCodexApp(""); installed != "" {
@@ -523,20 +538,20 @@ func installGuidePlatformGuide(goos string) map[string]any {
 		guide["launchTargetLabel"] = "ChatGPT.app"
 	case "windows":
 		guide["title"] = "Windows 新手引导"
-		guide["systemDescription"] = "Windows 会检查 ChatGPT.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。"
+		guide["systemDescription"] = "Windows 会同时识别 Codex 与 ChatGPT 合并后的 OpenAI.Codex / OpenAI.ChatGPT MSIX 包，以及 Codex.exe / ChatGPT.exe。"
 		guide["desktopRuntimeDescription"] = "Windows 使用 WebView2 桌面窗口运行管理器。"
 		guide["installTitle"] = "Windows 官方安装"
 		guide["installActionLabel"] = "打开 ChatGPT 下载页"
 		guide["installSourceLabel"] = "官方页面"
-		guide["installDescription"] = "请安装 ChatGPT 桌面应用；如自动检测失败，手动选择 ChatGPT.exe 或其安装目录。"
-		guide["manualPrimaryLabel"] = "选择 ChatGPT.exe"
+		guide["installDescription"] = "请安装新版 ChatGPT 桌面应用；原 Codex 应用更新后也会成为该合并版。自动检测失败时可选择 Codex.exe、ChatGPT.exe 或安装目录。"
+		guide["manualPrimaryLabel"] = "选择 ChatGPT.exe / Codex.exe"
 		guide["manualPrimaryMode"] = "file"
 		guide["manualSecondaryLabel"] = "选择安装目录"
 		guide["manualSecondaryMode"] = "folder"
-		guide["detectionNote"] = "优先选择可直接执行的 ChatGPT.exe；如果是 Microsoft Store/MSIX 版，可能无法稳定接收调试端口参数。"
-		guide["pathHint"] = `C:\Users\你\AppData\Local\Programs\ChatGPT\ChatGPT.exe`
+		guide["detectionNote"] = "Microsoft Store/MSIX 版不会扫描或信任任意 WindowsApps 路径；仅使用已注册官方包清单声明的 App Execution Alias 或 FullTrust 入口，并以真实 AppUserModelID、进程包身份和调试端口完成验证。"
+		guide["pathHint"] = `OpenAI.Codex / OpenAI.ChatGPT，或 WindowsApps 外的 Codex.exe / ChatGPT.exe`
 		guide["launchMethodLabel"] = "启动方式"
-		guide["launchTargetLabel"] = "ChatGPT.exe"
+		guide["launchTargetLabel"] = "AppUserModelID 或可执行文件"
 	default:
 		guide["title"] = platformDisplayName(goos) + " 受限引导"
 		guide["systemDescription"] = "当前平台只提供基础状态检查；完整新手引导重点支持 macOS 和 Windows。"
@@ -657,9 +672,18 @@ func codexPathState(path string) map[string]any {
 		if appUserModelID := packagedWindowsAppUserModelID(path); appUserModelID != "" {
 			state["appUserModelId"] = appUserModelID
 		}
+		if isWindowsPackagedAppReference(path) {
+			state["status"] = "found"
+			state["message"] = "已保存新版 Windows ChatGPT 的稳定 AppUserModelID；应用更新后无需跟随版本目录变化。"
+		}
 		if isWindowsProtectedCodexDirectLaunchPath(path, executable) {
-			state["status"] = "limited"
-			state["message"] = "Windows Store/MSIX 包目录不能作为 ChatGPT Codex 的直接启动路径。"
+			if stringFromAny(state["appUserModelId"]) != "" {
+				state["status"] = "found"
+				state["message"] = "已检测到新版 Windows Store/MSIX ChatGPT；将通过应用标识启动并验证调试端口。"
+			} else {
+				state["status"] = "limited"
+				state["message"] = "已检测到 Windows Store/MSIX 应用，但未能解析应用启动标识。"
+			}
 		}
 	}
 	return state
@@ -668,7 +692,9 @@ func codexPathState(path string) map[string]any {
 func codexAppKind(path string) string {
 	lower := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
 	base := strings.ToLower(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
-	if strings.Contains(lower, "chatgpt") || strings.EqualFold(base, "chatgpt") {
+	if strings.Contains(lower, "chatgpt") || strings.EqualFold(base, "chatgpt") ||
+		isWindowsTargetAppExecutableName(filepath.Base(path)) || isWindowsCodexPackageName(windowsPackageNameFromPath(path)) ||
+		isWindowsPackagedAppReference(path) {
 		return "chatgpt"
 	}
 	return "unknown"
@@ -685,11 +711,13 @@ func codexAppDisplayName(path string) string {
 
 func isWindowsTargetAppExecutableName(name string) bool {
 	return strings.EqualFold(name, "ChatGPT.exe") ||
-		strings.EqualFold(name, "chatgpt.exe")
+		strings.EqualFold(name, "chatgpt.exe") ||
+		strings.EqualFold(name, "Codex.exe") ||
+		strings.EqualFold(name, "codex.exe")
 }
 
 func windowsTargetAppExecutableNames() []string {
-	return []string{"ChatGPT.exe", "chatgpt.exe"}
+	return []string{"ChatGPT.exe", "chatgpt.exe", "Codex.exe", "codex.exe"}
 }
 
 func hasWindowsTargetAppExecutable(path string) bool {
@@ -707,9 +735,12 @@ func normalizeOpenAIAppPackageIdentity(identity string) (string, bool) {
 	switch lower {
 	case "openai.chatgpt":
 		return "OpenAI.ChatGPT", true
-	}
-	if strings.HasPrefix(lower, "openai.chatgpt") {
-		return trimmed, true
+	case "openai.chatgptbeta":
+		return "OpenAI.ChatGPTBeta", true
+	case "openai.codex":
+		return "OpenAI.Codex", true
+	case "openai.codexbeta":
+		return "OpenAI.CodexBeta", true
 	}
 	return "", false
 }
@@ -726,7 +757,9 @@ func shortcutState(path string) map[string]any {
 
 func resolveCodexApp(saved string) string {
 	if normalized := normalizeCodexAppPath(saved); normalized != "" {
-		return normalized
+		if runtime.GOOS != "windows" || windowsCodexPathSupportsLaunch(normalized) {
+			return normalized
+		}
 	}
 	if runtime.GOOS == "darwin" {
 		candidates := []string{"/Applications/ChatGPT.app"}
@@ -742,14 +775,11 @@ func resolveCodexApp(saved string) string {
 		}
 	}
 	if runtime.GOOS == "windows" {
-		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
-			return local
-		}
 		if installed := resolveWindowsCodexFromInstalledApps(); installed != "" {
 			return installed
 		}
-		if latest := findLatestWindowsCodexAppDirFromRoots(windowsAppPackageRoots()); latest != "" {
-			return latest
+		if local := resolveWindowsCodexFromCommonPaths(); local != "" {
+			return local
 		}
 	}
 	return ""
@@ -760,8 +790,10 @@ func resolveWindowsCodexFromInstalledApps() string {
 		return ""
 	}
 	commands := [][]string{
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.ChatGPT* -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
-		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.ChatGPT*' -or $_.PackageFullName -like 'OpenAI.ChatGPT*' } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Where-Object { $_.PackageFamilyName -ieq 'OpenAI.Codex_2p2nqsd0c76g0' } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.PackageFamilyName -ieq 'OpenAI.ChatGPT_2p2nqsd0c76g0' } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.CodexBeta -ErrorAction SilentlyContinue | Where-Object { $_.PackageFamilyName -ieq 'OpenAI.CodexBeta_2p2nqsd0c76g0' } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
+		{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Get-AppxPackage -Name OpenAI.ChatGPTBeta -ErrorAction SilentlyContinue | Where-Object { $_.PackageFamilyName -ieq 'OpenAI.ChatGPTBeta_2p2nqsd0c76g0' } | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty InstallLocation`},
 	}
 	for _, command := range commands {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -801,7 +833,7 @@ func resolveWindowsCodexFromCommonPaths() string {
 			candidates = append(candidates, path)
 		}
 	}
-	for _, key := range []string{"CHATGPT_APP_PATH", "CHATGPT_PATH", "CHATGPT_DESKTOP_PATH"} {
+	for _, key := range []string{"CHATGPT_APP_PATH", "CHATGPT_PATH", "CHATGPT_DESKTOP_PATH", "CODEX_APP_PATH", "CODEX_PATH", "CODEX_DESKTOP_PATH"} {
 		addCandidate(os.Getenv(key))
 	}
 	for _, root := range []string{os.Getenv("LOCALAPPDATA"), os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432")} {
@@ -812,14 +844,10 @@ func resolveWindowsCodexFromCommonPaths() string {
 		addCandidate(filepath.Join(root, "ChatGPT"))
 		addCandidate(filepath.Join(root, "OpenAI", "ChatGPT"))
 		addCandidate(filepath.Join(root, "OpenAI ChatGPT"))
-		for _, alias := range []string{
-			filepath.Join(root, "Microsoft", "WindowsApps", "ChatGPT.exe"),
-			filepath.Join(root, "Microsoft", "WindowsApps", "chatgpt.exe"),
-		} {
-			if fileExists(alias) {
-				addCandidate(alias)
-			}
-		}
+		addCandidate(filepath.Join(root, "Programs", "Codex"))
+		addCandidate(filepath.Join(root, "Codex"))
+		addCandidate(filepath.Join(root, "OpenAI", "Codex"))
+		addCandidate(filepath.Join(root, "OpenAI Codex"))
 	}
 	for _, candidate := range candidates {
 		if normalized := normalizeCodexAppPath(candidate); normalized != "" {
@@ -835,14 +863,22 @@ func normalizeCodexAppPath(path string) string {
 		return ""
 	}
 	if runtime.GOOS == "windows" {
+		if reference := normalizeWindowsPackagedAppReference(path); reference != "" {
+			if packagedWindowsAppUserModelID(reference) != "" {
+				return reference
+			}
+			return ""
+		}
 		if normalized := normalizeWindowsPackageAppPath(path); normalized != "" {
+			if isWindowsProtectedAppPackagePath(normalized) {
+				if appUserModelID := packagedWindowsAppUserModelID(normalized); appUserModelID != "" {
+					return windowsPackagedAppReference(appUserModelID)
+				}
+			}
 			return normalized
 		}
 	}
 	if runtime.GOOS == "windows" && isWindowsAppsExecutionAlias(path) {
-		if fileExists(path) {
-			return path
-		}
 		return ""
 	}
 	if isWindowsTargetAppExecutableName(filepath.Base(path)) {
@@ -871,6 +907,8 @@ func normalizeCodexAppPath(path string) string {
 		"VFS",
 		filepath.Join("VFS", "ProgramFilesX64", "ChatGPT"),
 		filepath.Join("VFS", "ProgramFilesX64", "OpenAI", "ChatGPT"),
+		filepath.Join("VFS", "ProgramFilesX64", "Codex"),
+		filepath.Join("VFS", "ProgramFilesX64", "OpenAI", "Codex"),
 	} {
 		candidate := filepath.Join(path, subdir)
 		if hasWindowsTargetAppExecutable(candidate) {
@@ -932,9 +970,31 @@ func isWindowsAppsExecutionAlias(path string) bool {
 }
 
 func isWindowsProtectedAppPackagePath(path string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(filepath.ToSlash(strings.TrimSpace(path)), `\`, `/`))
-	return strings.Contains(normalized, "/program files/windowsapps/openai.chatgpt") ||
-		strings.HasPrefix(normalized, "c:/program files/windowsapps/openai.chatgpt")
+	if windowsPathContainsProtectedAppPackage(path) {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil && !strings.EqualFold(resolved, path) {
+			return windowsPathContainsProtectedAppPackage(resolved)
+		}
+	}
+	return false
+}
+
+func windowsPathContainsProtectedAppPackage(path string) bool {
+	cleaned := pathpkg.Clean(strings.ReplaceAll(strings.TrimSpace(path), `\`, "/"))
+	parts := splitPathParts(cleaned)
+	for index, part := range parts {
+		part = strings.TrimRight(part, " .")
+		if !strings.EqualFold(part, "WindowsApps") || index+1 >= len(parts) {
+			continue
+		}
+		packageName := strings.TrimRight(parts[index+1], " .")
+		if isWindowsCodexPackageName(packageName) {
+			return true
+		}
+	}
+	return false
 }
 
 func isWindowsProtectedCodexDirectLaunchPath(appPath, executable string) bool {
@@ -946,138 +1006,245 @@ func normalizeWindowsPackageAppPath(path string) string {
 	if !isWindowsCodexPackageName(packageName) {
 		return ""
 	}
-	parts := splitPathParts(path)
-	for i, part := range parts {
-		if strings.EqualFold(part, packageName) {
-			prefix := strings.Join(parts[:i+1], string(os.PathSeparator))
-			if strings.Contains(path, `\`) {
-				prefix = strings.Join(parts[:i+1], `\`)
-			}
-			if strings.HasSuffix(strings.ToLower(filepath.ToSlash(path)), "/app") || isWindowsTargetAppExecutableName(filepath.Base(path)) {
-				return filepath.Join(prefix, "app")
-			}
-			return filepath.Join(prefix, "app")
-		}
+	packageRoot := windowsPackageRootFromPath(path)
+	if packageRoot == "" {
+		return ""
 	}
-	if strings.EqualFold(filepath.Base(path), "app") {
-		return path
+	if metadata, ok := readWindowsPackageManifestMetadata(packageRoot); ok && metadata.Executable != "" {
+		return pathDirLike(path, joinPathLike(packageRoot, metadata.Executable))
 	}
-	return filepath.Join(path, "app")
+	return joinPathLike(packageRoot, "app")
 }
 
-func windowsCodexExecutionAlias() string {
+func windowsPackagedExecutionAlias(appUserModelID string) string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
-	if alias := strings.TrimSpace(os.Getenv("CODEX_APP_EXECUTION_ALIAS")); alias != "" {
-		return alias
+	launchInfo, ok := resolveWindowsRegisteredPackageLaunchInfo(appUserModelID)
+	if !ok {
+		return ""
 	}
 	for _, root := range []string{os.Getenv("LOCALAPPDATA"), filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")} {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		for _, name := range []string{"ChatGPT.exe", "chatgpt.exe"} {
-			alias := filepath.Join(root, "Microsoft", "WindowsApps", name)
-			if fileExists(alias) {
-				return alias
+		for _, aliasName := range launchInfo.ExecutionAliases {
+			for _, alias := range []string{
+				filepath.Join(root, "Microsoft", "WindowsApps", launchInfo.PackageFamilyName, aliasName),
+				filepath.Join(root, "Microsoft", "WindowsApps", aliasName),
+			} {
+				if _, err := os.Lstat(alias); err == nil && isWindowsAppsExecutionAlias(alias) {
+					return alias
+				}
 			}
 		}
-		return filepath.Join(root, "Microsoft", "WindowsApps", "ChatGPT.exe")
+	}
+	for _, aliasName := range launchInfo.ExecutionAliases {
+		alias, err := exec.LookPath(aliasName)
+		if err == nil && strings.EqualFold(filepath.Base(alias), aliasName) && isWindowsAppsExecutionAlias(alias) {
+			return alias
+		}
 	}
 	return ""
 }
 
-func windowsAppPackageRoots() []string {
-	var roots []string
-	add := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
-		for _, existing := range roots {
-			if strings.EqualFold(existing, path) {
-				return
-			}
-		}
-		roots = append(roots, path)
-	}
-	for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432")} {
-		if root != "" {
-			add(filepath.Join(root, "WindowsApps"))
-		}
-	}
-	add(`C:\Program Files\WindowsApps`)
-	return roots
-}
-
-func findLatestWindowsCodexAppDirFromRoots(roots []string) string {
-	var best string
-	for _, root := range roots {
-		if candidate := findLatestWindowsCodexAppDir(root); candidate != "" {
-			if best == "" || compareWindowsAppPackagePath(candidate, best) > 0 {
-				best = candidate
-			}
-		}
-	}
-	return best
-}
-
-func findLatestWindowsCodexAppDir(root string) string {
-	entries, err := os.ReadDir(root)
-	if err != nil {
+func windowsPackagedDirectExecutable(appUserModelID string) string {
+	if runtime.GOOS != "windows" {
 		return ""
 	}
-	var best string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !isWindowsCodexPackageName(name) || windowsPackageVersionFromName(name) == "" {
-			continue
-		}
-		path := filepath.Join(root, name)
-		if app := filepath.Join(path, "app"); isDir(app) {
-			path = app
-		}
-		if best == "" || compareWindowsAppPackagePath(path, best) > 0 {
-			best = path
-		}
+	launchInfo, ok := resolveWindowsRegisteredPackageLaunchInfo(appUserModelID)
+	if !ok || !strings.EqualFold(strings.TrimSpace(launchInfo.EntryPoint), "Windows.FullTrustApplication") {
+		return ""
 	}
-	return best
-}
-
-func compareWindowsAppPackagePath(left, right string) int {
-	leftPriority := windowsAppPackagePriority(left)
-	rightPriority := windowsAppPackagePriority(right)
-	if leftPriority != rightPriority {
-		if leftPriority > rightPriority {
-			return 1
-		}
-		return -1
-	}
-	return compareVersions(windowsPackageVersionFromPath(left), windowsPackageVersionFromPath(right))
-}
-
-func windowsAppPackagePriority(path string) int {
-	identity, _, _, ok := windowsCodexPackageParts(windowsPackageNameFromPath(path))
-	if !ok {
-		return 0
-	}
-	lower := strings.ToLower(identity)
-	if strings.HasPrefix(lower, "openai.chatgpt") {
-		return 2
-	}
-	return 0
+	return launchInfo.ExecutablePath
 }
 
 func packagedWindowsAppUserModelID(path string) string {
-	packageName := windowsPackageNameFromPath(path)
-	identity, _, publisherID, ok := windowsCodexPackageParts(packageName)
-	if !ok || publisherID == "" {
+	if reference := normalizeWindowsPackagedAppReference(path); reference != "" {
+		appUserModelID := strings.TrimPrefix(reference, "aumid:")
+		if runtime.GOOS != "windows" {
+			return appUserModelID
+		}
+		cacheKey := strings.ToLower(reference)
+		if cached, found := windowsPackagedAUMIDCache.Load(cacheKey); found {
+			return stringFromAny(cached)
+		}
+		resolved := validateWindowsAppUserModelIDViaPowerShell(appUserModelID)
+		if resolved != "" {
+			windowsPackagedAUMIDCache.Store(cacheKey, resolved)
+		}
+		return resolved
+	}
+	fallback := windowsAppUserModelIDFromPackagePath(path)
+	if fallback == "" {
 		return ""
 	}
-	return identity + "_" + publisherID + "!App"
+	if runtime.GOOS != "windows" {
+		return fallback
+	}
+	packageName := windowsPackageNameFromPath(path)
+	identity, _, publisherID, _ := windowsCodexPackageParts(packageName)
+	cacheKey := strings.ToLower(packageName)
+	if cached, found := windowsPackagedAUMIDCache.Load(cacheKey); found {
+		return stringFromAny(cached)
+	}
+	resolved := resolveWindowsAppUserModelIDViaPowerShell(packageName, identity, publisherID)
+	if resolved != "" {
+		windowsPackagedAUMIDCache.Store(cacheKey, resolved)
+	}
+	return resolved
+}
+
+func windowsAppUserModelIDFromPackagePath(path string) string {
+	packageName := windowsPackageNameFromPath(path)
+	identity, _, publisherID, ok := windowsCodexPackageParts(packageName)
+	if !ok || !strings.EqualFold(publisherID, openAIDesktopPublisherID) {
+		return ""
+	}
+	applicationID := "App"
+	if packageRoot := windowsPackageRootFromPath(path); packageRoot != "" {
+		if metadata, manifestOK := readWindowsPackageManifestMetadata(packageRoot); manifestOK && metadata.ApplicationID != "" {
+			applicationID = metadata.ApplicationID
+		}
+	}
+	return identity + "_" + publisherID + "!" + applicationID
+}
+
+func windowsPackagedAppReference(appUserModelID string) string {
+	if normalized := normalizeWindowsPackagedAppReference("aumid:" + strings.TrimSpace(appUserModelID)); normalized != "" {
+		return normalized
+	}
+	return ""
+}
+
+func isWindowsPackagedAppReference(value string) bool {
+	return normalizeWindowsPackagedAppReference(value) != ""
+}
+
+func normalizeWindowsPackagedAppReference(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) <= len("aumid:") || !strings.EqualFold(trimmed[:len("aumid:")], "aumid:") {
+		return ""
+	}
+	aumid := strings.TrimSpace(trimmed[len("aumid:"):])
+	packageFamily, applicationID, foundApplication := strings.Cut(aumid, "!")
+	identityPart, publisherID, foundPublisher := strings.Cut(packageFamily, "_")
+	identity, supported := normalizeOpenAIAppPackageIdentity(identityPart)
+	if !foundApplication || !foundPublisher || !supported || !strings.EqualFold(publisherID, openAIDesktopPublisherID) || !isWindowsAppIdentifierPart(applicationID) {
+		return ""
+	}
+	return "aumid:" + identity + "_" + publisherID + "!" + applicationID
+}
+
+func isWindowsAppIdentifierPart(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '.' || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func windowsPackageFamilyFromAppUserModelID(appUserModelID string) string {
+	reference := normalizeWindowsPackagedAppReference("aumid:" + strings.TrimSpace(appUserModelID))
+	if reference == "" {
+		return ""
+	}
+	packageFamily, _, found := strings.Cut(strings.TrimPrefix(reference, "aumid:"), "!")
+	if !found {
+		return ""
+	}
+	return packageFamily
+}
+
+func isOpenAIDesktopPackageFamily(packageFamily string) bool {
+	identityPart, publisherID, found := strings.Cut(strings.TrimSpace(packageFamily), "_")
+	_, supported := normalizeOpenAIAppPackageIdentity(identityPart)
+	return found && supported && strings.EqualFold(publisherID, openAIDesktopPublisherID)
+}
+
+func normalizeWindowsRegisteredPackageLaunchInfo(raw windowsRegisteredPackageLaunchInfo, expectedAUMID string) (windowsRegisteredPackageLaunchInfo, bool) {
+	reference := normalizeWindowsPackagedAppReference("aumid:" + strings.TrimSpace(expectedAUMID))
+	if reference == "" {
+		return windowsRegisteredPackageLaunchInfo{}, false
+	}
+	canonicalAUMID := strings.TrimPrefix(reference, "aumid:")
+	expectedFamily := windowsPackageFamilyFromAppUserModelID(canonicalAUMID)
+	if expectedFamily == "" || !strings.EqualFold(strings.TrimSpace(raw.AppUserModelID), canonicalAUMID) ||
+		!strings.EqualFold(strings.TrimSpace(raw.PackageFamilyName), expectedFamily) {
+		return windowsRegisteredPackageLaunchInfo{}, false
+	}
+	identity, _, publisherID, ok := windowsCodexPackageParts(strings.TrimSpace(raw.PackageFullName))
+	expectedIdentity, _, _ := strings.Cut(expectedFamily, "_")
+	if !ok || !strings.EqualFold(identity, expectedIdentity) || !strings.EqualFold(publisherID, openAIDesktopPublisherID) {
+		return windowsRegisteredPackageLaunchInfo{}, false
+	}
+	applicationID := strings.TrimSpace(raw.ApplicationID)
+	if !isWindowsAppIdentifierPart(applicationID) || !strings.EqualFold(expectedFamily+"!"+applicationID, canonicalAUMID) {
+		return windowsRegisteredPackageLaunchInfo{}, false
+	}
+	installLocation := strings.TrimSpace(raw.InstallLocation)
+	executable := normalizeWindowsPackageRelativePath(raw.Executable)
+	parts := splitPathParts(executable)
+	if installLocation == "" || len(parts) == 0 || !isWindowsTargetAppExecutableName(parts[len(parts)-1]) {
+		return windowsRegisteredPackageLaunchInfo{}, false
+	}
+	aliases := make([]string, 0, len(raw.ExecutionAliases))
+	for _, candidate := range raw.ExecutionAliases {
+		alias := strings.TrimSpace(candidate)
+		if isWindowsTargetAppExecutableName(alias) {
+			aliases = appendUniqueFold(aliases, alias)
+		}
+	}
+	raw.AppUserModelID = canonicalAUMID
+	raw.PackageFamilyName = expectedFamily
+	raw.InstallLocation = installLocation
+	raw.ApplicationID = applicationID
+	raw.Executable = executable
+	raw.EntryPoint = strings.TrimSpace(raw.EntryPoint)
+	raw.ExecutionAliases = aliases
+	raw.ExecutablePath = joinPathLike(installLocation, executable)
+	return raw, true
+}
+
+func resolveWindowsAppUserModelIDViaPowerShell(packageName, identity, publisherID string) string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	const script = `$package = Get-AppxPackage -Name $env:CODEX_DESKTOP_PACKAGE_IDENTITY -ErrorAction SilentlyContinue | Where-Object { $_.PackageFamilyName -ieq $env:CODEX_DESKTOP_PACKAGE_FAMILY } | Sort-Object Version -Descending | Select-Object -First 1; if ($null -eq $package) { exit 0 }; $apps = @((Get-AppxPackageManifest -Package $package).Package.Applications.Application); $matches = @($apps | Where-Object { $_.Executable -match '(?i)(^|[\\/])(ChatGPT|Codex)\.exe$' }); if ($matches.Count -eq 0) { $matches = @($apps | Where-Object { $_.Id -eq 'App' }) }; if ($matches.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$matches[0].Id)) { [Console]::Out.Write($package.PackageFamilyName + '!' + $matches[0].Id) }`
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+	cmd.Env = append(os.Environ(),
+		"CODEX_DESKTOP_PACKAGE_IDENTITY="+identity,
+		"CODEX_DESKTOP_PACKAGE_FAMILY="+identity+"_"+publisherID,
+	)
+	hideSubprocessWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(string(out))
+	expectedPrefix := identity + "_" + publisherID + "!"
+	if !strings.HasPrefix(strings.ToLower(value), strings.ToLower(expectedPrefix)) || len(value) <= len(expectedPrefix) || strings.ContainsAny(value, "\r\n\t ") {
+		return ""
+	}
+	return value
+}
+
+func validateWindowsAppUserModelIDViaPowerShell(appUserModelID string) string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	launchInfo, ok := resolveWindowsRegisteredPackageLaunchInfo(appUserModelID)
+	if !ok {
+		return ""
+	}
+	return launchInfo.AppUserModelID
 }
 
 func isWindowsCodexPackageName(name string) bool {
@@ -1089,6 +1256,12 @@ func windowsPackageNameFromPath(path string) string {
 	parts := splitPathParts(path)
 	if len(parts) == 0 {
 		return ""
+	}
+	for _, part := range parts {
+		candidate := strings.TrimRight(part, " .")
+		if isWindowsCodexPackageName(candidate) {
+			return candidate
+		}
 	}
 	last := parts[len(parts)-1]
 	if isWindowsTargetAppExecutableName(last) {
@@ -1107,6 +1280,203 @@ func windowsPackageNameFromPath(path string) string {
 		return parts[len(parts)-2]
 	}
 	return last
+}
+
+type windowsPackageManifest struct {
+	Identity struct {
+		Name string `xml:"Name,attr"`
+	} `xml:"Identity"`
+	Applications []windowsPackageManifestApplication `xml:"Applications>Application"`
+}
+
+type windowsPackageManifestApplication struct {
+	ID         string                            `xml:"Id,attr"`
+	Executable string                            `xml:"Executable,attr"`
+	EntryPoint string                            `xml:"EntryPoint,attr"`
+	Extensions []windowsPackageManifestExtension `xml:"Extensions>Extension"`
+}
+
+type windowsPackageManifestExtension struct {
+	Category          string                                    `xml:"Category,attr"`
+	Executable        string                                    `xml:"Executable,attr"`
+	EntryPoint        string                                    `xml:"EntryPoint,attr"`
+	AppExecutionAlias windowsPackageManifestAppExecutionAliases `xml:"AppExecutionAlias"`
+}
+
+type windowsPackageManifestAppExecutionAliases struct {
+	Aliases []windowsPackageManifestExecutionAlias `xml:"ExecutionAlias"`
+}
+
+type windowsPackageManifestExecutionAlias struct {
+	Alias string `xml:"Alias,attr"`
+}
+
+type windowsPackageAppMetadata struct {
+	ApplicationID    string
+	Executable       string
+	EntryPoint       string
+	ExecutionAliases []string
+}
+
+type windowsRegisteredPackageLaunchInfo struct {
+	AppUserModelID    string   `json:"appUserModelId"`
+	PackageFamilyName string   `json:"packageFamilyName"`
+	PackageFullName   string   `json:"packageFullName"`
+	InstallLocation   string   `json:"installLocation"`
+	ApplicationID     string   `json:"applicationId"`
+	Executable        string   `json:"executable"`
+	EntryPoint        string   `json:"entryPoint"`
+	ExecutionAliases  []string `json:"executionAliases"`
+	ExecutablePath    string   `json:"-"`
+}
+
+func windowsPackageRootFromPath(path string) string {
+	packageName := windowsPackageNameFromPath(path)
+	if !isWindowsCodexPackageName(packageName) {
+		return ""
+	}
+	parts := splitPathParts(path)
+	for index, part := range parts {
+		if strings.EqualFold(part, packageName) {
+			return joinPathPartsLike(path, parts[:index+1])
+		}
+	}
+	return ""
+}
+
+func joinPathPartsLike(original string, parts []string) string {
+	separator := string(os.PathSeparator)
+	if strings.Contains(original, `\`) {
+		separator = `\`
+	}
+	joined := strings.Join(parts, separator)
+	if separator == "/" && strings.HasPrefix(strings.TrimSpace(original), "/") {
+		joined = "/" + joined
+	}
+	return joined
+}
+
+func joinPathLike(root, relative string) string {
+	relative = strings.TrimSpace(relative)
+	if relative == "" {
+		return root
+	}
+	cleaned := normalizeWindowsPackageRelativePath(relative)
+	if cleaned == "" {
+		return root
+	}
+	if strings.Contains(root, `\`) {
+		return strings.TrimRight(root, `\/`) + `\` + strings.ReplaceAll(cleaned, "/", `\`)
+	}
+	return filepath.Join(root, filepath.FromSlash(cleaned))
+}
+
+func normalizeWindowsPackageRelativePath(relative string) string {
+	cleaned := pathpkg.Clean(strings.ReplaceAll(strings.TrimSpace(relative), `\`, "/"))
+	if cleaned == "." || pathpkg.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return ""
+	}
+	return cleaned
+}
+
+func appendUniqueFold(values []string, candidate string) []string {
+	for _, value := range values {
+		if strings.EqualFold(value, candidate) {
+			return values
+		}
+	}
+	return append(values, candidate)
+}
+
+func pathDirLike(original, path string) string {
+	if strings.Contains(original, `\`) {
+		cleaned := strings.TrimRight(path, `\/`)
+		if index := strings.LastIndexAny(cleaned, `\/`); index >= 0 {
+			return cleaned[:index]
+		}
+		return ""
+	}
+	return filepath.Dir(path)
+}
+
+func readWindowsPackageManifestMetadata(packageRoot string) (windowsPackageAppMetadata, bool) {
+	manifestPath := joinPathLike(packageRoot, "AppxManifest.xml")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return windowsPackageAppMetadata{}, false
+	}
+	var manifest windowsPackageManifest
+	if err := xml.Unmarshal(data, &manifest); err != nil {
+		return windowsPackageAppMetadata{}, false
+	}
+	manifestIdentity, supported := normalizeOpenAIAppPackageIdentity(manifest.Identity.Name)
+	packageIdentity, _, _, packageOK := windowsCodexPackageParts(windowsPackageNameFromPath(packageRoot))
+	if !supported || !packageOK || !strings.EqualFold(manifestIdentity, packageIdentity) {
+		return windowsPackageAppMetadata{}, false
+	}
+	applications := manifest.Applications
+	if len(applications) == 0 {
+		return windowsPackageAppMetadata{}, false
+	}
+	type manifestMatch struct {
+		application windowsPackageManifestApplication
+		executable  string
+		entryPoint  string
+		aliases     []string
+	}
+	var executableMatches []manifestMatch
+	for _, application := range applications {
+		executable := normalizeWindowsPackageRelativePath(application.Executable)
+		entryPoint := strings.TrimSpace(application.EntryPoint)
+		var aliases []string
+		for _, extension := range application.Extensions {
+			if !strings.EqualFold(strings.TrimSpace(extension.Category), "windows.appExecutionAlias") {
+				continue
+			}
+			if executable == "" {
+				executable = normalizeWindowsPackageRelativePath(extension.Executable)
+			}
+			if entryPoint == "" {
+				entryPoint = strings.TrimSpace(extension.EntryPoint)
+			}
+			for _, executionAlias := range extension.AppExecutionAlias.Aliases {
+				alias := strings.TrimSpace(executionAlias.Alias)
+				if isWindowsTargetAppExecutableName(alias) {
+					aliases = appendUniqueFold(aliases, alias)
+				}
+			}
+		}
+		parts := splitPathParts(executable)
+		if len(parts) > 0 && isWindowsTargetAppExecutableName(parts[len(parts)-1]) {
+			executableMatches = append(executableMatches, manifestMatch{
+				application: application,
+				executable:  executable,
+				entryPoint:  entryPoint,
+				aliases:     aliases,
+			})
+		}
+	}
+	if len(executableMatches) == 0 {
+		for _, application := range applications {
+			if strings.EqualFold(application.ID, "App") {
+				executableMatches = append(executableMatches, manifestMatch{application: application})
+			}
+		}
+	}
+	if len(executableMatches) != 1 {
+		return windowsPackageAppMetadata{}, false
+	}
+	selected := executableMatches[0]
+	applicationID := strings.TrimSpace(selected.application.ID)
+	if !isWindowsAppIdentifierPart(applicationID) {
+		return windowsPackageAppMetadata{}, false
+	}
+	return windowsPackageAppMetadata{
+		ApplicationID:    applicationID,
+		Executable:       selected.executable,
+		EntryPoint:       selected.entryPoint,
+		ExecutionAliases: selected.aliases,
+	}, true
 }
 
 func windowsPackageVersionFromPath(path string) string {
@@ -1173,14 +1543,22 @@ func codexDetectionPayload(saved, resolved string) map[string]any {
 		if appUserModelID := packagedWindowsAppUserModelID(resolved); appUserModelID != "" {
 			payload["appUserModelId"] = appUserModelID
 		}
+		if runtime.GOOS == "windows" && isWindowsPackagedAppReference(resolved) {
+			payload["message"] = "已通过稳定 AppUserModelID 识别 Codex 与 ChatGPT 合并后的 Windows 新版应用。"
+		}
 		if runtime.GOOS == "windows" && isWindowsProtectedCodexDirectLaunchPath(resolved, stringFromAny(payload["executable"])) {
-			payload["status"] = "limited"
-			payload["message"] = "已检测到 Windows Store/MSIX 版 " + codexAppDisplayName(resolved) + "，但 Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动路径。请安装官方桌面版或手动选择可直接执行的 ChatGPT.exe。"
+			if stringFromAny(payload["appUserModelId"]) != "" {
+				payload["status"] = "found"
+				payload["message"] = "已检测到 Codex 与 ChatGPT 合并后的 Windows Store/MSIX 新版应用；将通过 AppUserModelID 启动。"
+			} else {
+				payload["status"] = "limited"
+				payload["message"] = "已检测到新版 Windows Store/MSIX 应用，但未能解析 AppUserModelID。"
+			}
 		}
 		return payload
 	}
 	if runtime.GOOS == "windows" {
-		payload["message"] = "Windows 自动探测没有找到 ChatGPT。若已安装，请手动选择 ChatGPT.exe 或安装目录。"
+		payload["message"] = "Windows 自动探测没有找到合并后的 ChatGPT/Codex 应用。若已安装，请选择 ChatGPT.exe、Codex.exe 或安装目录。"
 		payload["candidates"] = windowsCodexDetectionHints()
 	}
 	return payload
@@ -1215,16 +1593,21 @@ func codexLaunchPayload(appPath string) map[string]any {
 		if appUserModelID := packagedWindowsAppUserModelID(appPath); appUserModelID != "" {
 			payload["appUserModelId"] = appUserModelID
 			payload["executable"] = executable
-			if protectedPackage {
-				payload["method"] = "msix_unsupported"
-				payload["methodLabel"] = "MSIX 不支持"
-				payload["message"] = "检测到 Windows Store/MSIX 版 " + codexAppDisplayName(appPath) + "；该包目录不能直接接收调试端口参数，请安装官方桌面版或选择可直接执行的 ChatGPT.exe。"
+			payload["method"] = "packaged_activation"
+			payload["methodLabel"] = "MSIX 应用激活"
+			payload["ready"] = true
+			if alias := windowsPackagedExecutionAlias(appUserModelID); alias != "" {
+				payload["executionAlias"] = alias
+				payload["methodLabel"] = "App Execution Alias"
+				payload["message"] = "将通过包清单声明的 Windows App Execution Alias 启动合并版 ChatGPT，并验证调试端口、进程树和包身份。"
+			} else if packagedExecutable := windowsPackagedDirectExecutable(appUserModelID); packagedExecutable != "" {
+				payload["packagedExecutableAvailable"] = true
+				payload["methodLabel"] = "MSIX FullTrust 入口"
+				payload["message"] = "将通过已注册官方包清单声明的 FullTrust 桌面入口启动合并版 ChatGPT，并验证调试端口、进程树和包身份。"
 			} else {
-				payload["method"] = "packaged_activation"
-				payload["methodLabel"] = "MSIX 应用激活"
-				payload["ready"] = true
-				payload["message"] = "将通过 AppUserModelID 激活 Windows Store/MSIX 版。"
+				payload["message"] = "将通过 AppUserModelID 兼容激活合并版 ChatGPT，并验证调试端口和进程归属。"
 			}
+			payload["directLaunchBlocked"] = protectedPackage
 			return payload
 		}
 	}
@@ -1335,15 +1718,19 @@ func windowsCodexDetectionHints() []string {
 		hints = append(hints,
 			filepath.Join(local, "Programs", "ChatGPT"),
 			filepath.Join(local, "Microsoft", "WindowsApps", "ChatGPT.exe"),
+			filepath.Join(local, "Programs", "Codex"),
+			filepath.Join(local, "Microsoft", "WindowsApps", "Codex.exe"),
 		)
 	}
 	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
 		hints = append(hints,
 			filepath.Join(programFiles, "WindowsApps", "OpenAI.ChatGPT*"),
+			filepath.Join(programFiles, "WindowsApps", "OpenAI.Codex*"),
 			filepath.Join(programFiles, "OpenAI", "ChatGPT"),
+			filepath.Join(programFiles, "OpenAI", "Codex"),
 		)
 	}
-	hints = append(hints, "Get-AppxPackage OpenAI.ChatGPT*")
+	hints = append(hints, "Get-AppxPackage OpenAI.Codex / OpenAI.ChatGPT")
 	return hints
 }
 
@@ -1440,13 +1827,13 @@ func managerLaunchAppPath(requested string, settings backendSettings) string {
 	if runtime.GOOS != "windows" {
 		return appPath
 	}
-	if appPath != "" && windowsCodexPathSupportsDirectLaunch(appPath) {
+	if appPath != "" && windowsCodexPathSupportsLaunch(appPath) {
 		return appPath
 	}
-	if saved := normalizeCodexAppPath(settings.CodexAppPath); saved != "" && windowsCodexPathSupportsDirectLaunch(saved) {
+	if saved := normalizeCodexAppPath(settings.CodexAppPath); saved != "" && windowsCodexPathSupportsLaunch(saved) {
 		return saved
 	}
-	if detected := resolveCodexApp(""); detected != "" && windowsCodexPathSupportsDirectLaunch(detected) {
+	if detected := resolveCodexApp(""); detected != "" && windowsCodexPathSupportsLaunch(detected) {
 		return detected
 	}
 	return ""
@@ -1461,6 +1848,16 @@ func windowsCodexPathSupportsDirectLaunch(appPath string) bool {
 		return false
 	}
 	return strings.TrimSpace(executable) != "" && fileExists(executable)
+}
+
+func windowsCodexPathSupportsLaunch(appPath string) bool {
+	if runtime.GOOS != "windows" {
+		return strings.TrimSpace(buildCodexExecutable(appPath)) != ""
+	}
+	if windowsCodexPathSupportsDirectLaunch(appPath) {
+		return true
+	}
+	return packagedWindowsAppUserModelID(appPath) != ""
 }
 
 func waitForLaunchStatusAfter(after time.Time, timeout time.Duration) *launchStatus {

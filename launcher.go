@@ -51,7 +51,11 @@ func runLauncher(args []string) error {
 		appPath = resolveLaunchableCodexApp(settings.CodexAppPath)
 	}
 	if appPath == "" {
-		err := errors.New("未找到可直接启动的 ChatGPT 桌面应用；请安装 ChatGPT 桌面应用，或在管理工具中选择 ChatGPT.app / ChatGPT.exe")
+		message := "未找到可直接启动的 ChatGPT 桌面应用；请安装 ChatGPT 桌面应用，或在管理工具中选择 ChatGPT.app / ChatGPT.exe"
+		if runtime.GOOS == "windows" {
+			message = "未找到 Codex 与 ChatGPT 合并后的 Windows 新版应用；请从 Microsoft Store 更新/安装 ChatGPT，或选择 WindowsApps 外的 ChatGPT.exe / Codex.exe"
+		}
+		err := errors.New(message)
 		writeLaunchFailureStatus("启动 ChatGPT Codex 失败："+err.Error(), debugPort, helperPort, nil)
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
@@ -125,7 +129,7 @@ func runLauncher(args []string) error {
 		}
 	}
 	if settings.ProviderSync {
-		result := runProviderSync(codexHomeDir())
+		result := runProviderSyncWithHeldLauncherGuard(codexHomeDir())
 		repairResult := repairCodexConfig(codexHomeDir(), codexConfigRepairOptions{Plugins: true})
 		appendDiagnosticLog("provider_sync."+result.Status, map[string]any{
 			"targetProvider":      result.TargetProvider,
@@ -390,21 +394,32 @@ func buildCodexArgumentsForSettings(debugPort uint16, extraArgs []string, settin
 
 func buildCodexExecutable(appPath string) string {
 	if runtime.GOOS == "windows" {
-		if isWindowsAppsExecutionAlias(appPath) {
-			return appPath
+		if isWindowsPackagedAppReference(appPath) {
+			return ""
 		}
 		if isWindowsTargetAppExecutableName(filepath.Base(appPath)) {
 			return appPath
 		}
-		candidates := []string{
-			filepath.Join(appPath, "ChatGPT.exe"),
-			filepath.Join(appPath, "chatgpt.exe"),
-			filepath.Join(appPath, "app", "ChatGPT.exe"),
-			filepath.Join(appPath, "app", "chatgpt.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "ChatGPT", "ChatGPT.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "ChatGPT", "chatgpt.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "OpenAI", "ChatGPT", "ChatGPT.exe"),
-			filepath.Join(appPath, "VFS", "ProgramFilesX64", "OpenAI", "ChatGPT", "chatgpt.exe"),
+		if packageRoot := windowsPackageRootFromPath(appPath); packageRoot != "" {
+			if metadata, ok := readWindowsPackageManifestMetadata(packageRoot); ok && metadata.Executable != "" {
+				candidate := joinPathLike(packageRoot, metadata.Executable)
+				if fileExists(candidate) {
+					return candidate
+				}
+			}
+		}
+		var candidates []string
+		for _, subdir := range []string{
+			"",
+			"app",
+			filepath.Join("VFS", "ProgramFilesX64", "ChatGPT"),
+			filepath.Join("VFS", "ProgramFilesX64", "OpenAI", "ChatGPT"),
+			filepath.Join("VFS", "ProgramFilesX64", "Codex"),
+			filepath.Join("VFS", "ProgramFilesX64", "OpenAI", "Codex"),
+		} {
+			for _, name := range windowsTargetAppExecutableNames() {
+				candidates = append(candidates, filepath.Join(appPath, subdir, name))
+			}
 		}
 		for _, candidate := range candidates {
 			if fileExists(candidate) {
@@ -435,26 +450,55 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 	command := buildCodexLaunchCommandForSettings(appPath, debugPort, settings.CodexExtraArgs, settings)
 	if runtime.GOOS == "windows" {
 		directLaunchBlocked := len(command) > 0 && isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])
-		if directLaunchBlocked {
-			return nil, windowsProtectedMSIXLaunchError(appPath, command[0])
-		}
+		activation := buildWindowsPackagedActivationForSettings(appPath, debugPort, settings.CodexExtraArgs, settings)
 		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) && !directLaunchBlocked {
 			handle, err := startCodexProcess(command)
 			if err == nil {
 				return handle, nil
 			}
-			if buildWindowsPackagedActivationForSettings(appPath, debugPort, settings.CodexExtraArgs, settings) == nil {
+			if activation == nil {
 				return nil, err
 			}
 			appendDiagnosticLog("launcher.windows_direct_start_failed", map[string]any{"command": safeCommandForLog(command), "error": err.Error()})
 		}
-		if activation := buildWindowsPackagedActivationForSettings(appPath, debugPort, settings.CodexExtraArgs, settings); activation != nil {
+		if activation != nil {
+			if tcpPortAccepting(debugPort) {
+				return nil, fmt.Errorf("调试端口 %d 已被其他进程占用；请完全退出现有 ChatGPT/Codex 和其他使用该端口的 Chromium 应用后重试", debugPort)
+			}
+			if processIDs := windowsTargetAppProcessIDs(); len(processIDs) > 0 {
+				return nil, fmt.Errorf("检测到未启用调试端口的 ChatGPT/Codex 进程 %v；请完全退出应用后重试", processIDs)
+			}
+			var attemptErrors []string
+			var attempts []windowsPackagedLaunchAttempt
+			if alias := windowsPackagedExecutionAlias(activation.appUserModelID); alias != "" {
+				aliasCommand := append([]string{alias}, buildCodexArgumentsForSettings(debugPort, settings.CodexExtraArgs, settings)...)
+				aliasHandle, aliasErr := startVerifiedWindowsPackagedProcess(aliasCommand, activation.appUserModelID, debugPort, true, "App Execution Alias", "launcher.windows_execution_alias", 20*time.Second)
+				if aliasErr == nil {
+					return aliasHandle, nil
+				}
+				attemptErrors = append(attemptErrors, "App Execution Alias: "+aliasErr.Error())
+				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "app_execution_alias", Outcome: windowsPackagedAttemptOutcome(aliasErr)})
+			} else {
+				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "app_execution_alias", Outcome: "not_available"})
+			}
+			if executable := windowsPackagedDirectExecutable(activation.appUserModelID); executable != "" {
+				executableCommand := append([]string{executable}, buildCodexArgumentsForSettings(debugPort, settings.CodexExtraArgs, settings)...)
+				executableHandle, executableErr := startVerifiedWindowsPackagedProcess(executableCommand, activation.appUserModelID, debugPort, false, "已注册 MSIX 桌面可执行文件", "launcher.windows_packaged_executable", 20*time.Second)
+				if executableErr == nil {
+					return executableHandle, nil
+				}
+				attemptErrors = append(attemptErrors, "MSIX 桌面可执行文件: "+executableErr.Error())
+				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "msix_full_trust_executable", Outcome: windowsPackagedAttemptOutcome(executableErr)})
+			} else {
+				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "msix_full_trust_executable", Outcome: "not_available"})
+			}
 			processID, activationErr := activateWindowsPackagedAppWithEnvironment(activation.appUserModelID, activation.arguments, codexLaunchEnvironment())
 			if activationErr == nil {
 				activation.processID = processID
-				if waitForCDPPortAvailable(debugPort, 15*time.Second) {
+				if waitForWindowsPackagedCDPPortAvailable(debugPort, processID, activation.appUserModelID, true, 15*time.Second) {
 					return activation, nil
 				}
+				cleanupFailedWindowsPackagedLaunch(processID, debugPort)
 				err := packagedCodexDebugPortError(activation.appUserModelID, debugPort, "ApplicationActivationManager")
 				appendDiagnosticLog("launcher.windows_packaged_activation_no_cdp", map[string]any{
 					"appUserModelId": activation.appUserModelID,
@@ -462,29 +506,115 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 					"processId":      processID,
 					"error":          err.Error(),
 				})
-				return nil, err
+				attemptErrors = append(attemptErrors, "ApplicationActivationManager: "+err.Error())
+				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "application_activation_manager", Outcome: "debug_port_unavailable"})
+			} else {
+				attemptErrors = append(attemptErrors, "ApplicationActivationManager: "+activationErr.Error())
+				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "application_activation_manager", Outcome: windowsPackagedAttemptOutcome(activationErr)})
 			}
-			if len(command) == 0 || strings.TrimSpace(command[0]) == "" || !fileExists(command[0]) {
-				return nil, fmt.Errorf("无法激活 Windows ChatGPT 应用 %s：%w；未找到可直接执行的 ChatGPT.exe，已跳过 explorer 兜底以避免把调试参数作为网页打开", activation.appUserModelID, activationErr)
+			if len(attemptErrors) == 0 {
+				attemptErrors = append(attemptErrors, "没有发现清单声明的 App Execution Alias、FullTrust 可执行文件或可用兼容激活方式")
 			}
-			handle, err := startCodexProcess(command)
-			if err == nil {
-				return handle, nil
+			return nil, &windowsPackagedLaunchError{
+				appUserModelID: activation.appUserModelID,
+				attempts:       attempts,
+				message:        fmt.Sprintf("无法启动 Windows 新版 ChatGPT %s；%s", activation.appUserModelID, strings.Join(attemptErrors, "；")),
 			}
-			return nil, fmt.Errorf("MSIX 激活 %s 失败：%v；直接启动 %s 也失败：%w", activation.appUserModelID, activationErr, command[0], err)
+		}
+		if directLaunchBlocked {
+			return nil, windowsProtectedMSIXLaunchError(appPath, command[0])
 		}
 	}
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
-		return nil, fmt.Errorf("未找到 ChatGPT.exe：%s", appPath)
+		return nil, fmt.Errorf("未找到 ChatGPT.exe 或 Codex.exe：%s", appPath)
 	}
 	if runtime.GOOS == "windows" && !isWindowsAppsExecutionAlias(command[0]) && !fileExists(command[0]) {
-		return nil, fmt.Errorf("未找到 ChatGPT.exe：%s", appPath)
+		return nil, fmt.Errorf("未找到 ChatGPT.exe 或 Codex.exe：%s", appPath)
 	}
 	handle, err := startCodexProcess(command)
 	if err != nil {
 		return nil, err
 	}
 	return handle, nil
+}
+
+type windowsPackagedLaunchAttempt struct {
+	Method  string `json:"method"`
+	Outcome string `json:"outcome"`
+}
+
+type windowsPackagedLaunchError struct {
+	appUserModelID string
+	attempts       []windowsPackagedLaunchAttempt
+	message        string
+}
+
+func (err *windowsPackagedLaunchError) Error() string {
+	return err.message
+}
+
+func windowsPackagedAttemptOutcome(err error) string {
+	if err == nil {
+		return "success"
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "incorrect function"):
+		return "activation_incorrect_function"
+	case strings.Contains(text, "调试端口") || strings.Contains(text, "remote-debugging-port") || strings.Contains(text, "cdp"):
+		return "debug_port_unavailable"
+	case strings.Contains(text, "无法启动") || strings.Contains(text, "executable file not found") || strings.Contains(text, "file not found") || strings.Contains(text, "cannot find the file") || strings.Contains(text, "cannot find the path"):
+		return "process_start_failed"
+	default:
+		return "activation_failed"
+	}
+}
+
+func startVerifiedWindowsPackagedProcess(command []string, appUserModelID string, debugPort uint16, requirePackageIdentity bool, method, eventPrefix string, timeout time.Duration) (codexLaunchHandle, error) {
+	handle, err := startCodexProcess(command)
+	if err != nil {
+		appendDiagnosticLog(eventPrefix+"_failed", map[string]any{
+			"appUserModelId": appUserModelID,
+			"executable":     filepath.Base(command[0]),
+			"error":          err.Error(),
+		})
+		return nil, err
+	}
+	processLaunch, ok := handle.(*codexProcessLaunch)
+	if !ok || processLaunch.cmd == nil || processLaunch.cmd.Process == nil {
+		_ = handle.terminate()
+		return nil, errors.New("Windows 打包应用启动后没有可验证的进程")
+	}
+	processID := uint32(processLaunch.cmd.Process.Pid)
+	if waitForWindowsPackagedCDPPortAvailable(debugPort, processID, appUserModelID, requirePackageIdentity, timeout) {
+		processLaunch.windowsPackageFamily = windowsPackageFamilyFromAppUserModelID(appUserModelID)
+		processLaunch.windowsRootProcessID = processID
+		processLaunch.windowsRequirePackageIdentity = requirePackageIdentity
+		processLaunch.debugPort = debugPort
+		return handle, nil
+	}
+	cleanupFailedWindowsPackagedLaunch(processID, debugPort)
+	err = packagedCodexDebugPortError(appUserModelID, debugPort, method)
+	appendDiagnosticLog(eventPrefix+"_no_cdp", map[string]any{
+		"appUserModelId": appUserModelID,
+		"debug_port":     debugPort,
+		"executable":     filepath.Base(command[0]),
+		"processId":      processID,
+		"error":          err.Error(),
+	})
+	return nil, err
+}
+
+func cleanupFailedWindowsPackagedLaunch(processID uint32, debugPort uint16) {
+	_ = terminateWindowsProcessTree(processID)
+	terminateWindowsTargetAppProcesses()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(windowsTargetAppProcessIDs()) == 0 && !tcpPortAccepting(debugPort) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func windowsProtectedMSIXLaunchError(appPath, executable string) error {
@@ -494,9 +624,9 @@ func windowsProtectedMSIXLaunchError(appPath, executable string) error {
 	}
 	appUserModelID := packagedWindowsAppUserModelID(appPath)
 	if appUserModelID != "" {
-		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 ChatGPT（%s），Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动目标，也无法稳定接收调试端口参数。请安装官方桌面版或选择可直接执行的 ChatGPT.exe。已跳过：%s", appUserModelID, target)
+		return fmt.Errorf("当前选择的是 Windows Store/MSIX 版新版 ChatGPT（%s），不能直接执行受保护的 WindowsApps 文件，且未能通过应用标识启动。已跳过：%s", appUserModelID, target)
 	}
-	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版 ChatGPT，Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动目标，也无法稳定接收调试端口参数。请安装官方桌面版或选择可直接执行的 ChatGPT.exe。已跳过：%s", target)
+	return fmt.Errorf("当前选择的是 Windows Store/MSIX 版新版 ChatGPT，不能直接执行受保护的 WindowsApps 文件，且未解析到可用的应用启动标识。已跳过：%s", target)
 }
 
 func buildWindowsPackagedActivation(appPath string, debugPort uint16, extraArgs []string) *windowsPackagedActivation {
@@ -508,13 +638,23 @@ func buildWindowsPackagedActivationForSettings(appPath string, debugPort uint16,
 		return nil
 	}
 	appUserModelID := packagedWindowsAppUserModelID(appPath)
+	return newWindowsPackagedActivation(appUserModelID, debugPort, extraArgs, settings)
+}
+
+func newWindowsPackagedActivation(appUserModelID string, debugPort uint16, extraArgs []string, settings backendSettings) *windowsPackagedActivation {
+	reference := normalizeWindowsPackagedAppReference("aumid:" + strings.TrimSpace(appUserModelID))
+	if reference == "" {
+		return nil
+	}
+	appUserModelID = strings.TrimPrefix(reference, "aumid:")
 	if appUserModelID == "" {
 		return nil
 	}
 	return &windowsPackagedActivation{
-		appUserModelID: appUserModelID,
-		arguments:      commandLineArguments(buildCodexArgumentsForSettings(debugPort, extraArgs, settings)),
-		debugPort:      debugPort,
+		appUserModelID:    appUserModelID,
+		packageFamilyName: windowsPackageFamilyFromAppUserModelID(appUserModelID),
+		arguments:         commandLineArguments(buildCodexArgumentsForSettings(debugPort, extraArgs, settings)),
+		debugPort:         debugPort,
 	}
 }
 
@@ -523,7 +663,7 @@ func windowsPackagedExplorerCommand(appUserModelID string, args []string) []stri
 }
 
 func packagedCodexDebugPortError(appUserModelID string, debugPort uint16, method string) error {
-	return fmt.Errorf("%s 已请求激活 Windows Store/MSIX ChatGPT %s，但未检测到调试端口 %d；该安装形态可能不接受 --remote-debugging-port。请安装官方桌面版或选择可直接执行的 ChatGPT.exe 后重试", method, appUserModelID, debugPort)
+	return fmt.Errorf("%s 已启动 Windows Store/MSIX 新版 ChatGPT %s，但未检测到调试端口 %d；应用已安装，请完全退出已有 ChatGPT 进程后重试；若仍无端口，则当前版本可能不接受 --remote-debugging-port，增强注入暂不可用", method, appUserModelID, debugPort)
 }
 
 func launchFailureDetail(appPath string, debugPort, helperPort uint16, err error) map[string]any {
@@ -533,12 +673,23 @@ func launchFailureDetail(appPath string, debugPort, helperPort uint16, err error
 		"helper_port":        helperPort,
 		"error":              err.Error(),
 		"cdp_port_available": cdpTargetsAvailable(debugPort, 800*time.Millisecond),
-		"recommended_action": "安装 ChatGPT 桌面应用，或选择可直接执行的 ChatGPT.exe；Windows Store/MSIX 包目录可能无法作为 ChatGPT Codex 的直接启动目标。",
+		"recommended_action": "确认新版 ChatGPT 可从开始菜单启动，并完全退出已有 ChatGPT 进程后重试；若 MSIX 激活后仍没有调试端口，请使用支持该新版应用的工具版本，或选择 WindowsApps 外可直接执行的 ChatGPT.exe / Codex.exe。",
+	}
+	var packagedError *windowsPackagedLaunchError
+	if errors.As(err, &packagedError) {
+		detail["windows_launch_attempts"] = packagedError.attempts
 	}
 	if runtime.GOOS == "windows" {
 		if activation := buildWindowsPackagedActivation(appPath, debugPort, nil); activation != nil {
 			detail["appUserModelId"] = activation.appUserModelID
 			detail["activation_method"] = "packaged_activation"
+			if alias := windowsPackagedExecutionAlias(activation.appUserModelID); alias != "" {
+				detail["activation_method"] = "app_execution_alias"
+				detail["executionAlias"] = alias
+			} else if windowsPackagedDirectExecutable(activation.appUserModelID) != "" {
+				detail["activation_method"] = "msix_full_trust_executable"
+				detail["packagedExecutableAvailable"] = true
+			}
 		} else if executable := buildCodexExecutable(appPath); executable != "" {
 			detail["executable"] = executable
 			detail["activation_method"] = "executable"
@@ -613,6 +764,21 @@ func cdpTargetsAvailable(debugPort uint16, timeout time.Duration) bool {
 	defer cancel()
 	targets, err := listCDPTargets(ctx, debugPort)
 	return err == nil && len(targets) > 0
+}
+
+func chatGPTCDPTargetAvailable(debugPort uint16, timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	targets, err := listCDPTargets(ctx, debugPort)
+	if err != nil {
+		return false
+	}
+	for _, target := range targets {
+		if isCodexCDPPageTarget(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func requestCodexShutdownViaCDP(debugPort uint16, timeout time.Duration) error {
@@ -724,18 +890,15 @@ func terminateLaunchedCodex(launch codexLaunchHandle, appPath string) {
 }
 
 func safeCommandForLog(command []string) []string {
-	out := append([]string(nil), command...)
-	for i, part := range out {
-		if strings.Contains(strings.ToLower(part), "key") || strings.Contains(strings.ToLower(part), "token") {
-			out[i] = "[redacted]"
-		}
+	if len(command) == 0 {
+		return []string{}
 	}
-	return out
+	return []string{command[0], fmt.Sprintf("[arguments omitted: %d]", len(command)-1)}
 }
 
 func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, helperPort uint16) error {
 	err := launch.wait()
-	if cdpTargetsAvailable(debugPort, 1200*time.Millisecond) {
+	if launchCDPAvailable(launch, debugPort, 1200*time.Millisecond) {
 		status := launchStatus{
 			Status:      "running",
 			Message:     "ChatGPT 主窗口仍在运行，ChatGPT Codex helper 继续驻留。",
@@ -750,7 +913,7 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 			detail["child_error"] = err.Error()
 		}
 		appendDiagnosticLog("launcher.child_exited_cdp_alive", detail)
-		waitForCDPPortClosed(debugPort)
+		waitForLaunchCDPClosed(launch, debugPort)
 		err = nil
 	} else {
 		detail := map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath}
@@ -778,10 +941,29 @@ func reapLauncherChild(launch codexLaunchHandle, appPath string, debugPort, help
 	return err
 }
 
-func waitForCDPPortClosed(debugPort uint16) {
-	for tcpPortAccepting(debugPort) {
+func waitForLaunchCDPClosed(launch codexLaunchHandle, debugPort uint16) {
+	for launchCDPAvailable(launch, debugPort, 1200*time.Millisecond) {
 		time.Sleep(time.Second)
 	}
+}
+
+func launchCDPAvailable(launch codexLaunchHandle, debugPort uint16, timeout time.Duration) bool {
+	switch typed := launch.(type) {
+	case *codexProcessLaunch:
+		if typed.windowsRootProcessID != 0 && typed.windowsPackageFamily != "" {
+			if typed.windowsRequirePackageIdentity {
+				return chatGPTCDPTargetAvailable(debugPort, timeout) &&
+					windowsCDPPortOwnedByPackage(debugPort, typed.windowsPackageFamily)
+			}
+			return chatGPTCDPTargetAvailable(debugPort, timeout) && windowsCDPPortOwnedByProcess(debugPort, typed.windowsRootProcessID)
+		}
+	case *windowsPackagedActivation:
+		if typed.processID != 0 && typed.packageFamilyName != "" {
+			return chatGPTCDPTargetAvailable(debugPort, timeout) &&
+				windowsCDPPortOwnedByPackage(debugPort, typed.packageFamilyName)
+		}
+	}
+	return cdpTargetsAvailable(debugPort, timeout)
 }
 
 func helperNeeded(settings backendSettings) bool {
@@ -801,8 +983,12 @@ type codexLaunchHandle interface {
 }
 
 type codexProcessLaunch struct {
-	cmd     *exec.Cmd
-	command []string
+	cmd                           *exec.Cmd
+	command                       []string
+	windowsPackageFamily          string
+	windowsRootProcessID          uint32
+	windowsRequirePackageIdentity bool
+	debugPort                     uint16
 }
 
 func startCodexProcess(command []string) (codexLaunchHandle, error) {
@@ -823,6 +1009,9 @@ func (launch *codexProcessLaunch) wait() error {
 
 func (launch *codexProcessLaunch) terminate() error {
 	if launch.cmd != nil && launch.cmd.Process != nil {
+		if launch.windowsRootProcessID != 0 {
+			return terminateWindowsProcessTree(launch.windowsRootProcessID)
+		}
 		return launch.cmd.Process.Kill()
 	}
 	return nil
@@ -836,10 +1025,11 @@ func (launch *codexProcessLaunch) logPayload() map[string]any {
 }
 
 type windowsPackagedActivation struct {
-	appUserModelID string
-	arguments      string
-	debugPort      uint16
-	processID      uint32
+	appUserModelID    string
+	packageFamilyName string
+	arguments         string
+	debugPort         uint16
+	processID         uint32
 }
 
 type windowsPackagedExplorerLaunch struct {
@@ -880,6 +1070,27 @@ func waitForCDPPortAvailable(port uint16, timeout time.Duration) bool {
 	return cdpTargetsAvailable(port, 700*time.Millisecond)
 }
 
+func waitForWindowsPackagedCDPPortAvailable(port uint16, processID uint32, appUserModelID string, requirePackageIdentity bool, timeout time.Duration) bool {
+	packageFamily := windowsPackageFamilyFromAppUserModelID(appUserModelID)
+	if packageFamily == "" {
+		return false
+	}
+	owned := func() bool {
+		if requirePackageIdentity {
+			return windowsCDPPortOwnedByPackagedProcess(port, processID, packageFamily)
+		}
+		return windowsCDPPortOwnedByProcess(port, processID)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if chatGPTCDPTargetAvailable(port, 700*time.Millisecond) && owned() {
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return chatGPTCDPTargetAvailable(port, 700*time.Millisecond) && owned()
+}
+
 func tcpPortAccepting(port uint16) bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 400*time.Millisecond)
 	if err != nil {
@@ -890,19 +1101,11 @@ func tcpPortAccepting(port uint16) bool {
 }
 
 func (activation *windowsPackagedActivation) wait() error {
-	if activation.processID == 0 {
-		if !waitForCDPPortAvailable(activation.debugPort, 30*time.Second) {
-			return packagedCodexDebugPortError(activation.appUserModelID, activation.debugPort, "MSIX")
-		}
-		for {
-			if !tcpPortAccepting(activation.debugPort) {
-				return nil
-			}
-			time.Sleep(time.Second)
-		}
+	if activation.processID == 0 || activation.packageFamilyName == "" {
+		return packagedCodexDebugPortError(activation.appUserModelID, activation.debugPort, "MSIX")
 	}
 	for {
-		if !tcpPortAccepting(activation.debugPort) {
+		if !launchCDPAvailable(activation, activation.debugPort, 1200*time.Millisecond) {
 			return nil
 		}
 		time.Sleep(time.Second)
@@ -910,14 +1113,14 @@ func (activation *windowsPackagedActivation) wait() error {
 }
 
 func (activation *windowsPackagedActivation) terminate() error {
-	return terminateWindowsProcessID(activation.processID)
+	return terminateWindowsProcessTree(activation.processID)
 }
 
 func (activation *windowsPackagedActivation) logPayload() map[string]any {
 	return map[string]any{
 		"type":           "windows_packaged_activation",
 		"appUserModelId": activation.appUserModelID,
-		"arguments":      activation.arguments,
+		"argumentCount":  len(strings.Fields(activation.arguments)),
 		"processId":      activation.processID,
 	}
 }

@@ -720,29 +720,9 @@ func createConversationHistoryRepairBackupDir(home string) (string, error) {
 }
 
 func acquireConversationHistoryRepairLock(home string) (func(), error) {
-	lockDir := filepath.Join(home, "tmp", "provider-sync.lock")
-	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
-		return nil, fmt.Errorf("创建历史维护锁目录失败：%w", err)
-	}
-	acquired := false
-	if err := os.Mkdir(lockDir, 0o755); err == nil {
-		acquired = true
-	} else if stale, reason := providerSyncLockStale(lockDir, time.Now()); stale {
-		appendDiagnosticLog("conversation_history_repair.stale_lock_removed", map[string]any{"lock": lockDir, "reason": reason})
-		if removeErr := os.RemoveAll(lockDir); removeErr == nil {
-			if retryErr := os.Mkdir(lockDir, 0o755); retryErr == nil {
-				acquired = true
-			}
-		}
-	}
-	if !acquired {
-		return nil, errors.New("另一个历史会话维护任务正在运行，请稍后重试")
-	}
-	release := func() { _ = os.RemoveAll(lockDir) }
-	owner := []byte(fmt.Sprintf(`{"pid":%d,"startedAt":%d,"operation":"conversation-history-repair"}`, os.Getpid(), time.Now().Unix()))
-	if err := os.WriteFile(filepath.Join(lockDir, "owner.json"), owner, 0o644); err != nil {
-		release()
-		return nil, fmt.Errorf("写入历史维护锁失败：%w", err)
+	release, err := acquireProviderSyncLock(home, "conversation-history-repair")
+	if err != nil {
+		return nil, fmt.Errorf("另一个历史会话维护任务正在运行，请稍后重试：%w", err)
 	}
 	return release, nil
 }

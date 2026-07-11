@@ -2519,6 +2519,10 @@ body {
   border-color: hsl(0 72% 51% / 0.45);
 }
 
+.toast-card.warning {
+  border-color: hsl(38 92% 50% / 0.5);
+}
+
 .toast-progress {
   position: absolute;
   top: 0;
@@ -2534,6 +2538,10 @@ body {
   background: hsl(var(--destructive));
 }
 
+.toast-card.warning .toast-progress {
+  background: hsl(38 92% 50%);
+}
+
 .toast-icon {
   display: grid;
   place-items: center;
@@ -2546,6 +2554,11 @@ body {
 
 .toast-card.failed .toast-icon {
   color: hsl(var(--destructive));
+}
+
+.toast-card.warning .toast-icon {
+  background: hsl(38 92% 50% / 0.12);
+  color: hsl(32 95% 44%);
 }
 
 .toast-body h2 {

@@ -379,7 +379,7 @@ func TestWindowsProtectedPackagePathDetectionIsPathBased(t *testing.T) {
 	}
 }
 
-func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
+func TestWindowsLauncherUsesValidatedPackagedLaunchStrategies(t *testing.T) {
 	data, err := os.ReadFile("launcher.go")
 	if err != nil {
 		t.Fatalf("read launcher.go failed: %v", err)
@@ -389,20 +389,23 @@ func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
 		"directLaunchBlocked",
 		"isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])",
 		"windowsProtectedMSIXLaunchError(appPath, command[0])",
-		"Program Files\\\\WindowsApps 包目录不能作为 ChatGPT Codex 的直接启动目标",
+		"windowsPackagedExecutionAlias",
+		"windowsPackagedDirectExecutable",
+		"startVerifiedWindowsPackagedProcess",
+		"activateWindowsPackagedAppWithEnvironment",
 		"ChatGPT.exe",
+		"Codex.exe",
 	} {
 		if !strings.Contains(source, expected) {
-			t.Fatalf("launcher should guard protected MSIX direct fallback; missing %q", expected)
+			t.Fatalf("launcher should use validated packaged launch strategies; missing %q", expected)
 		}
 	}
 	blockIndex := strings.Index(source, "if directLaunchBlocked {\n\t\t\treturn nil, windowsProtectedMSIXLaunchError(appPath, command[0])\n\t\t}")
+	aliasIndex := strings.Index(source, "windowsPackagedExecutionAlias")
+	directIndex := strings.Index(source, "windowsPackagedDirectExecutable")
 	activationIndex := strings.Index(source, "activateWindowsPackagedAppWithEnvironment")
-	if blockIndex < 0 || activationIndex < 0 || blockIndex > activationIndex {
-		t.Fatal("protected MSIX paths must be rejected before attempting MSIX activation")
-	}
-	if strings.Contains(source, "MSIX 激活 %s 失败：%v；已跳过直接启动") {
-		t.Fatal("protected MSIX failure must not report an activation error")
+	if blockIndex < 0 || aliasIndex < 0 || directIndex < 0 || activationIndex < 0 || aliasIndex > directIndex || directIndex > activationIndex || activationIndex > blockIndex {
+		t.Fatal("protected MSIX launch order must be manifest alias, registered FullTrust executable, COM activation, then protected-path rejection")
 	}
 	for _, forbidden := range []string{"installWindowsCodexMirror", "launcher.codex_app_auto_repaired"} {
 		if strings.Contains(source, forbidden) {
@@ -411,7 +414,7 @@ func TestWindowsLauncherSkipsProtectedMSIXDirectFallback(t *testing.T) {
 	}
 }
 
-func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
+func TestWindowsManagerAcceptsRegisteredMSIXLaunch(t *testing.T) {
 	data, err := os.ReadFile("manager.go")
 	if err != nil {
 		t.Fatalf("read manager.go failed: %v", err)
@@ -419,13 +422,17 @@ func TestWindowsManagerSkipsMSIXWhenSelectingLaunchPath(t *testing.T) {
 	source := string(data)
 	for _, expected := range []string{
 		`if runtime.GOOS != "windows" {`,
-		`if appPath != "" && windowsCodexPathSupportsDirectLaunch(appPath) {`,
-		`if runtime.GOOS == "windows" && !windowsCodexPathSupportsDirectLaunch(path) {`,
-		`MSIX 不支持`,
-		`Program Files\\WindowsApps 包目录不能作为 ChatGPT Codex`,
+		`if appPath != "" && windowsCodexPathSupportsLaunch(appPath) {`,
+		`if runtime.GOOS == "windows" && !windowsCodexPathSupportsLaunch(path) {`,
+		`return packagedWindowsAppUserModelID(appPath) != ""`,
+		`payload["method"] = "packaged_activation"`,
+		`payload["directLaunchBlocked"] = protectedPackage`,
+		`windowsPackagedDirectExecutable`,
+		`Get-AppxPackage -Name OpenAI.Codex`,
+		`Get-AppxPackage -Name OpenAI.ChatGPT`,
 	} {
 		if !strings.Contains(source, expected) {
-			t.Fatalf("Windows manager should skip unsupported MSIX paths; missing %q", expected)
+			t.Fatalf("Windows manager should keep registered MSIX launch support; missing %q", expected)
 		}
 	}
 	if strings.Contains(source, `runtime.GOOS != "windows" || appPath == ""`) {
@@ -3025,15 +3032,15 @@ func TestNormalizeCodexAppPathAcceptsWindowsExecutableAndAppDir(t *testing.T) {
 func TestPackagedWindowsAppUserModelIDMatchesOriginalLauncherShape(t *testing.T) {
 	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 
-	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
+	if got := windowsAppUserModelIDFromPackagePath(path); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("app user model id mismatch: %q", got)
 	}
 }
 
 func TestPackagedWindowsAppUserModelIDSupportsCodexBetaPackage(t *testing.T) {
-	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPTBeta_26.619.2200.0_x64__2p2nqsd0c76g0\app`
+	path := `C:\Program Files\WindowsApps\OpenAI.CodexBeta_26.619.2200.0_x64__2p2nqsd0c76g0\app`
 
-	if got := packagedWindowsAppUserModelID(path); got != "OpenAI.ChatGPTBeta_2p2nqsd0c76g0!App" {
+	if got := windowsAppUserModelIDFromPackagePath(path); got != "OpenAI.CodexBeta_2p2nqsd0c76g0!App" {
 		t.Fatalf("beta app user model id mismatch: %q", got)
 	}
 	if got := windowsPackageVersionFromPath(path); got != "26.619.2200.0" {
@@ -3041,42 +3048,357 @@ func TestPackagedWindowsAppUserModelIDSupportsCodexBetaPackage(t *testing.T) {
 	}
 }
 
+func TestWindowsIntegratedChatGPTPackageIdentityCompatibility(t *testing.T) {
+	cases := []struct {
+		name     string
+		identity string
+	}{
+		{name: "new integrated app", identity: "OpenAI.Codex"},
+		{name: "new integrated beta", identity: "OpenAI.CodexBeta"},
+		{name: "legacy ChatGPT", identity: "OpenAI.ChatGPT"},
+		{name: "legacy ChatGPT beta", identity: "OpenAI.ChatGPTBeta"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			packageName := test.identity + `_26.623.19656.0_x64__2p2nqsd0c76g0`
+			identity, version, publisher, ok := windowsCodexPackageParts(packageName)
+			if !ok {
+				t.Fatalf("supported package should parse: %q", packageName)
+			}
+			if identity != test.identity || version != "26.623.19656.0" || publisher != "2p2nqsd0c76g0" {
+				t.Fatalf("unexpected package parts: identity=%q version=%q publisher=%q", identity, version, publisher)
+			}
+		})
+	}
+	for _, unsupported := range []string{
+		`OpenAI.CodexTools_26.623.19656.0_x64__2p2nqsd0c76g0`,
+		`OpenAI.ChatGPTUnexpected_26.623.19656.0_x64__2p2nqsd0c76g0`,
+	} {
+		if _, _, _, ok := windowsCodexPackageParts(unsupported); ok {
+			t.Fatalf("lookalike package identity must be rejected: %q", unsupported)
+		}
+	}
+}
+
+func TestWindowsIntegratedChatGPTManifestProvidesRealAUMIDAndExecutable(t *testing.T) {
+	packageRoot := filepath.Join(t.TempDir(), "OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0")
+	manifest := `<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="OpenAI.Codex" />
+  <Applications>
+    <Application Id="Updater" Executable="updater.exe" />
+    <Application Id="ChatGPTDesktop" Executable="app\Codex.exe" EntryPoint="Windows.FullTrustApplication" />
+  </Applications>
+</Package>`
+	writeTestFile(t, filepath.Join(packageRoot, "AppxManifest.xml"), manifest)
+	writeTestFile(t, filepath.Join(packageRoot, "app", "Codex.exe"), "binary")
+
+	metadata, ok := readWindowsPackageManifestMetadata(packageRoot)
+	if !ok {
+		t.Fatal("integrated app manifest should parse")
+	}
+	if metadata.ApplicationID != "ChatGPTDesktop" || metadata.Executable != "app/Codex.exe" {
+		t.Fatalf("unexpected manifest target: %#v", metadata)
+	}
+	appDir := filepath.Join(packageRoot, "app")
+	if got := windowsAppUserModelIDFromPackagePath(appDir); got != "OpenAI.Codex_2p2nqsd0c76g0!ChatGPTDesktop" {
+		t.Fatalf("AUMID must use the manifest Application Id, got %q", got)
+	}
+	if got := normalizeWindowsPackageAppPath(packageRoot); got != appDir {
+		t.Fatalf("manifest executable directory mismatch: got %q want %q", got, appDir)
+	}
+}
+
+func TestWindowsIntegratedChatGPTManifestParsesExecutionAliasAndVFSExecutable(t *testing.T) {
+	packageRoot := filepath.Join(t.TempDir(), "OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0")
+	manifest := `<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">
+  <Identity Name="OpenAI.Codex" />
+  <Applications>
+    <Application Id="App">
+      <Extensions>
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="VFS\ProgramFilesX64\OpenAI\Codex\Codex.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias><desktop:ExecutionAlias Alias="Codex.exe" /></uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>`
+	writeTestFile(t, filepath.Join(packageRoot, "AppxManifest.xml"), manifest)
+	executable := filepath.Join(packageRoot, "VFS", "ProgramFilesX64", "OpenAI", "Codex", "Codex.exe")
+	writeTestFile(t, executable, "binary")
+
+	metadata, ok := readWindowsPackageManifestMetadata(packageRoot)
+	if !ok {
+		t.Fatal("manifest execution alias should identify the unified desktop app")
+	}
+	if metadata.ApplicationID != "App" || metadata.Executable != "VFS/ProgramFilesX64/OpenAI/Codex/Codex.exe" || metadata.EntryPoint != "Windows.FullTrustApplication" {
+		t.Fatalf("unexpected VFS manifest metadata: %#v", metadata)
+	}
+	if len(metadata.ExecutionAliases) != 1 || metadata.ExecutionAliases[0] != "Codex.exe" {
+		t.Fatalf("execution alias mismatch: %#v", metadata.ExecutionAliases)
+	}
+	if got := normalizeWindowsPackageAppPath(packageRoot); got != filepath.Dir(executable) {
+		t.Fatalf("VFS package normalization mismatch: got %q want %q", got, filepath.Dir(executable))
+	}
+	if got := windowsAppUserModelIDFromPackagePath(executable); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+		t.Fatalf("deep VFS executable should retain the package AUMID: %q", got)
+	}
+}
+
+func TestWindowsPackageRootRecoveryScansDeepVFSPath(t *testing.T) {
+	packageRoot := `C:\Program Files\WindowsApps\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0`
+	executable := packageRoot + `\VFS\ProgramFilesX64\OpenAI\Codex\Codex.exe`
+	if got := windowsPackageNameFromPath(executable); got != `OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0` {
+		t.Fatalf("deep VFS package name mismatch: %q", got)
+	}
+	if got := windowsPackageRootFromPath(executable); got != packageRoot {
+		t.Fatalf("deep VFS package root mismatch: got %q want %q", got, packageRoot)
+	}
+}
+
+func TestWindowsManifestRejectsAmbiguousDesktopApplications(t *testing.T) {
+	packageRoot := filepath.Join(t.TempDir(), "OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0")
+	manifest := `<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="OpenAI.Codex" />
+  <Applications>
+    <Application Id="App" Executable="app\Codex.exe" EntryPoint="Windows.FullTrustApplication" />
+    <Application Id="Second" Executable="second\ChatGPT.exe" EntryPoint="Windows.FullTrustApplication" />
+  </Applications>
+</Package>`
+	writeTestFile(t, filepath.Join(packageRoot, "AppxManifest.xml"), manifest)
+	if metadata, ok := readWindowsPackageManifestMetadata(packageRoot); ok {
+		t.Fatalf("ambiguous desktop applications must not be guessed: %#v", metadata)
+	}
+}
+
+func TestNormalizeWindowsRegisteredPackageLaunchInfoRequiresOfficialExactPackage(t *testing.T) {
+	installLocation := filepath.Join(t.TempDir(), "OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0")
+	raw := windowsRegisteredPackageLaunchInfo{
+		AppUserModelID:    "OpenAI.Codex_2p2nqsd0c76g0!App",
+		PackageFamilyName: "OpenAI.Codex_2p2nqsd0c76g0",
+		PackageFullName:   "OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0",
+		InstallLocation:   installLocation,
+		ApplicationID:     "App",
+		Executable:        `app\Codex.exe`,
+		EntryPoint:        "Windows.FullTrustApplication",
+		ExecutionAliases:  []string{"Codex.exe", "unrelated.exe", "codex.exe"},
+	}
+	info, ok := normalizeWindowsRegisteredPackageLaunchInfo(raw, raw.AppUserModelID)
+	if !ok {
+		t.Fatal("official registered package launch info should validate")
+	}
+	if info.ExecutablePath != filepath.Join(installLocation, "app", "Codex.exe") {
+		t.Fatalf("registered executable path mismatch: %q", info.ExecutablePath)
+	}
+	if len(info.ExecutionAliases) != 1 || info.ExecutionAliases[0] != "Codex.exe" {
+		t.Fatalf("registered aliases must be filtered and deduplicated: %#v", info.ExecutionAliases)
+	}
+	raw.PackageFamilyName = "OpenAI.ChatGPT_2p2nqsd0c76g0"
+	if _, ok := normalizeWindowsRegisteredPackageLaunchInfo(raw, raw.AppUserModelID); ok {
+		t.Fatal("mismatched package family must be rejected")
+	}
+	raw.PackageFamilyName = "OpenAI.Codex_2p2nqsd0c76g0"
+	raw.Executable = `..\evil\Codex.exe`
+	if _, ok := normalizeWindowsRegisteredPackageLaunchInfo(raw, raw.AppUserModelID); ok {
+		t.Fatal("package-relative traversal executable must be rejected")
+	}
+}
+
+func TestWindowsIntegratedChatGPTProtectedPathsCoverBothPackageIdentities(t *testing.T) {
+	for _, path := range []string{
+		`C:\Program Files\WindowsApps\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0\app\Codex.exe`,
+		`C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`,
+		`C:\Program Files\WindowsApps\.\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0\app\Codex.exe`,
+		`C:\Program Files\WindowsApps.\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0\app\Codex.exe`,
+	} {
+		if !isWindowsProtectedAppPackagePath(path) {
+			t.Fatalf("known Store package must remain protected from direct execution: %q", path)
+		}
+	}
+	if isWindowsProtectedAppPackagePath(`C:\Program Files\WindowsApps\Unrelated.App_1.0.0.0_x64__publisher\app.exe`) {
+		t.Fatal("unrelated WindowsApps package must not be classified as an OpenAI desktop target")
+	}
+}
+
+func TestWindowsIntegratedChatGPTDiagnosticPathNormalizesWithoutFileAccess(t *testing.T) {
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0\app`
+	if got := normalizeWindowsPackageAppPath(path); got != path {
+		t.Fatalf("the integrated app path from the Windows diagnostic should normalize without reading WindowsApps: got %q want %q", got, path)
+	}
+	if got := windowsAppUserModelIDFromPackagePath(path); got != "OpenAI.Codex_2p2nqsd0c76g0!App" {
+		t.Fatalf("fallback AUMID mismatch for the diagnostic package shape: %q", got)
+	}
+}
+
+func TestWindowsIntegratedChatGPTStableAUMIDReference(t *testing.T) {
+	reference := `aumid:openai.codex_2p2nqsd0c76g0!ChatGPTDesktop`
+	wantReference := `aumid:OpenAI.Codex_2p2nqsd0c76g0!ChatGPTDesktop`
+	if got := normalizeWindowsPackagedAppReference(reference); got != wantReference {
+		t.Fatalf("stable AUMID reference mismatch: got %q want %q", got, wantReference)
+	}
+	if got := strings.TrimPrefix(normalizeWindowsPackagedAppReference(wantReference), "aumid:"); got != `OpenAI.Codex_2p2nqsd0c76g0!ChatGPTDesktop` {
+		t.Fatalf("AUMID extraction mismatch: %q", got)
+	}
+	for _, invalid := range []string{
+		`aumid:OpenAI.CodexTools_2p2nqsd0c76g0!App`,
+		`aumid:OpenAI.Codex_2p2nqsd0c76g0!..\evil`,
+		`OpenAI.Codex_2p2nqsd0c76g0!App`,
+	} {
+		if got := normalizeWindowsPackagedAppReference(invalid); got != "" {
+			t.Fatalf("invalid AUMID reference should be rejected: %q -> %q", invalid, got)
+		}
+	}
+}
+
+func TestWindowsStableAUMIDBuildsActivationWithoutGuessingPackagePath(t *testing.T) {
+	activation := newWindowsPackagedActivation(`OpenAI.Codex_2p2nqsd0c76g0!ChatGPTDesktop`, 9229, nil, backendSettings{})
+	if activation == nil || activation.appUserModelID != `OpenAI.Codex_2p2nqsd0c76g0!ChatGPTDesktop` {
+		t.Fatalf("stable AUMID should build an activation target: %#v", activation)
+	}
+	if activation.packageFamilyName != `OpenAI.Codex_2p2nqsd0c76g0` {
+		t.Fatalf("package family mismatch: %q", activation.packageFamilyName)
+	}
+}
+
+func TestWindowsIntegratedChatGPTExecutableNamesKeepLegacyCompatibility(t *testing.T) {
+	for _, name := range []string{"ChatGPT.exe", "chatgpt.exe", "Codex.exe", "codex.exe"} {
+		if !isWindowsTargetAppExecutableName(name) {
+			t.Fatalf("integrated Windows target should accept %q", name)
+		}
+	}
+	if isWindowsTargetAppExecutableName("CodexTools.exe") {
+		t.Fatal("manager executable must not be accepted as the target app")
+	}
+	for _, family := range []string{"OpenAI.Codex_2p2nqsd0c76g0", "OpenAI.ChatGPTBeta_2p2nqsd0c76g0"} {
+		if !isOpenAIDesktopPackageFamily(family) {
+			t.Fatalf("official desktop package family should be accepted: %q", family)
+		}
+	}
+	for _, family := range []string{"", "OpenAI.Codex_testpublisher", "OpenAI.CodexTools_2p2nqsd0c76g0"} {
+		if isOpenAIDesktopPackageFamily(family) {
+			t.Fatalf("unofficial desktop package family should be rejected: %q", family)
+		}
+	}
+}
+
+func TestDiagnosticSettingsValueRedactsCredentialsAndAccountLabels(t *testing.T) {
+	settings := backendSettings{
+		Language:                  "zh-CN",
+		RelayAPIKey:               "relay-secret-value",
+		MobileControlKey:          "mobile-secret-value",
+		RelayCommonConfigContents: `experimental_bearer_token = "config-secret-value"`,
+		RelayProfiles: []relayProfile{{
+			Name:                 "provider-name-kept",
+			APIKey:               "profile-secret-value",
+			OfficialAuthContents: `{"access_token":"oauth-secret-value"}`,
+			OfficialAccountLabel: "private-account@example.invalid",
+			ConfigContents:       `api_key = "nested-config-secret-value"`,
+		}},
+	}
+
+	data, err := json.Marshal(diagnosticSettingsValue(settings))
+	if err != nil {
+		t.Fatalf("marshal redacted diagnostics failed: %v", err)
+	}
+	report := string(data)
+	for _, secret := range []string{
+		"relay-secret-value",
+		"mobile-secret-value",
+		"config-secret-value",
+		"profile-secret-value",
+		"oauth-secret-value",
+		"private-account@example.invalid",
+		"nested-config-secret-value",
+	} {
+		if strings.Contains(report, secret) {
+			t.Fatalf("diagnostic settings leaked %q: %s", secret, report)
+		}
+	}
+	for _, expected := range []string{"zh-CN", `"relayProfileCount":1`, `"apiKeyConfigured":true`, `"officialAuthConfigured":true`, `"configConfigured":true`} {
+		if !strings.Contains(report, expected) {
+			t.Fatalf("diagnostic settings should retain safe context %q: %s", expected, report)
+		}
+	}
+}
+
+func TestDiagnosticLaunchStatusUsesSafeAllowlist(t *testing.T) {
+	appPath := filepath.Join(string(filepath.Separator), "Users", "private-user", "ChatGPT.app")
+	debugPort := uint16(9229)
+	status := launchStatus{
+		Status:    "failed",
+		Message:   "启动失败 Bearer private-access-token",
+		DebugPort: &debugPort,
+		CodexApp:  &appPath,
+		Detail: map[string]any{
+			"activation_method":  "packaged_activation",
+			"appUserModelId":     "OpenAI.Codex_2p2nqsd0c76g0!App",
+			"cdp_port_available": false,
+			"error":              "Incorrect function private-error-detail",
+			"apiKey":             "private-api-key",
+			"executionAlias":     filepath.Join("private-user", "WindowsApps", "Codex.exe"),
+			"windows_launch_attempts": []any{
+				map[string]any{"method": "app_execution_alias", "outcome": "debug_port_unavailable", "error": "private-attempt-error"},
+				map[string]any{"method": "application_activation_manager", "outcome": "activation_incorrect_function"},
+			},
+		},
+	}
+	data, err := json.Marshal(diagnosticLaunchStatusValue(status))
+	if err != nil {
+		t.Fatalf("marshal diagnostic launch status failed: %v", err)
+	}
+	report := string(data)
+	for _, secret := range []string{"private-user", "private-access-token", "private-error-detail", "private-api-key", "private-attempt-error"} {
+		if strings.Contains(report, secret) {
+			t.Fatalf("diagnostic launch status leaked %q: %s", secret, report)
+		}
+	}
+	for _, expected := range []string{"application_activation_incorrect_function", "OpenAI.Codex_2p2nqsd0c76g0!App", "packaged_activation", "ChatGPT.app", "app_execution_alias", "debug_port_unavailable"} {
+		if !strings.Contains(report, expected) {
+			t.Fatalf("diagnostic launch status should retain %q: %s", expected, report)
+		}
+	}
+}
+
+func TestWindowsPackagedAttemptOutcomeIsStructured(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{err: errors.New("Incorrect function."), want: "activation_incorrect_function"},
+		{err: errors.New("未检测到调试端口 9229"), want: "debug_port_unavailable"},
+		{err: errors.New("无法启动 ChatGPT 可执行文件"), want: "process_start_failed"},
+		{err: errors.New("access denied"), want: "activation_failed"},
+	}
+	for _, test := range cases {
+		if got := windowsPackagedAttemptOutcome(test.err); got != test.want {
+			t.Fatalf("attempt outcome mismatch for %q: got %q want %q", test.err, got, test.want)
+		}
+	}
+}
+
 func TestPackagedWindowsAppUserModelIDIsCaseInsensitive(t *testing.T) {
 	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
 	mistypedCase := strings.Replace(path, "OpenAI.ChatGPT_", "OpenAl.Codex_", 1)
 
-	if got := packagedWindowsAppUserModelID(strings.ToLower(path)); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
+	if got := windowsAppUserModelIDFromPackagePath(strings.ToLower(path)); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("lowercase package path should still resolve app id: %q", got)
 	}
-	if got := packagedWindowsAppUserModelID(mistypedCase); got != "" {
+	if got := windowsAppUserModelIDFromPackagePath(mistypedCase); got != "" {
 		t.Fatalf("non Codex package identity should not resolve app id: %q", got)
 	}
 }
 
-func TestWindowsPackagePathNormalizesToAppDirOnWindows(t *testing.T) {
-	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`
-
-	if runtime.GOOS != "windows" {
-		if got := normalizeCodexAppPath(path); got != "" {
-			t.Fatalf("Windows package paths should not normalize outside Windows: %q", got)
-		}
-		return
-	}
-	want := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
-	if got := normalizeCodexAppPath(path); got != want {
-		t.Fatalf("Windows package path should normalize to app dir: %q", got)
+func TestWindowsPackagePathRejectsUnofficialPublisher(t *testing.T) {
+	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_0.0.0.1_x64__testpublisher\app\ChatGPT.exe`
+	if got := windowsAppUserModelIDFromPackagePath(path); got != "" {
+		t.Fatalf("unofficial package publisher must not produce an AUMID: %q", got)
 	}
 }
 
-func TestWindowsPackageShapeNormalizesWithoutReadableExecutable(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows package normalization only applies on Windows")
-	}
-	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0`
-	want := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
-
-	if got := normalizeCodexAppPath(path); got != want {
-		t.Fatalf("package shape should normalize without file access: %q", got)
+func TestWindowsOfficialPackageShapeProducesStableAUMIDCandidate(t *testing.T) {
+	path := `C:\Program Files\WindowsApps\OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0`
+	want := `OpenAI.Codex_2p2nqsd0c76g0!App`
+	if got := windowsAppUserModelIDFromPackagePath(path); got != want {
+		t.Fatalf("official package shape should produce a stable AUMID candidate: got %q want %q", got, want)
 	}
 }
 
@@ -3120,12 +3442,7 @@ func TestBuildCodexExecutableRejectsWindowsPlainDirectory(t *testing.T) {
 }
 
 func TestBuildWindowsPackagedActivationArguments(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("packaged activation is only built on Windows")
-	}
-	path := `C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0\app`
-
-	activation := buildWindowsPackagedActivation(path, 9229, []string{"--force_high_performance_gpu"})
+	activation := newWindowsPackagedActivation("OpenAI.ChatGPT_2p2nqsd0c76g0!App", 9229, []string{"--force_high_performance_gpu"}, backendSettings{})
 
 	if activation == nil {
 		t.Fatal("activation should be built")
@@ -3275,7 +3592,7 @@ func TestProviderSyncRestoresMissingThreadRowsFromRollouts(t *testing.T) {
 	}
 }
 
-func TestCodexLaunchPayloadRejectsProtectedWindowsAppsEvenWhenReadable(t *testing.T) {
+func TestCodexLaunchPayloadActivatesProtectedWindowsAppsWithoutDirectLaunch(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows protected package handling only applies on Windows")
 	}
@@ -3285,11 +3602,14 @@ func TestCodexLaunchPayloadRejectsProtectedWindowsAppsEvenWhenReadable(t *testin
 
 	payload := codexLaunchPayload(appDir)
 
-	if boolFromAny(payload["ready"]) {
-		t.Fatalf("protected WindowsApps package should not be launch-ready: %#v", payload)
+	if !boolFromAny(payload["ready"]) {
+		t.Fatalf("protected WindowsApps package should be activation-ready: %#v", payload)
 	}
-	if got := stringFromAny(payload["method"]); got != "msix_unsupported" {
-		t.Fatalf("protected WindowsApps package should be rejected, got %q payload=%#v", got, payload)
+	if got := stringFromAny(payload["method"]); got != "packaged_activation" {
+		t.Fatalf("protected WindowsApps package should use packaged activation, got %q payload=%#v", got, payload)
+	}
+	if !boolFromAny(payload["directLaunchBlocked"]) {
+		t.Fatalf("protected WindowsApps executable must remain blocked from direct launch: %#v", payload)
 	}
 	if got := stringFromAny(payload["executable"]); got != exe {
 		t.Fatalf("executable mismatch: %q", got)
@@ -3300,8 +3620,8 @@ func TestCodexLaunchPayloadAcceptsUnpackedCodexExecutable(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows executable preference only applies on Windows")
 	}
-	appDir := filepath.Join(t.TempDir(), "CodexAppMirror", "OpenAI.ChatGPT_26.519.11010.0_x64__2p2nqsd0c76g0", "app")
-	exe := filepath.Join(appDir, "ChatGPT.exe")
+	appDir := filepath.Join(t.TempDir(), "CodexAppMirror", "OpenAI.Codex_26.623.19656.0_x64__2p2nqsd0c76g0", "app")
+	exe := filepath.Join(appDir, "Codex.exe")
 	writeTestFile(t, exe, "binary")
 
 	payload := codexLaunchPayload(appDir)
@@ -3334,7 +3654,7 @@ func TestPackagedCodexDebugPortErrorGivesActionableGuidance(t *testing.T) {
 	err := packagedCodexDebugPortError("OpenAI.ChatGPT_abc!App", 9229, "explorer")
 	message := err.Error()
 
-	for _, expected := range []string{"Windows Store/MSIX", "调试端口 9229", "ChatGPT.exe", "--remote-debugging-port"} {
+	for _, expected := range []string{"Windows Store/MSIX", "调试端口 9229", "应用已安装", "增强注入暂不可用", "--remote-debugging-port"} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("error should contain %q, got %q", expected, message)
 		}
@@ -3355,7 +3675,7 @@ func TestLaunchFailureDetailIncludesRecommendedAction(t *testing.T) {
 	}
 }
 
-func TestCodexLaunchPayloadRejectsProtectedPackagedActivationShape(t *testing.T) {
+func TestCodexLaunchPayloadAcceptsProtectedPackagedActivationShape(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("packaged activation is only used on Windows")
 	}
@@ -3363,33 +3683,14 @@ func TestCodexLaunchPayloadRejectsProtectedPackagedActivationShape(t *testing.T)
 
 	payload := codexLaunchPayload(path)
 
-	if boolFromAny(payload["ready"]) {
-		t.Fatalf("protected packaged app should not be launch-ready: %#v", payload)
+	if !boolFromAny(payload["ready"]) {
+		t.Fatalf("protected packaged app should be activation-ready: %#v", payload)
 	}
-	if got := stringFromAny(payload["method"]); got != "msix_unsupported" {
+	if got := stringFromAny(payload["method"]); got != "packaged_activation" {
 		t.Fatalf("launch method mismatch: %q", got)
 	}
 	if got := stringFromAny(payload["appUserModelId"]); got != "OpenAI.ChatGPT_2p2nqsd0c76g0!App" {
 		t.Fatalf("app user model id mismatch: %q", got)
-	}
-}
-
-func TestFindLatestWindowsCodexAppDirPrefersHighestVersion(t *testing.T) {
-	root := t.TempDir()
-	oldApp := filepath.Join(root, "OpenAI.ChatGPT_1.2.3.0_x64__abc", "app")
-	newApp := filepath.Join(root, "OpenAI.ChatGPT_26.519.11010.0_x64__abc", "app")
-	if err := os.MkdirAll(oldApp, 0o755); err != nil {
-		t.Fatalf("failed to create old app dir: %v", err)
-	}
-	if err := os.MkdirAll(newApp, 0o755); err != nil {
-		t.Fatalf("failed to create new app dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "OpenAI.ChatGPT_not-a-version_x64__abc"), 0o755); err != nil {
-		t.Fatalf("failed to create invalid app dir: %v", err)
-	}
-
-	if got := findLatestWindowsCodexAppDir(root); got != newApp {
-		t.Fatalf("latest app dir mismatch: %q", got)
 	}
 }
 

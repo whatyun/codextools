@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const relayAppliedModeMarkerPrefix = "# chatgpt-codex-tools: applied-relay-mode="
+
 func (s *server) relayStatus() commandResult {
 	status := relayStatusFromHome(codexHomeDir(), loadSettings())
 	message := "未检测到 ChatGPT 登录状态，请先在 ChatGPT 中正常登录。"
@@ -35,6 +37,17 @@ func relayStatusFromHome(home string, settingsOpt ...backendSettings) map[string
 		settings = normalizeSettings(settingsOpt[0])
 	}
 	bound := boundOfficialAuthStatus(settings)
+	active := activeRelayProfile(settings)
+	selectedMode := active.RelayMode
+	appliedMode := "official"
+	if config.Configured {
+		appliedMode = relayAppliedModeMarker(readFile(config.ConfigPath))
+		if appliedMode == "" || appliedMode == "official" {
+			// API configs written before the marker existed cannot reliably distinguish
+			// mixed, pure, and aggregate modes. Treat them conservatively as pure API.
+			appliedMode = "pureApi"
+		}
+	}
 	officialAuthenticated := auth.Authenticated || bound.Authenticated
 	officialAccountLabel := auth.AccountLabel
 	if officialAccountLabel == "" {
@@ -45,6 +58,9 @@ func relayStatusFromHome(home string, settingsOpt ...backendSettings) map[string
 		officialAuthSource = bound.Source
 	}
 	return map[string]any{
+		"activeMode":                 selectedMode,
+		"selectedMode":               selectedMode,
+		"appliedMode":                appliedMode,
 		"authenticated":              auth.Authenticated,
 		"authSource":                 auth.Source,
 		"accountLabel":               nullableString(auth.AccountLabel),
@@ -337,6 +353,7 @@ func writeRelaySnapshot(home string, settings backendSettings, relay relayProfil
 	if pure {
 		configContents = ensureConfigBearerToken(configContents, strings.TrimSpace(relay.APIKey))
 	}
+	configContents = withRelayAppliedModeMarker(configContents, relay.RelayMode)
 	if err := writeRelayModelCatalog(home, relay); err != nil {
 		return nil, err
 	}
@@ -354,21 +371,78 @@ func writeRelaySnapshot(home string, settings backendSettings, relay relayProfil
 	return backupPath, nil
 }
 
+func relayAppliedModeMarker(contents string) string {
+	contents = strings.TrimPrefix(contents, "\ufeff")
+	for _, line := range strings.Split(contents, "\n") {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if !strings.HasPrefix(trimmed, relayAppliedModeMarkerPrefix) {
+			continue
+		}
+		mode := strings.TrimSpace(strings.TrimPrefix(trimmed, relayAppliedModeMarkerPrefix))
+		switch mode {
+		case "official", "mixedApi", "pureApi", "aggregate":
+			return mode
+		default:
+			return ""
+		}
+	}
+	return ""
+}
+
+func withRelayAppliedModeMarker(contents, mode string) string {
+	switch mode {
+	case "official", "mixedApi", "pureApi", "aggregate":
+	default:
+		mode = "official"
+	}
+
+	bom := ""
+	if strings.HasPrefix(contents, "\ufeff") {
+		bom = "\ufeff"
+		contents = strings.TrimPrefix(contents, "\ufeff")
+	}
+	newline := "\n"
+	if strings.Contains(contents, "\r\n") {
+		newline = "\r\n"
+	}
+
+	var body strings.Builder
+	for _, line := range strings.SplitAfter(contents, "\n") {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
+		if strings.HasPrefix(trimmed, relayAppliedModeMarkerPrefix) {
+			continue
+		}
+		body.WriteString(line)
+	}
+	return bom + relayAppliedModeMarkerPrefix + mode + newline + body.String()
+}
+
 func (s *server) saveRelayFile(args map[string]any) commandResult {
 	request := mapArg(args, "request")
 	kind := stringArg(request, "kind")
 	contents := stringArg(request, "contents")
+	home := codexHomeDir()
 	var path string
 	switch kind {
 	case "config":
-		path = filepath.Join(codexHomeDir(), "config.toml")
+		path = filepath.Join(home, "config.toml")
 	case "auth":
-		path = filepath.Join(codexHomeDir(), "auth.json")
+		path = filepath.Join(home, "auth.json")
 	default:
-		return failed("保存配置文件失败：未知配置文件类型："+kind, relayFilesPayload(codexHomeDir()))
+		return failed("保存配置文件失败：未知配置文件类型："+kind, relayFilesPayload(home))
+	}
+	if kind == "config" {
+		releaseLock, err := acquireProviderSyncMutationGuards(home, "manual-config-save")
+		if err != nil {
+			return failed("保存 config.toml 失败：另一个模式切换或历史同步正在运行："+err.Error(), relayFilesPayload(home))
+		}
+		defer releaseLock()
+		if err := ensureProviderSyncWritersStopped(); err != nil {
+			return failed("保存 config.toml 失败："+err.Error(), relayFilesPayload(home))
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return failed("保存配置文件失败："+err.Error(), relayFilesPayload(codexHomeDir()))
+		return failed("保存配置文件失败："+err.Error(), relayFilesPayload(home))
 	}
 	var backupPath *string
 	var err error
@@ -378,11 +452,11 @@ func (s *server) saveRelayFile(args map[string]any) commandResult {
 		err = os.WriteFile(path, []byte(contents), 0o644)
 	}
 	if err != nil {
-		payload := relayFilesPayload(codexHomeDir())
+		payload := relayFilesPayload(home)
 		payload["backupPath"] = nullableStringPtr(backupPath)
 		return failed("保存配置文件失败："+err.Error(), payload)
 	}
-	payload := relayFilesPayload(codexHomeDir())
+	payload := relayFilesPayload(home)
 	payload["backupPath"] = nullableStringPtr(backupPath)
 	return ok("配置文件已保存。", payload)
 }
@@ -612,6 +686,14 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	}
 	settings = loadSettings()
 	relay = activeRelayProfile(settings)
+	releaseLock, lockErr := acquireProviderSyncMutationGuards(home, "relay-mode-switch")
+	if lockErr != nil {
+		return failed("切换模式失败：另一个模式切换或历史同步正在运行："+lockErr.Error(), relayStatusFromHome(home))
+	}
+	defer releaseLock()
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		return failed("切换模式失败："+err.Error(), relayStatusFromHome(home))
+	}
 	backupPath, err := writeRelaySnapshot(home, settings, relay, pure)
 	if err != nil {
 		if pure {
@@ -622,15 +704,19 @@ func (s *server) applyRelayInjection(pure bool) commandResult {
 	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
 	payload := relayStatusFromHome(home)
 	payload["backupPath"] = nullableStringPtr(backupPath)
+	payload["configApplied"] = true
 	payload["pluginRepair"] = relayPluginRepairPayload(repairResult)
-	syncResult := runProviderSync(home)
+	syncResult := runProviderSyncLocked(home)
 	payload["providerSync"] = relayProviderSyncPayload(syncResult)
-	if repairResult.Status == "failed" {
+	if repairResult.Status == "failed" || syncResult.Status == "failed" {
+		payload["maintenanceStatus"] = "failed"
+		modeLabel := "中转配置"
 		if pure {
-			return failed("中转 API 模式已写入，但插件恢复失败："+repairResult.Message, payload)
+			modeLabel = "中转 API 模式"
 		}
-		return failed("中转配置已写入，但插件恢复失败："+repairResult.Message, payload)
+		return warning(modeLabel+"已写入，但后续维护未完成："+relaySwitchRepairMessage(repairResult, syncResult), payload)
 	}
+	payload["maintenanceStatus"] = "ok"
 	if pure {
 		return ok("中转 API 模式已写入：config.toml 使用当前供应商快照，auth.json 保留当前 ChatGPT 登录；"+relaySwitchRepairMessage(repairResult, syncResult), payload)
 	}
@@ -680,6 +766,8 @@ func relayProviderSyncPayload(result providerSyncResult) map[string]any {
 		"backupDir":           result.BackupDir,
 		"changedSessionFiles": result.ChangedSessionFiles,
 		"sqliteRowsUpdated":   result.SQLiteRowsUpdated,
+		"partial":             result.Partial,
+		"rollbackStatus":      result.RollbackStatus,
 	}
 }
 
@@ -697,7 +785,19 @@ func relaySwitchRepairMessage(repairResult codexConfigRepairResult, syncResult p
 		messages = append(messages, fmt.Sprintf("历史会话已同步：%d 个会话文件，%d 行索引。", syncResult.ChangedSessionFiles, syncResult.SQLiteRowsUpdated))
 	}
 	if syncResult.Status == "skipped" {
-		messages = append(messages, "历史会话同步暂时跳过："+syncResult.Message)
+		messages = append(messages, "历史会话同步暂未执行且未修改聊天记录，可重试："+syncResult.Message)
+	}
+	if syncResult.Status == "failed" {
+		message := "历史会话同步失败，未完成同步：" + syncResult.Message
+		if syncResult.Partial {
+			message = "历史会话同步失败且回滚失败，可能处于部分同步状态：" + syncResult.Message
+		} else if syncResult.RollbackStatus == "rolled_back" {
+			message = "历史会话同步失败，已回滚本次历史改动：" + syncResult.Message
+		}
+		if syncResult.BackupDir != nil && strings.TrimSpace(*syncResult.BackupDir) != "" {
+			message += " 备份：" + strings.TrimSpace(*syncResult.BackupDir)
+		}
+		messages = append(messages, message)
 	}
 	return strings.Join(messages, " ")
 }
@@ -957,19 +1057,30 @@ func (s *server) clearRelayInjection() commandResult {
 	}
 	settings = loadSettings()
 	relay = activeRelayProfile(settings)
+	releaseLock, lockErr := acquireProviderSyncMutationGuards(home, "official-mode-switch")
+	if lockErr != nil {
+		return failed("切换官方登录模式失败：另一个模式切换或历史同步正在运行："+lockErr.Error(), relayStatusFromHome(home))
+	}
+	defer releaseLock()
+	if err := ensureProviderSyncWritersStopped(); err != nil {
+		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))
+	}
 	backupPath, err := writeRelaySnapshot(home, settings, relay, false)
 	if err != nil {
 		return failed("切换官方登录模式失败："+err.Error(), relayStatusFromHome(home))
 	}
 	payload := relayStatusFromHome(home)
 	payload["backupPath"] = nullableStringPtr(backupPath)
+	payload["configApplied"] = true
 	repairResult := repairCodexConfig(home, codexConfigRepairOptions{Plugins: true, RefreshMarketplaces: true})
 	payload["pluginRepair"] = relayPluginRepairPayload(repairResult)
-	syncResult := runProviderSync(home)
+	syncResult := runProviderSyncLocked(home)
 	payload["providerSync"] = relayProviderSyncPayload(syncResult)
-	if repairResult.Status == "failed" {
-		return failed("官方登录模式已写入，但插件恢复失败："+repairResult.Message, payload)
+	if repairResult.Status == "failed" || syncResult.Status == "failed" {
+		payload["maintenanceStatus"] = "failed"
+		return warning("官方登录模式已写入，但后续维护未完成："+relaySwitchRepairMessage(repairResult, syncResult), payload)
 	}
+	payload["maintenanceStatus"] = "ok"
 	return ok("已切换到此供应商绑定的官方 ChatGPT 登录模式；"+relaySwitchRepairMessage(repairResult, syncResult), payload)
 }
 
@@ -1092,7 +1203,7 @@ func (s *server) testRelayProfile(ctx context.Context, args map[string]any) comm
 }
 
 func relayTestPayload(profile relayProfile, model string) (string, map[string]any) {
-	baseURL := relayProxyBaseURL(profile.BaseURL, profile.Protocol)
+	baseURL := relayProxyBaseURL(effectiveUpstreamBaseURL(profile), profile.Protocol)
 	if profile.Protocol == "chatCompletions" {
 		return baseURL + "/chat/completions", map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "max_tokens": 16}
 	}

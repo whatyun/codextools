@@ -153,8 +153,29 @@ func loadSettings() backendSettings {
 		return defaultSettings()
 	}
 	settings = normalizeSettings(settings)
+	settingsChanged := false
+	if runtime.GOOS == "windows" && strings.TrimSpace(settings.CodexAppPath) != "" {
+		originalPath := settings.CodexAppPath
+		normalized := normalizeCodexAppPath(originalPath)
+		packageReference := isWindowsPackagedAppReference(originalPath) || isWindowsProtectedAppPackagePath(originalPath) || isWindowsProtectedAppPackagePath(normalized)
+		if packageReference && (normalized == "" || !windowsCodexPathSupportsLaunch(normalized)) {
+			if detected := resolveWindowsCodexFromInstalledApps(); detected != "" {
+				normalized = detected
+			}
+		}
+		if packageReference && normalized == "" {
+			// Keep the last stable AUMID when PowerShell is temporarily unavailable.
+			settings.CodexAppPath = originalPath
+		} else if normalized != "" && normalized != originalPath {
+			settings.CodexAppPath = normalized
+			settingsChanged = true
+		}
+	}
 	if migrated, changed := migrateOfficialAuthBinding(settings); changed {
 		settings = migrated
+		settingsChanged = true
+	}
+	if settingsChanged {
 		_ = atomicWriteSettingsPreservingUnknown(settingsPath(), settings)
 	}
 	return settings
@@ -205,9 +226,12 @@ func normalizeSettings(settings backendSettings) backendSettings {
 		if settings.RelayProfiles[index].Name == "" {
 			settings.RelayProfiles[index].Name = settings.RelayProfiles[index].ID
 		}
-		if settings.RelayProfiles[index].UpstreamBaseURL == "" {
-			settings.RelayProfiles[index].UpstreamBaseURL = settings.RelayProfiles[index].BaseURL
+		baseURL := strings.TrimSpace(settings.RelayProfiles[index].BaseURL)
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(settings.RelayProfiles[index].UpstreamBaseURL)
 		}
+		settings.RelayProfiles[index].BaseURL = baseURL
+		settings.RelayProfiles[index].UpstreamBaseURL = baseURL
 		if settings.RelayProfiles[index].ModelInsertMode == "" {
 			settings.RelayProfiles[index].ModelInsertMode = "patch"
 		}
@@ -247,7 +271,14 @@ func normalizeSettings(settings backendSettings) backendSettings {
 			settings.RelayProfiles[index].OfficialAccountLabel = status.AccountLabel
 		}
 	}
-	if settings.ActiveRelayID == "" {
+	activeRelayFound := false
+	for _, profile := range settings.RelayProfiles {
+		if profile.ID == settings.ActiveRelayID {
+			activeRelayFound = true
+			break
+		}
+	}
+	if !activeRelayFound {
 		settings.ActiveRelayID = settings.RelayProfiles[0].ID
 	}
 	if settings.AggregateRelayProfiles == nil {
@@ -466,6 +497,18 @@ func saveSettings(settings backendSettings) error {
 	return atomicWriteSettingsPreservingUnknown(settingsPath(), settings)
 }
 
+func loadRuntimeRelaySettings(fallback backendSettings) backendSettings {
+	settings := defaultSettings()
+	data, err := os.ReadFile(settingsPath())
+	if err != nil {
+		return fallback
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fallback
+	}
+	return normalizeSettings(settings)
+}
+
 func atomicWriteSettingsPreservingUnknown(path string, settings backendSettings) error {
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -553,7 +596,7 @@ func (s *server) saveSettings(args map[string]any) commandResult {
 		return failed("保存设置失败："+err.Error(), settingsPayloadValue(loadSettings()))
 	}
 	if err := saveSettings(settings); err != nil {
-		return failed("保存设置失败："+err.Error(), settingsPayloadValue(normalizeSettings(settings)))
+		return failed("保存设置失败："+err.Error(), settingsPayloadValue(loadSettings()))
 	}
 	return settingsPayload("设置已保存。")
 }

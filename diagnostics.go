@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -68,7 +69,7 @@ func redactForLog(value any) any {
 		out := map[string]any{}
 		for key, item := range typed {
 			lower := strings.ToLower(key)
-			if strings.Contains(lower, "key") || strings.Contains(lower, "token") || strings.Contains(lower, "authorization") || strings.Contains(lower, "secret") {
+			if isSensitiveDiagnosticKey(lower) {
 				out[key] = "[redacted]"
 			} else {
 				out[key] = redactForLog(item)
@@ -88,13 +89,270 @@ func redactForLog(value any) any {
 		}
 		return out
 	case string:
-		if strings.HasPrefix(typed, "sk-") || strings.HasPrefix(typed, "Bearer ") {
+		trimmed := strings.TrimSpace(typed)
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "bearer ") || strings.Contains(lower, "sk-") || strings.Contains(lower, `"access_token"`) || strings.Contains(lower, `"refresh_token"`) {
 			return "[redacted]"
+		}
+		if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			parsed.User = nil
+			parsed.RawQuery = ""
+			parsed.Fragment = ""
+			return parsed.String()
 		}
 		return typed
 	default:
 		return typed
 	}
+}
+
+func isSensitiveDiagnosticKey(lower string) bool {
+	for _, marker := range []string{"key", "token", "authorization", "secret", "password", "passphrase", "cookie", "credential", "authcontents"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return lower == "auth" || lower == "headers" || strings.HasSuffix(lower, "header")
+}
+
+func diagnosticSettingsValue(settings backendSettings) any {
+	relayProfiles := make([]map[string]any, 0, len(settings.RelayProfiles))
+	for index, profile := range settings.RelayProfiles {
+		relayProfiles = append(relayProfiles, map[string]any{
+			"index":                      index,
+			"protocol":                   profile.Protocol,
+			"relayMode":                  profile.RelayMode,
+			"officialMixApiKey":          profile.OfficialMixAPIKey,
+			"imageGenerationEnabled":     profile.ImageGenerationEnabled,
+			"imageGenerationSeparateApi": profile.ImageGenerationUseSeparateAPI,
+			"apiKeyConfigured":           strings.TrimSpace(profile.APIKey) != "",
+			"officialAuthConfigured":     strings.TrimSpace(profile.OfficialAuthContents) != "" || strings.TrimSpace(profile.AuthContents) != "",
+			"configConfigured":           strings.TrimSpace(profile.ConfigContents) != "",
+			"proxyEnabled":               profile.ProxyEnabled,
+			"useCommonConfig":            profile.UseCommonConfig,
+		})
+	}
+	return map[string]any{
+		"codexAppReference":               diagnosticAppReference(settings.CodexAppPath),
+		"language":                        settings.Language,
+		"launchMode":                      settings.LaunchMode,
+		"providerSyncEnabled":             settings.ProviderSync,
+		"providerSyncSavedProviderCount":  len(settings.ProviderSyncSavedProviders),
+		"providerSyncManualProviderCount": len(settings.ProviderSyncManualProviders),
+		"relayProfilesEnabled":            settings.RelayProfilesEnabled,
+		"relayProfileCount":               len(settings.RelayProfiles),
+		"relayProfiles":                   relayProfiles,
+		"aggregateRelayProfileCount":      len(settings.AggregateRelayProfiles),
+		"relayCommonConfigConfigured":     strings.TrimSpace(settings.RelayCommonConfigContents) != "",
+		"relayContextConfigConfigured":    strings.TrimSpace(settings.RelayContextConfigContents) != "",
+		"ccsLinkEnabled":                  settings.CCSLinkEnabled,
+		"enhancementsEnabled":             settings.Enhancements,
+		"codexAppPluginEntryUnlock":       settings.CodexAppPluginEntryUnlock,
+		"codexAppForcePluginInstall":      settings.CodexAppForcePluginInstall,
+		"codexAppModelWhitelistUnlock":    settings.CodexAppModelWhitelistUnlock,
+		"codexAppSessionDelete":           settings.CodexAppSessionDelete,
+		"codexAppMarkdownExport":          settings.CodexAppMarkdownExport,
+		"codexAppPasteFix":                settings.CodexAppPasteFix,
+		"codexAppForceChineseLocale":      settings.CodexAppForceChineseLocale,
+		"codexAppFastStartup":             settings.CodexAppFastStartup,
+		"codexAppProjectMove":             settings.CodexAppProjectMove,
+		"codexAppConversationTimeline":    settings.CodexAppConversationTimeline,
+		"codexAppThreadIdBadge":           settings.CodexAppThreadIDBadge,
+		"codexAppConversationView":        settings.CodexAppConversationView,
+		"codexAppThreadScrollRestore":     settings.CodexAppThreadScrollRestore,
+		"codexAppZedRemoteOpen":           settings.CodexAppZedRemoteOpen,
+		"codexAppUpstreamWorktreeCreate":  settings.CodexAppUpstreamWorktreeCreate,
+		"codexAppNativeMenuPlacement":     settings.CodexAppNativeMenuPlacement,
+		"codexAppNativeMenuLocalization":  settings.CodexAppNativeMenuLocalization,
+		"codexAppServiceTierControls":     settings.CodexAppServiceTierControls,
+		"computerUseGuardEnabled":         settings.ComputerUseGuardEnabled,
+		"zedRemoteOpenStrategy":           settings.ZedRemoteOpenStrategy,
+		"zedRemoteProjectRegistryEnabled": settings.ZedRemoteProjectRegistryEnabled,
+		"zedRemoteSyncToZedSettings":      settings.ZedRemoteSyncToZedSettings,
+		"codexAppImageOverlayEnabled":     settings.CodexAppImageOverlayEnabled,
+		"codexAppImageOverlayOpacity":     settings.CodexAppImageOverlayOpacity,
+		"codexGoalsEnabled":               settings.CodexGoalsEnabled,
+		"mobileControlEnabled":            settings.MobileControlEnabled,
+		"onboardingCompleted":             settings.OnboardingCompleted,
+		"onboardingCompletedPlatform":     settings.OnboardingCompletedPlatform,
+		"cliWrapperEnabled":               settings.CLIWrapperEnabled,
+		"cliWrapperBaseUrlConfigured":     strings.TrimSpace(settings.CLIWrapperBaseURL) != "",
+		"cliWrapperApiKeyConfigured":      strings.TrimSpace(settings.CLIWrapperAPIKey) != "",
+	}
+}
+
+func diagnosticAppReference(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if reference := normalizeWindowsPackagedAppReference(trimmed); reference != "" {
+		return reference
+	}
+	if appUserModelID := windowsAppUserModelIDFromPackagePath(trimmed); appUserModelID != "" {
+		return "aumid:" + appUserModelID
+	}
+	base := filepath.Base(trimmed)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return "configured"
+	}
+	return base
+}
+
+func diagnosticLaunchStatusValue(status launchStatus) map[string]any {
+	value := map[string]any{
+		"status":       diagnosticLaunchStatusName(status.Status),
+		"startedAtMs":  status.StartedAtMS,
+		"debugPort":    status.DebugPort,
+		"helperPort":   status.HelperPort,
+		"appReference": "",
+		"failureKind":  diagnosticLaunchFailureKind(status),
+	}
+	if status.CodexApp != nil {
+		value["appReference"] = diagnosticAppReference(*status.CodexApp)
+	}
+	if detail := status.Detail; detail != nil {
+		if appUserModelID := normalizeDiagnosticAUMID(stringFromAny(detail["appUserModelId"])); appUserModelID != "" {
+			value["appUserModelId"] = appUserModelID
+		}
+		if method := diagnosticActivationMethod(stringFromAny(detail["activation_method"])); method != "" {
+			value["activationMethod"] = method
+		}
+		if available, ok := detail["cdp_port_available"].(bool); ok {
+			value["cdpPortAvailable"] = available
+		}
+		if stringFromAny(detail["executionAlias"]) != "" {
+			value["executionAliasAvailable"] = true
+		}
+		if available, ok := detail["packagedExecutableAvailable"].(bool); ok {
+			value["packagedExecutableAvailable"] = available
+		}
+		if attempts := diagnosticWindowsLaunchAttempts(detail["windows_launch_attempts"]); len(attempts) > 0 {
+			value["windowsLaunchAttempts"] = attempts
+		}
+	}
+	return value
+}
+
+func diagnosticWindowsLaunchAttempts(value any) []map[string]string {
+	var raw []windowsPackagedLaunchAttempt
+	switch typed := value.(type) {
+	case []windowsPackagedLaunchAttempt:
+		raw = typed
+	case []any:
+		for _, item := range typed {
+			entry, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			raw = append(raw, windowsPackagedLaunchAttempt{
+				Method:  stringFromAny(entry["method"]),
+				Outcome: stringFromAny(entry["outcome"]),
+			})
+		}
+	}
+	attempts := make([]map[string]string, 0, len(raw))
+	for _, attempt := range raw {
+		method := diagnosticWindowsLaunchMethod(attempt.Method)
+		outcome := diagnosticWindowsLaunchOutcome(attempt.Outcome)
+		if method != "" && outcome != "" {
+			attempts = append(attempts, map[string]string{"method": method, "outcome": outcome})
+		}
+	}
+	return attempts
+}
+
+func diagnosticWindowsLaunchMethod(method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "app_execution_alias", "msix_full_trust_executable", "application_activation_manager":
+		return strings.ToLower(strings.TrimSpace(method))
+	default:
+		return ""
+	}
+}
+
+func diagnosticWindowsLaunchOutcome(outcome string) string {
+	switch strings.ToLower(strings.TrimSpace(outcome)) {
+	case "success", "not_available", "activation_incorrect_function", "debug_port_unavailable", "process_start_failed", "activation_failed":
+		return strings.ToLower(strings.TrimSpace(outcome))
+	default:
+		return ""
+	}
+}
+
+func diagnosticLaunchStatusName(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "starting", "running", "degraded", "restarting", "exited", "failed":
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return "unknown"
+	}
+}
+
+func diagnosticActivationMethod(method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "executable", "packaged_activation", "app_execution_alias", "msix_full_trust_executable":
+		return strings.ToLower(strings.TrimSpace(method))
+	default:
+		return ""
+	}
+}
+
+func normalizeDiagnosticAUMID(value string) string {
+	reference := normalizeWindowsPackagedAppReference("aumid:" + strings.TrimSpace(value))
+	return strings.TrimPrefix(reference, "aumid:")
+}
+
+func diagnosticLaunchFailureKind(status launchStatus) string {
+	detailError := ""
+	if status.Detail != nil {
+		detailError = stringFromAny(status.Detail["error"])
+	}
+	text := strings.ToLower(status.Message + " " + detailError)
+	switch {
+	case strings.Contains(text, "incorrect function"):
+		return "application_activation_incorrect_function"
+	case strings.Contains(text, "端口") && strings.Contains(text, "占用"):
+		return "port_in_use"
+	case strings.Contains(text, "调试端口") || strings.Contains(text, "remote-debugging-port") || strings.Contains(text, "cdp"):
+		return "debug_port_unavailable"
+	case strings.Contains(text, "未找到") && (strings.Contains(text, "chatgpt") || strings.Contains(text, "codex")):
+		return "app_not_found"
+	case strings.Contains(text, "已存在") || strings.Contains(text, "already running"):
+		return "app_already_running"
+	case diagnosticLaunchStatusName(status.Status) == "failed":
+		return "launch_failed"
+	default:
+		return ""
+	}
+}
+
+func diagnosticOverviewValue(overview commandResult) map[string]any {
+	value := map[string]any{
+		"status":         stringFromAny(overview["status"]),
+		"currentVersion": stringFromAny(overview["current_version"]),
+		"updateStatus":   stringFromAny(overview["update_status"]),
+	}
+	if codexApp := mapArg(map[string]any(overview), "codex_app"); len(codexApp) > 0 {
+		appValue := map[string]any{
+			"status":              stringFromAny(codexApp["status"]),
+			"appKind":             stringFromAny(codexApp["appKind"]),
+			"executableAvailable": stringFromAny(codexApp["executable"]) != "",
+		}
+		if appUserModelID := normalizeDiagnosticAUMID(stringFromAny(codexApp["appUserModelId"])); appUserModelID != "" {
+			appValue["appUserModelId"] = appUserModelID
+		}
+		if path := stringFromAny(codexApp["path"]); path != "" {
+			appValue["appReference"] = diagnosticAppReference(path)
+		}
+		value["codexApp"] = appValue
+	}
+	for _, key := range []string{"silent_shortcut", "management_shortcut"} {
+		if shortcut := mapArg(map[string]any(overview), key); len(shortcut) > 0 {
+			value[key+"Status"] = stringFromAny(shortcut["status"])
+		}
+	}
+	return value
 }
 
 func (s *server) readLatestLogs(args map[string]any) commandResult {
@@ -123,22 +381,18 @@ func tailFile(path string, maxLines int) (string, error) {
 
 func (s *server) diagnosticsReport() string {
 	overview := s.loadOverview()
-	settings := loadSettings()
+	settings := diagnosticSettingsValue(loadSettings())
 	var latestLaunch launchStatus
 	latestLaunchPath := latestStatusPath()
 	latestLaunchLoaded := readJSON(latestLaunchPath, &latestLaunch) == nil
 	report := map[string]any{
 		"generatedAtMs": time.Now().UnixMilli(),
 		"version":       version,
-		"overview":      map[string]any(overview),
+		"overview":      diagnosticOverviewValue(overview),
 		"settings":      settings,
-		"logs": map[string]any{
-			"diagnosticLogPath": diagnosticLogPath(),
-			"latestStatusPath":  latestLaunchPath,
-		},
 		"latestLaunch": map[string]any{
 			"loaded": latestLaunchLoaded,
-			"status": latestLaunch,
+			"status": diagnosticLaunchStatusValue(latestLaunch),
 		},
 		"platform": map[string]any{"os": runtime.GOOS, "arch": runtime.GOARCH},
 	}

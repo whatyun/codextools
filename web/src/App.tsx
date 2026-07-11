@@ -499,6 +499,11 @@ type EnvConflict = {
 };
 
 type RelayResult = CommandResult<{
+  activeMode?: RelayMode;
+  selectedMode?: RelayMode;
+  appliedMode?: RelayMode;
+  configApplied?: boolean;
+  maintenanceStatus?: string;
   authenticated: boolean;
   authSource: string;
   accountLabel: string | null;
@@ -536,6 +541,8 @@ type RelayResult = CommandResult<{
     backupDir?: string | null;
     changedSessionFiles?: number;
     sqliteRowsUpdated?: number;
+    partial?: boolean;
+    rollbackStatus?: string;
   };
 }>;
 
@@ -544,6 +551,17 @@ type RelayFilesResult = CommandResult<{
   authPath: string;
   configContents: string;
   authContents: string;
+}>;
+
+type ModeHistorySyncResult = CommandResult<{
+  syncStatus: string;
+  targetProvider: string;
+  changedSessionFiles: number;
+  sqliteRowsUpdated: number;
+  backupDir: string | null;
+  syncMessage: string;
+  partial?: boolean;
+  rollbackStatus?: string;
 }>;
 
 type RelayProfileTestResult = CommandResult<{
@@ -915,6 +933,8 @@ export function App() {
   const [settingsForm, setSettingsForm] = useState<BackendSettings>({ ...defaultSettings });
   const [restartProgress, setRestartProgress] = useState<TaskProgress | null>(null);
   const [relaySwitchProgress, setRelaySwitchProgress] = useState<TaskProgress | null>(null);
+  const [modeHistorySyncInProgress, setModeHistorySyncInProgress] = useState(false);
+  const [lastModeHistorySync, setLastModeHistorySync] = useState<ModeHistorySyncResult | null>(null);
   const [conversationHistoryRepair, setConversationHistoryRepair] = useState<ConversationHistoryRepairResult | null>(null);
   const [removeOwnedData, setRemoveOwnedData] = useState(false);
   const currentLanguage = normalizeLanguage(settingsForm.language);
@@ -924,10 +944,22 @@ export function App() {
   const conversationHistoryRepairPollVersion = useRef(0);
   const conversationHistoryRepairMounted = useRef(false);
   const conversationHistoryRepairNoticeKey = useRef("");
+  const modeHistorySyncRunningRef = useRef(false);
+  const relayMutationGeneration = useRef(0);
+  const relayRefreshRequestSequence = useRef(0);
   const languageRef = useRef(currentLanguage);
   languageRef.current = currentLanguage;
   const tr = (value: string) => translateText(value, languageRef.current);
   const confirmMessage = (message: string) => window.confirm(tr(message));
+
+  const commitRelayResult = (result: RelayResult) => {
+    relayMutationGeneration.current += 1;
+    setRelay((current) => ({
+      ...result,
+      providerSync: result.providerSync ?? current?.providerSync,
+    }));
+    if (result.providerSync) setLastModeHistorySync(() => null);
+  };
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => backendInvoke<T>(command, args);
 
@@ -1050,9 +1082,18 @@ export function App() {
   };
 
   const refreshRelay = async (silent = false) => {
+    const generationAtRequest = relayMutationGeneration.current;
+    const requestSequence = ++relayRefreshRequestSequence.current;
     const result = await run(() => call<RelayResult>("relay_status"));
-    if (result) {
-      setRelay(result);
+    if (
+      result &&
+      relayMutationGeneration.current === generationAtRequest &&
+      relayRefreshRequestSequence.current === requestSequence
+    ) {
+      setRelay((current) => ({
+        ...result,
+        providerSync: result.providerSync ?? current?.providerSync,
+      }));
       if (!silent) showResultNotice("登录状态", result, { silentSuccess: true });
     }
     return result;
@@ -1521,7 +1562,7 @@ export function App() {
     if (result) {
       setSettings(result);
       setPendingProviderImport(result.pendingProviderImport ?? null);
-      setSettingsForm(normalizeSettings(result.settings));
+      if (isSuccessStatus(result.status)) setSettingsForm(normalizeSettings(result.settings));
       showNotice("设置保存", result.message, result.status);
     }
   };
@@ -1532,7 +1573,7 @@ export function App() {
     if (result) {
       setSettings(result);
       setPendingProviderImport(result.pendingProviderImport ?? null);
-      setSettingsForm(normalizeSettings(result.settings));
+      if (isSuccessStatus(result.status)) setSettingsForm(normalizeSettings(result.settings));
       if (!silent || !isSuccessStatus(result.status)) showNotice("设置保存", result.message, result.status);
     }
     return result;
@@ -1612,9 +1653,42 @@ export function App() {
   };
 
   const syncProvidersNow = async () => {
-    const result = await run(() => call<CommandResult<Record<string, never>>>("sync_providers_now"));
-    if (result) {
-      showNotice("历史会话修复", result.message, result.status);
+    if (modeHistorySyncRunningRef.current) return;
+    if (
+      !confirmMessage(
+        "将按当前模式同步对话历史归属。必须先完全退出 ChatGPT 和 Codex；检测到仍在运行时会安全停止且不修改聊天记录。同步前会创建完整备份，只更新模式归属和本地索引，不会删除消息正文。是否继续？",
+      )
+    ) {
+      return;
+    }
+    modeHistorySyncRunningRef.current = true;
+    setModeHistorySyncInProgress(true);
+    try {
+      const result = await run(() => call<ModeHistorySyncResult>("sync_providers_now"));
+      if (result) {
+        relayMutationGeneration.current += 1;
+        setLastModeHistorySync(() => result);
+        setRelay((current) => current
+          ? {
+              ...current,
+              providerSync: {
+                status: result.syncStatus,
+                message: result.syncMessage || result.message,
+                targetProvider: result.targetProvider,
+                backupDir: result.backupDir,
+                changedSessionFiles: result.changedSessionFiles,
+                sqliteRowsUpdated: result.sqliteRowsUpdated,
+                partial: result.partial,
+                rollbackStatus: result.rollbackStatus,
+              },
+            }
+          : current);
+        const backup = result.backupDir ? ` 备份：${result.backupDir}` : "";
+        showNotice("同步模式对话历史", `${result.message}${backup}`, result.status);
+      }
+    } finally {
+      modeHistorySyncRunningRef.current = false;
+      setModeHistorySyncInProgress(false);
     }
   };
 
@@ -1748,22 +1822,22 @@ export function App() {
     const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: settingsForm }));
     if (settingsResult) {
       setSettings(settingsResult);
-      setSettingsForm(normalizeSettings(settingsResult.settings));
       if (!isSuccessStatus(settingsResult.status)) {
         showNotice("设置保存", settingsResult.message, settingsResult.status);
         return false;
       }
+      setSettingsForm(normalizeSettings(settingsResult.settings));
     } else {
       return false;
     }
     const result = await run(() => call<RelayResult>("apply_relay_injection"));
     if (result) {
-      setRelay(result);
+      commitRelayResult(result);
       await refreshRelayFiles(true);
       await refreshInstallGuideStatus(true);
       if (!silent || !isSuccessStatus(result.status)) showNotice("官方混合 API", result.message, result.status);
     }
-    return !!result && isSuccessStatus(result.status) && result.configured;
+    return !!result && relayApplySucceeded(result) && result.configured;
   };
 
   const saveLaunchMode = async (launchMode: LaunchMode, silent = false, baseSettings: BackendSettings = settingsForm) => {
@@ -1772,7 +1846,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("save_settings", { settings: next }));
     if (result) {
       setSettings(result);
-      setSettingsForm(normalizeSettings(result.settings));
+      if (isSuccessStatus(result.status)) setSettingsForm(normalizeSettings(result.settings));
       if (!silent) showNotice("页面增强模式", result.message, result.status);
     }
     return result;
@@ -1782,33 +1856,33 @@ export function App() {
     const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: settingsForm }));
     if (settingsResult) {
       setSettings(settingsResult);
-      setSettingsForm(normalizeSettings(settingsResult.settings));
       if (!isSuccessStatus(settingsResult.status)) {
         showNotice("设置保存", settingsResult.message, settingsResult.status);
         return false;
       }
+      setSettingsForm(normalizeSettings(settingsResult.settings));
     } else {
       return false;
     }
     const result = await run(() => call<RelayResult>("apply_pure_api_injection"));
     if (result) {
-      setRelay(result);
+      commitRelayResult(result);
       await refreshRelayFiles(true);
       await refreshInstallGuideStatus(true);
       if (!silent || !isSuccessStatus(result.status)) showNotice("中转 API 模式", result.message, result.status);
     }
-    return !!result && isSuccessStatus(result.status) && result.configured;
+    return !!result && relayApplySucceeded(result) && result.configured;
   };
 
   const clearRelayInjection = async (silent = false) => {
     const result = await run(() => call<RelayResult>("clear_relay_injection"));
     if (result) {
-      setRelay(result);
+      commitRelayResult(result);
       await refreshRelayFiles(true);
       await refreshInstallGuideStatus(true);
       if (!silent || !isSuccessStatus(result.status)) showNotice("官方登录模式", result.message, result.status);
     }
-    return !!result && isSuccessStatus(result.status) && !result.configured;
+    return !!result && relayApplySucceeded(result) && !result.configured;
   };
 
   const saveRelayFile = async (kind: "config" | "auth", contents: string, silent = false) => {
@@ -1909,7 +1983,7 @@ export function App() {
   const activateOfficialAuth = async (profileId: string) => {
     const result = await run(() => call<RelayResult>("activate_official_auth", { request: { profileId } }));
     if (result) {
-      setRelay(result);
+      commitRelayResult(result);
       showNotice("绑定账号", result.message, result.status);
       await refreshRelayFiles(true);
       await refreshSettings(true);
@@ -1931,7 +2005,7 @@ export function App() {
   const clearCurrentOfficialAuth = async () => {
     const result = await run(() => call<RelayResult>("clear_current_official_auth"));
     if (result) {
-      setRelay(result);
+      commitRelayResult(result);
       showNotice("清除当前官方登录", result.message, result.status);
       await refreshRelayFiles(true);
       await refreshSettings(true);
@@ -1985,7 +2059,7 @@ export function App() {
       const settingsResult = await run(() => call<SettingsResult>("save_settings", { settings: next }));
       if (settingsResult) {
         setSettings(settingsResult);
-        setSettingsForm(normalizeSettings(settingsResult.settings));
+        if (isSuccessStatus(settingsResult.status)) setSettingsForm(normalizeSettings(settingsResult.settings));
         showNotice("供应商切换", "供应商配置切换已关闭：已保存设置，但没有写入当前 ChatGPT Codex 配置文件。", settingsResult.status);
         setSwitchProgress(100, settingsResult.message, isSuccessStatus(settingsResult.status) ? "ok" : "failed");
         if (isSuccessStatus(settingsResult.status)) {
@@ -2014,11 +2088,11 @@ export function App() {
     if (settingsResult) {
       selectedSettings = normalizeSettings(settingsResult.settings);
       setSettings(settingsResult);
-      setSettingsForm(selectedSettings);
       if (!isSuccessStatus(settingsResult.status)) {
         showNotice("供应商切换", settingsResult.message, settingsResult.status);
         return failSwitch(settingsResult.message);
       }
+      setSettingsForm(selectedSettings);
     } else {
       return failSwitch("保存供应商设置失败。");
     }
@@ -2029,9 +2103,9 @@ export function App() {
     const result = await run(() => call<RelayResult>(command));
     if (!result) return failSwitch("写入供应商配置失败。");
 
-    setRelay(result);
+    commitRelayResult(result);
     await refreshRelayFiles(true);
-    if (!isSuccessStatus(result.status)) {
+    if (!relayApplySucceeded(result)) {
       showNotice("供应商切换", result.message || relayProfileReadinessText(selectedAfterSave, result), result.status);
       return failSwitch(result.message || relayProfileReadinessText(selectedAfterSave, result));
     }
@@ -2047,11 +2121,26 @@ export function App() {
       showNotice("供应商切换", modeResult.message, modeResult.status);
       return failSwitch(modeResult.message);
     }
-    setSwitchProgress(100, "供应商已切换，页面增强已设为完整增强。", "ok");
+    const historyPending = result.providerSync?.status === "skipped";
+    const historyFailed = result.providerSync?.status === "failed" || result.providerSync?.status === "partial";
+    const maintenanceIncomplete = !isSuccessStatus(result.status) || historyFailed;
+    setSwitchProgress(
+      100,
+      maintenanceIncomplete
+        ? "模式已切换，但后续维护未完成；设置和当前模式已经生效。"
+        : historyPending
+        ? "模式已切换；聊天记录同步暂未完成，可在历史修复中重试。"
+        : "供应商已切换，页面增强已设为完整增强。",
+      "ok",
+    );
     window.setTimeout(() => {
       setRelaySwitchProgress((current) => current?.id === "relaySwitch" && current.status === "ok" ? null : current);
     }, 2200);
-    showNotice("供应商切换", relayProfileModeSwitchedText(currentSelected, result), modeResult.status);
+    showNotice(
+      "供应商切换",
+      relayProfileModeSwitchedText(currentSelected, result),
+      maintenanceIncomplete || historyPending ? "not_checked" : modeResult.status,
+    );
     return true;
   };
 
@@ -2194,8 +2283,8 @@ export function App() {
             : {
                 directory: false,
                 multiple: false,
-                title: tr("选择 ChatGPT.exe"),
-                filters: [{ name: tr("ChatGPT 应用"), extensions: ["exe", "app"] }],
+                title: tr("选择 ChatGPT.exe / Codex.exe"),
+                filters: [{ name: tr("ChatGPT / Codex 应用"), extensions: ["exe", "app"] }],
               },
         );
         if (typeof selected === "string" && selected.trim()) {
@@ -2303,7 +2392,7 @@ export function App() {
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
       confirm: confirmMessage,
     }),
-    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects, restartInProgress, relaySwitchInProgress, conversationHistoryRepair],
+    [route, launchForm, settingsForm, settings, pendingProviderImport, removeOwnedData, logs, diagnostics, theme, relayFiles, updateInfo, relay, computerUse, skillMcpBackups, liveContextEntries, zedRemoteProjects, restartInProgress, relaySwitchInProgress, modeHistorySyncInProgress, conversationHistoryRepair],
   );
 
   return (
@@ -2424,8 +2513,11 @@ export function App() {
           {route === "providerSync" ? (
             <ProviderSyncScreen
               settings={settings}
+              relay={relay}
               computerUse={computerUse}
               skillMcpBackups={skillMcpBackups}
+              lastModeHistorySync={lastModeHistorySync}
+              modeHistorySyncInProgress={modeHistorySyncInProgress}
               form={settingsForm}
               onFormChange={setSettingsForm}
               actions={actions}
@@ -3734,6 +3826,7 @@ function RelayScreen({
           {switchProgress ? <InlineTaskProgress progress={switchProgress} /> : null}
           <div className="mode-switch-panel" aria-label="切换当前模式">
             <button
+              aria-pressed={active.relayMode === "official"}
               className={`mode-switch-button ${active.relayMode === "official" ? "active" : ""}`}
               disabled={switching}
               onClick={() => switchActiveMode("official")}
@@ -3743,6 +3836,7 @@ function RelayScreen({
               <span>只使用 ChatGPT 官方登录，不写入中转 API。</span>
             </button>
             <button
+              aria-pressed={active.relayMode === "mixedApi"}
               className={`mode-switch-button ${active.relayMode === "mixedApi" ? "active" : ""}`}
               disabled={switching}
               onClick={() => switchActiveMode("mixedApi")}
@@ -3752,15 +3846,17 @@ function RelayScreen({
               <span>保留官方登录，同时混入当前供应商 API Key。</span>
             </button>
             <button
+              aria-pressed={active.relayMode === "pureApi"}
               className={`mode-switch-button ${active.relayMode === "pureApi" ? "active" : ""}`}
               disabled={switching}
               onClick={() => switchActiveMode("pureApi")}
               type="button"
             >
               <strong>中转模式</strong>
-              <span>写入这个供应商自己的 config.toml/auth.json 快照；缺少 auth 快照时兼容保留当前登录。</span>
+              <span>写入当前供应商的中转配置，保留现有 ChatGPT 登录，不删除聊天记录。</span>
             </button>
             <button
+              aria-pressed={active.relayMode === "aggregate"}
               className={`mode-switch-button ${active.relayMode === "aggregate" ? "active" : ""}`}
               disabled={switching}
               onClick={() => switchActiveMode("aggregate")}
@@ -4132,21 +4228,30 @@ function UserScriptsScreen({ settings, market, actions }: { settings: SettingsRe
 
 function ProviderSyncScreen({
   settings,
+  relay,
   computerUse,
   skillMcpBackups,
+  lastModeHistorySync,
+  modeHistorySyncInProgress,
   form,
   onFormChange,
   actions,
 }: {
   settings: SettingsResult | null;
+  relay: RelayResult | null;
   computerUse: ComputerUseStatusResult | null;
   skillMcpBackups: SkillMCPBackupsResult | null;
+  lastModeHistorySync: ModeHistorySyncResult | null;
+  modeHistorySyncInProgress: boolean;
   form: BackendSettings;
   onFormChange: (value: BackendSettings) => void;
   actions: Actions;
 }) {
   const backups = skillMcpBackups?.backups ?? [];
   const isWindows = computerUse?.platform === "windows";
+  const selectedMode = activeRelayProfile(normalizeSettings(form)).relayMode;
+  const appliedMode = normalizeRelayMode(relay?.appliedMode ?? relay?.activeMode ?? selectedMode);
+  const historyTargetProvider = appliedMode === "official" ? "openai" : "CodexPlusPlus";
   const guideItems = [
     "自动修复只在 ChatGPT Codex 启动 ChatGPT 前运行，会整理旧对话归属、补回插件配置并重读插件市场。",
     "恢复插件配置会扫描本机已缓存插件，补回 plugins、marketplaces 和 node_repl MCP 配置，并执行 marketplace 刷新/重读。",
@@ -4167,19 +4272,23 @@ function ProviderSyncScreen({
             />
             <span>
               <strong>启动前自动修复历史会话</strong>
-              <small>开启后，通过 ChatGPT Codex 启动 ChatGPT 前自动整理一次旧对话的归属标记。</small>
+              <small>模式切换时会自动尝试同步；若 ChatGPT 或 Codex 仍在运行会安全跳过。开启后每次启动前还会再检查一次。</small>
             </span>
           </label>
           <div className="relay-grid compact">
+            <Metric label="当前模式" value={relayModeLabel(appliedMode)} />
+            {selectedMode !== appliedMode ? <Metric label="已选模式" value={relayModeLabel(selectedMode)} /> : null}
+            <Metric label="同步目标" value={appliedMode === "official" ? "openai" : "ChatGPT Codex Tools"} />
+            <Metric label="最近同步" value={modeHistorySyncStatusLabel(lastModeHistorySync, relay, historyTargetProvider)} />
             <Metric label="自动修复" value={form.providerSyncEnabled ? "启动前执行" : "关闭"} />
             <Metric label="设置文件" value={settings?.settings_path ?? "未加载"} />
             <Metric label="页面增强" value={form.launchMode === "relay" ? "兼容模式" : "完整模式"} />
           </div>
           <Toolbar>
             <Button onClick={() => void actions.saveSettings()}>保存自动修复设置</Button>
-            <Button onClick={() => void actions.syncProvidersNow()} variant="outline">
+            <Button disabled={modeHistorySyncInProgress} onClick={() => void actions.syncProvidersNow()} variant="outline">
               <RefreshCw className="h-4 w-4" />
-              立刻修复历史会话
+              {modeHistorySyncInProgress ? "正在同步模式对话历史" : "同步模式对话历史"}
             </Button>
             <Button onClick={() => void actions.repairCodexPlugins()} variant="secondary">
               <Sparkles className="h-4 w-4" />
@@ -4319,11 +4428,11 @@ function MaintenanceScreen({
   const conversationHistoryProgress = conversationHistoryTaskProgress(conversationHistoryRepair);
   const conversationHistoryCancelling = conversationHistoryRepair?.taskStatus === "cancelling";
   const appPathPlaceholder = isWindows
-    ? "选择 ChatGPT.exe 或 ChatGPT 安装目录"
+    ? "选择 ChatGPT.exe、Codex.exe 或安装目录"
     : isMac
       ? "选择 ChatGPT.app"
       : "选择 ChatGPT 应用路径";
-  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "例如 C:\\Users\\你\\AppData\\Local\\Programs\\ChatGPT\\ChatGPT.exe" : "/Applications/ChatGPT.app");
+  const manualLaunchPlaceholder = savedCodexAppPath || (isWindows ? "OpenAI.Codex / OpenAI.ChatGPT，或 WindowsApps 外的 Codex.exe / ChatGPT.exe" : "/Applications/ChatGPT.app");
   return (
     <>
       <Panel>
@@ -4443,7 +4552,7 @@ function MaintenanceScreen({
         </Panel>
       ) : null}
       <Panel>
-        <CardHead title="ChatGPT 应用路径" detail={isWindows ? "选择可直接执行的 ChatGPT.exe 后，静默启动会自动复用" : "选择 ChatGPT.app 后，之后静默启动会自动复用"} />
+        <CardHead title="ChatGPT 应用路径" detail={isWindows ? "自动识别合并版 MSIX；也可选择 WindowsApps 外的 ChatGPT.exe / Codex.exe" : "选择 ChatGPT.app 后，之后静默启动会自动复用"} />
         <CardContent>
           <div className="status-table">
             <StatusRow title="保存路径" status={savedCodexAppPath ? "ok" : "not_checked"} path={savedCodexAppPath || null} />
@@ -4462,7 +4571,7 @@ function MaintenanceScreen({
               修复 ChatGPT 应用
             </Button>
             <Button onClick={() => void actions.chooseCodexAppPath("folder")}>{isWindows ? "选择应用目录" : "选择 ChatGPT.app"}</Button>
-            {isWindows ? <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 ChatGPT.exe</Button> : null}
+            {isWindows ? <Button variant="secondary" onClick={() => void actions.chooseCodexAppPath("file")}>选择 ChatGPT.exe / Codex.exe</Button> : null}
             <Button variant="secondary" onClick={() => void actions.clearCodexAppPath()}>清除保存路径</Button>
           </Toolbar>
         </CardContent>
@@ -4904,11 +5013,11 @@ function SortableRelayProfileCard({
             void actions.switchRelayProfile(next);
           }}
           size="sm"
-          title={active ? "当前正在使用" : "设为当前"}
+          title={active ? "重新应用当前供应商" : "设为当前"}
           variant={active ? "secondary" : "outline"}
         >
           <CheckCircle2 className="h-4 w-4" />
-          {active ? "使用中" : "使用"}
+          {active ? "重新应用" : "使用"}
         </Button>
         <span className="relay-card-extra">
           <Button
@@ -5059,17 +5168,19 @@ function RelayProfileDetail({
     const next = isNew ? addRelayProfile(form, draft) : updateRelayProfile(form, profile.id, draft);
     const settingsResult = await actions.saveSettingsValue(next, true);
     if (!settingsResult) return;
+    if (!isSuccessStatus(settingsResult.status)) {
+      actions.showNotice("供应商保存", settingsResult.message, settingsResult.status);
+      return;
+    }
     const savedSettings = normalizeSettings(settingsResult.settings);
     onFormChange(savedSettings);
     syncDraftFromSettings(savedSettings);
+    onSaved?.();
     if (isActive) {
-      const applied = await actions.switchRelayProfile(savedSettings);
-      if (!applied) return;
-      actions.showNotice("供应商保存", "保存成功，当前供应商快照已写回 ~/.codex/config.toml 和 auth.json。", "ok");
+      actions.showNotice("供应商保存", "保存成功，当前中转会读取新的服务器参数；如需重写模式文件，请退出 ChatGPT 后点击“重新应用”。", "ok");
     } else {
       actions.showNotice("供应商保存", "保存成功，已更新这个供应商自己的 config/auth 快照。", "ok");
     }
-    onSaved?.();
   };
   const switchDraft = () => {
     if (isNew) return;
@@ -5862,7 +5973,8 @@ function RelayProfileEditor({
       "proxyEnabled",
       "proxyUrl",
     ].some((key) => key in patch);
-    const updated = { ...profile, ...patch };
+    const canonicalPatch = "baseUrl" in patch ? { ...patch, upstreamBaseUrl: patch.baseUrl ?? "" } : patch;
+    const updated = { ...profile, ...canonicalPatch };
     onProfileChange(shouldRegenerateFiles ? withGeneratedRelayFiles(updated) : updated);
   };
   return (
@@ -5877,7 +5989,7 @@ function RelayProfileEditor({
             onClick={onSwitch}
             variant={profile.id === form.activeRelayId ? "secondary" : "default"}
           >
-            {profile.id === form.activeRelayId ? "使用中" : "设为当前"}
+            {profile.id === form.activeRelayId ? "重新应用" : "设为当前"}
           </Button>
         )}
       </div>
@@ -6373,6 +6485,8 @@ function NoticeDialog({
   notice: { title: string; message: string; status?: Status };
   onClose: () => void;
 }) {
+  const failed = notice.status === "failed";
+  const warning = notice.status === "not_checked" || notice.status === "not_implemented";
   useEffect(() => {
     const timer = window.setTimeout(onClose, 4200);
     return () => window.clearTimeout(timer);
@@ -6380,10 +6494,10 @@ function NoticeDialog({
 
   return (
     <div className="toast-wrap" role="status" aria-live="polite">
-      <div className={`toast-card ${notice.status === "failed" ? "failed" : ""}`}>
+      <div className={`toast-card ${failed ? "failed" : warning ? "warning" : ""}`}>
         <div className="toast-progress" />
         <div className="toast-icon">
-          {notice.status === "failed" ? <Bell className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+          {failed ? <Bell className="h-5 w-5" /> : warning ? <Info className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
         </div>
         <div className="toast-body">
           <h2>{notice.title}</h2>
@@ -6620,20 +6734,20 @@ function platformGuideFor(status: InstallGuideStatusResult | null): PlatformGuid
     return {
       ...base,
       title: "Windows 新手引导",
-      systemDescription: "Windows 会检查 ChatGPT.exe、MSIX/WindowsApps、AppUserModelID 和 WebView2 桌面窗口运行状态。",
+      systemDescription: "Windows 会同时识别 Codex 与 ChatGPT 合并后的 OpenAI.Codex / OpenAI.ChatGPT MSIX 包，以及 Codex.exe / ChatGPT.exe。",
       desktopRuntime: status?.desktopRuntime || "Windows WebView2 桌面窗口",
       desktopRuntimeDescription: "Windows 使用 WebView2 桌面窗口运行管理器。",
       installTitle: "Windows 官方安装",
       installActionLabel: "打开 ChatGPT 下载页",
       installSourceLabel: "官方页面",
-      installDescription: "请安装 ChatGPT 桌面应用；如自动检测失败，手动选择 ChatGPT.exe 或其安装目录。",
-      manualPrimaryLabel: "选择 ChatGPT.exe",
+      installDescription: "请安装新版 ChatGPT 桌面应用；原 Codex 应用更新后也会成为该合并版。自动检测失败时可选择 Codex.exe、ChatGPT.exe 或安装目录。",
+      manualPrimaryLabel: "选择 ChatGPT.exe / Codex.exe",
       manualPrimaryMode: "file",
       manualSecondaryLabel: "选择安装目录",
       manualSecondaryMode: "folder",
-      detectionNote: "优先选择可直接执行的 ChatGPT.exe；如果是 Microsoft Store/MSIX 版，可能无法稳定接收调试端口参数。",
-      pathHint: "C:\\Users\\你\\AppData\\Local\\Programs\\ChatGPT\\ChatGPT.exe",
-      launchTargetLabel: "ChatGPT.exe",
+      detectionNote: "Microsoft Store/MSIX 版不会扫描或信任任意 WindowsApps 路径；仅使用已注册官方包清单声明的 App Execution Alias 或 FullTrust 入口，并以真实 AppUserModelID、进程包身份和调试端口完成验证。",
+      pathHint: "OpenAI.Codex / OpenAI.ChatGPT，或 WindowsApps 外的 Codex.exe / ChatGPT.exe",
+      launchTargetLabel: "AppUserModelID 或可执行文件",
     };
   }
   return { ...base, unsupported: true };
@@ -6667,7 +6781,13 @@ function isSuccessStatus(status?: Status) {
   return status === "ok" || status === "accepted";
 }
 
+function relayApplySucceeded(result: RelayResult) {
+  return isSuccessStatus(result.status) || result.configApplied === true;
+}
+
 function apiModeLabel(relay: RelayResult | null) {
+  if (relay?.appliedMode) return relayModeLabel(normalizeRelayMode(relay.appliedMode));
+  if (relay?.activeMode) return relayModeLabel(normalizeRelayMode(relay.activeMode));
   if (!relay?.configured) return "官方登录";
   return relayOfficialAuthenticated(relay) ? "官方混合 API" : "中转 API";
 }
@@ -6816,6 +6936,7 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0, defaultContextS
       : profile.relayMode === "mixedApi" || profile.officialMixApiKey === true
         ? "mixedApi"
         : normalizeRelayMode(profile.relayMode);
+  const baseUrl = (profile.baseUrl || profile.upstreamBaseUrl || "").trim();
   const normalized: RelayProfile = {
     ...defaultSettings.relayProfiles[0],
     ...profile,
@@ -6823,8 +6944,8 @@ function normalizeRelayProfile(profile: RelayProfile, index = 0, defaultContextS
     linkedCcsProviderId: profile.linkedCcsProviderId || "",
     name: profile.name || "",
     model: profile.model || "",
-    baseUrl: profile.baseUrl || "",
-    upstreamBaseUrl: profile.upstreamBaseUrl || profile.baseUrl || "",
+    baseUrl,
+    upstreamBaseUrl: baseUrl,
     apiKey: profile.apiKey || "",
     imageGenerationEnabled: Boolean(profile.imageGenerationEnabled),
     imageGenerationUseSeparateApi: Boolean(profile.imageGenerationUseSeparateApi),
@@ -6900,6 +7021,22 @@ function relayModeLabel(mode: RelayMode): string {
   if (mode === "pureApi") return "中转 API";
   if (mode === "mixedApi") return "官方混合 API";
   return "官方登录";
+}
+
+function modeHistorySyncStatusLabel(last: ModeHistorySyncResult | null, relay: RelayResult | null, targetProvider: string): string {
+  const lastForTarget = last && (!last.targetProvider || last.targetProvider === targetProvider) ? last : null;
+  const relaySync = relay?.providerSync?.targetProvider === targetProvider ? relay.providerSync : null;
+  const status = lastForTarget?.syncStatus || relaySync?.status || "";
+  const changedFiles = lastForTarget?.changedSessionFiles ?? relaySync?.changedSessionFiles ?? 0;
+  const sqliteRows = lastForTarget?.sqliteRowsUpdated ?? relaySync?.sqliteRowsUpdated ?? 0;
+  if (status === "synced") {
+    return changedFiles || sqliteRows
+      ? `已同步 · ${changedFiles} 个文件 / ${sqliteRows} 行索引`
+      : "已检查，无需更新";
+  }
+  if (status === "failed" || status === "partial") return "同步失败，请查看提示";
+  if (status === "skipped") return "待重试";
+  return "尚未执行";
 }
 
 function relayProfileConfigBrief(profile: RelayProfile): string {
@@ -7089,7 +7226,18 @@ function relayProfileModeSwitchedText(profile: RelayProfile, relay?: RelayResult
       ? "已按此供应商使用官方登录，并混入 API Key；页面增强已设为完整增强。"
       : "已按此供应商切回官方登录；页面增强已设为完整增强。";
   const repairMessage = relay?.pluginRepair?.message?.trim();
-  return repairMessage ? `${base} ${repairMessage}` : base;
+  const historySync = relay?.providerSync;
+  const historyMessage = historySync?.status === "synced"
+    ? (historySync.changedSessionFiles || historySync.sqliteRowsUpdated)
+      ? `聊天记录已同步：${historySync.changedSessionFiles ?? 0} 个会话文件，${historySync.sqliteRowsUpdated ?? 0} 行索引。`
+      : "聊天记录已检查，无需更新。"
+      : historySync?.status === "skipped"
+      ? "模式已切换，但聊天记录同步暂未完成；请到“历史修复”点击“同步模式对话历史”重试。"
+      : historySync?.status === "failed" || historySync?.status === "partial"
+        ? `模式已切换，但聊天记录同步失败：${historySync.message || "请使用备份恢复后重试。"}`
+      : "";
+  const backupMessage = historySync?.backupDir ? `聊天记录备份：${historySync.backupDir}` : "";
+  return [base, historyMessage, backupMessage, repairMessage].filter(Boolean).join(" ");
 }
 
 function withGeneratedRelayFiles(profile: RelayProfile): RelayProfile {
@@ -7249,7 +7397,8 @@ function updateRelayProfile(settings: BackendSettings, id: string, patch: Partia
     ...settings,
     relayProfiles: settings.relayProfiles.map((profile) => {
       if (profile.id !== id) return profile;
-      const updated = { ...profile, ...patch };
+      const canonicalPatch = "baseUrl" in patch ? { ...patch, upstreamBaseUrl: patch.baseUrl ?? "" } : patch;
+      const updated = { ...profile, ...canonicalPatch };
       const nextProfile = shouldRegenerateFiles ? withGeneratedRelayFiles(updated) : updated;
       return deriveOfficialAuthFields(nextProfile);
     }),
