@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -249,36 +250,60 @@ func windowsCDPPortOwnedByPackage(port uint16, packageFamilyName string) bool {
 	return false
 }
 
+func windowsCDPPortOwnedByTargetApp(port uint16, appPath string) bool {
+	spec, ok := windowsRestartTargetSpecForApp(appPath)
+	if !ok {
+		return false
+	}
+	spec = expandWindowsRestartTargetSpecForPort(spec, port)
+	targetProcessIDs := windowsRestartTargetProcessIDs(spec)
+	for _, owner := range windowsCDPListenerProcessIDs(port) {
+		if !windowsProcessInSession(owner, spec.sessionID) {
+			continue
+		}
+		if windowsProcessBelongsToRestartPackage(owner, spec) || windowsProcessMatchesRestartTarget(owner, spec) {
+			return true
+		}
+		for _, targetProcessID := range targetProcessIDs {
+			if windowsProcessIsSameOrDescendant(owner, targetProcessID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func windowsCDPListenerProcessIDs(port uint16) []uint32 {
-	if port == 0 {
-		return nil
-	}
-	cmd := exec.Command("netstat", "-ano", "-p", "tcp")
-	hideSubprocessWindow(cmd)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	var processIDs []uint32
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 5 || !strings.EqualFold(fields[0], "TCP") {
-			continue
-		}
-		separator := strings.LastIndex(fields[1], ":")
-		if separator < 0 {
-			continue
-		}
-		localPort, err := strconv.ParseUint(fields[1][separator+1:], 10, 16)
-		if err != nil || uint16(localPort) != port {
-			continue
-		}
-		owner, err := strconv.ParseUint(fields[len(fields)-1], 10, 32)
-		if err == nil {
-			processIDs = append(processIDs, uint32(owner))
-		}
-	}
+	processIDs, _ := windowsTCPListenerStatus(port)
 	return processIDs
+}
+
+func windowsTCPListenerStatus(port uint16) ([]uint32, bool) {
+	listeners, _, listenerKnown, _ := windowsTCPPortStatus(port)
+	return listeners, listenerKnown
+}
+
+func windowsTCPPortStatus(port uint16) ([]uint32, []uint32, bool, bool) {
+	if port == 0 {
+		return nil, nil, true, true
+	}
+	if out, err := runWindowsNetstat("-ano", "-q", "-p", "tcp"); err == nil {
+		status := parseWindowsTCPPortProcessIDs(string(out), port)
+		return status.Listening, status.Bound, true, true
+	}
+	out, err := runWindowsNetstat("-ano", "-p", "tcp")
+	if err != nil {
+		return nil, nil, false, false
+	}
+	return parseWindowsTCPListenerProcessIDs(string(out), port), nil, true, false
+}
+
+func runWindowsNetstat(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "netstat", args...)
+	hideSubprocessWindow(cmd)
+	return cmd.Output()
 }
 
 func windowsProcessPackageFamilyName(processID uint32) string {
@@ -331,6 +356,181 @@ func windowsTargetAppProcessIDs() []uint32 {
 		}
 	}
 	return processIDs
+}
+
+type windowsRestartTargetSpec struct {
+	packageFamilies []string
+	executablePath  string
+	sessionID       uint32
+}
+
+func windowsRestartTargetSpecForApp(appPath string) (windowsRestartTargetSpec, bool) {
+	var sessionID uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &sessionID); err != nil {
+		return windowsRestartTargetSpec{}, false
+	}
+	if reference := normalizeWindowsPackagedAppReference(appPath); reference != "" {
+		appUserModelID := strings.TrimPrefix(reference, "aumid:")
+		if family := windowsPackageFamilyFromAppUserModelID(appUserModelID); family != "" {
+			return windowsRestartTargetSpec{
+				packageFamilies: []string{family},
+				executablePath:  windowsPackagedDirectExecutable(appUserModelID),
+				sessionID:       sessionID,
+			}, true
+		}
+	}
+	if appUserModelID := windowsAppUserModelIDFromPackagePath(appPath); appUserModelID != "" {
+		if family := windowsPackageFamilyFromAppUserModelID(appUserModelID); family != "" {
+			executable := strings.TrimSpace(buildCodexExecutable(appPath))
+			if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+				executable = resolved
+			}
+			return windowsRestartTargetSpec{packageFamilies: []string{family}, executablePath: executable, sessionID: sessionID}, true
+		}
+	}
+	executable := strings.TrimSpace(buildCodexExecutable(appPath))
+	if executable == "" {
+		return windowsRestartTargetSpec{}, false
+	}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	return windowsRestartTargetSpec{executablePath: executable, sessionID: sessionID}, true
+}
+
+func expandWindowsRestartTargetSpecForPort(spec windowsRestartTargetSpec, port uint16) windowsRestartTargetSpec {
+	listeners, bound, _, _ := windowsTCPPortStatus(port)
+	owners := append(append([]uint32(nil), listeners...), bound...)
+	if len(owners) == 0 {
+		return spec
+	}
+	officialRoots := windowsOfficialPackagedTargetProcesses(spec.sessionID)
+	for _, owner := range owners {
+		if !windowsProcessInSession(owner, spec.sessionID) {
+			continue
+		}
+		if family := windowsProcessPackageFamilyName(owner); isOpenAIDesktopPackageFamily(family) {
+			spec.packageFamilies = appendUniqueFold(spec.packageFamilies, family)
+			continue
+		}
+		for processID, family := range officialRoots {
+			if windowsProcessIsSameOrDescendant(owner, processID) {
+				spec.packageFamilies = appendUniqueFold(spec.packageFamilies, family)
+			}
+		}
+	}
+	return spec
+}
+
+func windowsOfficialPackagedTargetProcesses(sessionID uint32) map[uint32]string {
+	result := map[uint32]string{}
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return result
+	}
+	defer windows.CloseHandle(snapshot)
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return result
+	}
+	for {
+		name := windows.UTF16ToString(entry.ExeFile[:])
+		if isWindowsTargetAppExecutableName(name) && windowsProcessInSession(entry.ProcessID, sessionID) {
+			if family := windowsProcessPackageFamilyName(entry.ProcessID); isOpenAIDesktopPackageFamily(family) {
+				result[entry.ProcessID] = family
+			}
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return result
+}
+
+func windowsRestartTargetProcessIDs(spec windowsRestartTargetSpec) []uint32 {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snapshot)
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return nil
+	}
+	var processIDs []uint32
+	for {
+		name := windows.UTF16ToString(entry.ExeFile[:])
+		if windowsProcessMatchesRestartTargetWithName(entry.ProcessID, name, spec) {
+			processIDs = append(processIDs, entry.ProcessID)
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return processIDs
+}
+
+func windowsProcessMatchesRestartTarget(processID uint32, spec windowsRestartTargetSpec) bool {
+	if processID == 0 || !windowsProcessInSession(processID, spec.sessionID) {
+		return false
+	}
+	imagePath := windowsProcessExecutablePath(processID)
+	if imagePath == "" || !isWindowsTargetAppExecutableName(filepath.Base(imagePath)) {
+		return false
+	}
+	return windowsProcessMatchesRestartTargetWithName(processID, filepath.Base(imagePath), spec)
+}
+
+func windowsProcessBelongsToRestartPackage(processID uint32, spec windowsRestartTargetSpec) bool {
+	if processID == 0 || !windowsProcessInSession(processID, spec.sessionID) {
+		return false
+	}
+	packageFamily := windowsProcessPackageFamilyName(processID)
+	for _, expectedFamily := range spec.packageFamilies {
+		if strings.EqualFold(packageFamily, expectedFamily) {
+			return true
+		}
+	}
+	return false
+}
+
+func windowsProcessMatchesRestartTargetWithName(processID uint32, name string, spec windowsRestartTargetSpec) bool {
+	if processID == 0 || !isWindowsTargetAppExecutableName(name) || !windowsProcessInSession(processID, spec.sessionID) {
+		return false
+	}
+	packageFamily := windowsProcessPackageFamilyName(processID)
+	imagePath := windowsProcessExecutablePath(processID)
+	for _, expectedFamily := range spec.packageFamilies {
+		if windowsRestartTargetProcessMatches(name, packageFamily, imagePath, expectedFamily, spec.executablePath) {
+			return true
+		}
+	}
+	return len(spec.packageFamilies) == 0 && windowsRestartTargetProcessMatches(name, packageFamily, imagePath, "", spec.executablePath)
+}
+
+func windowsProcessInSession(processID, sessionID uint32) bool {
+	if processID == 0 {
+		return false
+	}
+	var processSessionID uint32
+	return windows.ProcessIdToSessionId(processID, &processSessionID) == nil && processSessionID == sessionID
+}
+
+func windowsProcessExecutablePath(processID uint32) string {
+	if processID == 0 {
+		return ""
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, processID)
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(handle)
+	buffer := make([]uint16, 32768)
+	size := uint32(len(buffer))
+	if err := windows.QueryFullProcessImageName(handle, 0, &buffer[0], &size); err != nil || size == 0 {
+		return ""
+	}
+	return windows.UTF16ToString(buffer[:size])
 }
 
 func windowsProcessIsSameOrDescendant(processID, ancestorID uint32) bool {
@@ -417,6 +617,83 @@ func terminateWindowsTargetAppProcesses() {
 	for _, processID := range windowsTargetAppProcessIDs() {
 		_ = terminateWindowsProcessTree(processID)
 	}
+}
+
+func terminateWindowsTargetAppProcessesAndWait(appPath string, debugPort uint16, timeout time.Duration) ([]uint32, error) {
+	spec, ok := windowsRestartTargetSpecForApp(appPath)
+	if !ok {
+		return nil, errors.New("无法安全确认要重启的 Windows ChatGPT/Codex 进程身份")
+	}
+	spec = expandWindowsRestartTargetSpecForPort(spec, debugPort)
+	processIDs := windowsRestartTargetProcessIDs(spec)
+	if len(processIDs) == 0 {
+		return nil, nil
+	}
+	deadline := time.Now().Add(timeout)
+	graceDeadline := time.Now().Add(1500 * time.Millisecond)
+	if graceDeadline.After(deadline) {
+		graceDeadline = deadline
+	}
+	for time.Now().Before(graceDeadline) {
+		if len(runningWindowsRestartTargetProcessIDs(processIDs, spec)) == 0 {
+			return processIDs, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	var terminationErrors []string
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	for _, processID := range runningWindowsRestartTargetProcessIDs(processIDs, spec) {
+		if !windowsProcessMatchesRestartTarget(processID, spec) {
+			continue
+		}
+		if err := terminateWindowsProcessTreeContext(ctx, processID); err != nil {
+			terminationErrors = append(terminationErrors, fmt.Sprintf("PID %d: %v", processID, err))
+		}
+	}
+	for {
+		remaining := runningWindowsRestartTargetProcessIDs(processIDs, spec)
+		if len(remaining) == 0 {
+			return processIDs, nil
+		}
+		if time.Now().After(deadline) {
+			message := fmt.Sprintf("旧 ChatGPT/Codex 进程未退出：%v", remaining)
+			if len(terminationErrors) > 0 {
+				message += "；终止错误：" + strings.Join(terminationErrors, "；")
+			}
+			return processIDs, errors.New(message)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func terminateWindowsProcessTreeContext(ctx context.Context, processID uint32) error {
+	if processID == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "taskkill", "/PID", strconv.FormatUint(uint64(processID), 10), "/T", "/F")
+	hideSubprocessWindow(cmd)
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return terminateWindowsProcessID(processID)
+}
+
+func runningWindowsRestartTargetProcessIDs(processIDs []uint32, spec windowsRestartTargetSpec) []uint32 {
+	remaining := make([]uint32, 0, len(processIDs))
+	for _, processID := range processIDs {
+		running, err := processIDRunning(int(processID))
+		if (err != nil || running) && windowsProcessMatchesRestartTarget(processID, spec) {
+			remaining = append(remaining, processID)
+		}
+	}
+	return remaining
 }
 
 func applyProxyEnvironment(env []string) [3]savedEnvironmentValue {

@@ -340,7 +340,9 @@ func (r *launcherRuntime) retryInjection(helperPort uint16) error {
 	for attempt := 1; attempt <= 24; attempt++ {
 		if err := r.inject(helperPort); err != nil {
 			lastErr = err
-			appendDiagnosticLog("inject.retry", map[string]any{"attempt": attempt, "debug_port": r.debugPort, "helper_port": helperPort, "error": err.Error()})
+			if shouldLogInjectionRetry(currentRuntimeGOOS(), attempt) {
+				appendDiagnosticLog("inject.retry", map[string]any{"attempt": attempt, "debug_port": r.debugPort, "helper_port": helperPort, "error": err.Error()})
+			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -351,6 +353,10 @@ func (r *launcherRuntime) retryInjection(helperPort uint16) error {
 		lastErr = errors.New("Codex injection failed")
 	}
 	return lastErr
+}
+
+func shouldLogInjectionRetry(goos string, attempt int) bool {
+	return goos != "windows" || attempt == 1 || attempt == 24
 }
 
 func (r *launcherRuntime) inject(helperPort uint16) error {
@@ -375,7 +381,16 @@ func (r *launcherRuntime) inject(helperPort uint16) error {
 func (r *launcherRuntime) bridgeWatchdog(helperPort uint16) {
 	ticker := time.NewTicker(launcherCheckInterval)
 	defer ticker.Stop()
+	cdpUnavailableLogged := false
 	for range ticker.C {
+		if currentRuntimeGOOS() == "windows" && !tcpPortAccepting(r.debugPort) {
+			if !cdpUnavailableLogged {
+				appendDiagnosticLog("bridge.cdp_unavailable", map[string]any{"debug_port": r.debugPort, "helper_port": helperPort})
+				cdpUnavailableLogged = true
+			}
+			continue
+		}
+		cdpUnavailableLogged = false
 		ok, err := r.bridgeHealthy()
 		if err != nil {
 			appendDiagnosticLog("bridge.health_error", map[string]any{"error": err.Error()})

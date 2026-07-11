@@ -60,6 +60,25 @@ func runLauncher(args []string) error {
 		appendDiagnosticLog("launcher.codex_app_missing", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "error": err.Error()})
 		return err
 	}
+	var restartLock fileLockGuard
+	releaseRestartLock := func() {
+		if restartLock != nil {
+			_ = restartLock.release()
+			restartLock = nil
+		}
+	}
+	if options.restart && currentRuntimeGOOS() == "windows" {
+		lock, acquired, lockErr := acquireLauncherRestartLock()
+		if lockErr != nil {
+			return fmt.Errorf("获取 Windows 重启互斥锁失败：%w", lockErr)
+		}
+		if !acquired {
+			appendDiagnosticLog("launcher.restart_coalesced", map[string]any{"debug_port": debugPort, "helper_port": helperPort})
+			return nil
+		}
+		restartLock = lock
+		defer releaseRestartLock()
+	}
 	restartPrepared := false
 	instanceLock, acquired, err := acquireLauncherSingleInstanceLock(debugPort)
 	if err != nil {
@@ -232,6 +251,7 @@ func runLauncher(args []string) error {
 	}
 	_ = atomicWriteJSON(latestStatusPath(), ready)
 	appendDiagnosticLog("launcher.ready", map[string]any{"debug_port": debugPort, "helper_port": helperPort, "codex_app": appPath, "launch": launch.logPayload()})
+	releaseRestartLock()
 	return reapLauncherChild(launch, appPath, debugPort, helperPort)
 }
 
@@ -272,10 +292,31 @@ func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16
 		"guard_port":     launcherGuardPort,
 		"wait_for_guard": waitForGuard,
 	})
-	if cdpTargetsAvailable(debugPort, 800*time.Millisecond) {
+	windowsRestart := currentRuntimeGOOS() == "windows"
+	closeViaCDP := cdpTargetsAvailable(debugPort, 800*time.Millisecond)
+	if windowsRestart {
+		chatGPTTargetAvailable := chatGPTCDPTargetAvailable(debugPort, 800*time.Millisecond)
+		ownedByTargetApp := windowsCDPPortOwnedByTargetApp(debugPort, appPath)
+		closeViaCDP = chatGPTTargetAvailable && ownedByTargetApp
+		if chatGPTTargetAvailable && !ownedByTargetApp {
+			appendDiagnosticLog("launcher.restart_skip_unowned_cdp", map[string]any{"debug_port": debugPort})
+		}
+	}
+	if closeViaCDP {
 		appendDiagnosticLog("launcher.restart_close_cdp", map[string]any{"debug_port": debugPort, "codex_app": appPath})
-		if err := requestCodexShutdownViaCDP(debugPort, 10*time.Second); err != nil {
-			return fmt.Errorf("关闭旧 ChatGPT 调试端口失败：%w", err)
+		shutdownTimeout := 10 * time.Second
+		if windowsRestart {
+			shutdownTimeout = 4 * time.Second
+		}
+		if err := requestCodexShutdownViaCDP(debugPort, shutdownTimeout); err != nil {
+			if !windowsRestart {
+				return fmt.Errorf("关闭旧 ChatGPT 调试端口失败：%w", err)
+			}
+			appendDiagnosticLog("launcher.restart_close_cdp_failed", map[string]any{
+				"debug_port": debugPort,
+				"codex_app":  appPath,
+				"error":      err.Error(),
+			})
 		}
 	}
 	if runtime.GOOS == "darwin" && macOSAppRunning(appPath) {
@@ -291,7 +332,12 @@ func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16
 			}
 		}
 	}
-	if err := waitForRequiredTCPPortFree(debugPort, "调试", 12*time.Second); err != nil {
+	if windowsRestart {
+		if err := stopWindowsTargetsBeforeRestart(appPath, debugPort, 8*time.Second); err != nil {
+			return err
+		}
+	}
+	if err := waitForRequiredDebugPortFree(debugPort, 12*time.Second); err != nil {
 		return err
 	}
 	if err := waitForRequiredTCPPortFree(helperPort, "Helper", 12*time.Second); err != nil {
@@ -300,12 +346,26 @@ func prepareFullRestartBeforeLaunch(appPath string, debugPort, helperPort uint16
 	if err := waitForRequiredTCPPortFree(localRelayProxyPort, "本地中转代理", 12*time.Second); err != nil {
 		return err
 	}
-	if waitForGuard {
+	if waitForGuard && !windowsRestart {
 		if err := waitForRequiredTCPPortFree(launcherGuardPort, "ChatGPT Codex 后端单实例", 12*time.Second); err != nil {
 			return err
 		}
 	}
 	writeLaunchRestartingStatus("旧 ChatGPT Codex 后端已退出，正在启动新实例。", debugPort, helperPort, &appPath)
+	return nil
+}
+
+func stopWindowsTargetsBeforeRestart(appPath string, debugPort uint16, timeout time.Duration) error {
+	processIDs, err := terminateWindowsRestartTargets(appPath, debugPort, timeout)
+	if len(processIDs) > 0 {
+		appendDiagnosticLog("launcher.restart_windows_targets_stopped", map[string]any{
+			"process_ids": processIDs,
+			"codex_app":   appPath,
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("关闭旧 Windows ChatGPT/Codex 进程失败：%w", err)
+	}
 	return nil
 }
 
@@ -317,6 +377,89 @@ func waitForRequiredTCPPortFree(port uint16, label string, timeout time.Duration
 		return nil
 	}
 	return fmt.Errorf("%s端口 %d 未释放，可能仍被旧后端占用", label, port)
+}
+
+type debugPortReleaseState struct {
+	BindError        error
+	Accepting        bool
+	ListenerPIDs     []uint32
+	ListenerPIDKnown bool
+	BoundPIDs        []uint32
+	BoundPIDKnown    bool
+}
+
+func waitForRequiredDebugPortFree(port uint16, timeout time.Duration) error {
+	if port == 0 {
+		return nil
+	}
+	if currentRuntimeGOOS() != "windows" {
+		return waitForRequiredTCPPortFree(port, "调试", timeout)
+	}
+	free, state := waitForDebugPortFree(port, timeout)
+	if free {
+		return nil
+	}
+	detail := map[string]any{
+		"port":               port,
+		"accepting":          state.Accepting,
+		"listener_pid_known": state.ListenerPIDKnown,
+		"listener_pids":      state.ListenerPIDs,
+		"bound_pid_known":    state.BoundPIDKnown,
+		"bound_pids":         state.BoundPIDs,
+	}
+	if state.BindError != nil {
+		detail["bind_error"] = state.BindError.Error()
+	}
+	appendDiagnosticLog("launcher.restart_debug_port_unavailable", detail)
+	if len(state.ListenerPIDs) > 0 {
+		return fmt.Errorf("调试端口 %d 仍有 Windows LISTENING 进程 %v，请退出占用该端口的应用后重试", port, state.ListenerPIDs)
+	}
+	if state.Accepting {
+		return fmt.Errorf("调试端口 %d 仍在接受连接，但 Windows 未能取得监听进程 PID，请退出占用该端口的应用后重试", port)
+	}
+	if len(state.BoundPIDs) > 0 {
+		return fmt.Errorf("调试端口 %d 仍被 Windows BOUND 进程 %v 占用（尚未 LISTENING），请退出占用该端口的应用后重试", port, state.BoundPIDs)
+	}
+	if state.BindError != nil {
+		return fmt.Errorf("调试端口 %d 没有监听进程，但 Windows 无法复用该端口：%v；该端口可能被系统保留或权限策略限制，请改用其他调试端口", port, state.BindError)
+	}
+	return fmt.Errorf("调试端口 %d 状态未知，Windows 暂时无法确认该端口可复用", port)
+}
+
+func waitForDebugPortFree(port uint16, timeout time.Duration) (bool, debugPortReleaseState) {
+	deadline := time.Now().Add(timeout)
+	state := debugPortReleaseState{}
+	for {
+		state.BindError = probeTCPPortBind(port)
+		state.Accepting = tcpPortAccepting(port)
+		state.ListenerPIDs, state.BoundPIDs, state.ListenerPIDKnown, state.BoundPIDKnown = windowsTCPPortStatus(port)
+		if debugPortConsideredFree(currentRuntimeGOOS(), state) {
+			return true, state
+		}
+		if time.Now().After(deadline) {
+			return false, state
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+func debugPortConsideredFree(goos string, state debugPortReleaseState) bool {
+	if state.BindError != nil {
+		return false
+	}
+	if goos != "windows" {
+		return true
+	}
+	return !state.Accepting && len(state.ListenerPIDs) == 0 && len(state.BoundPIDs) == 0
+}
+
+func probeTCPPortBind(port uint16) error {
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return err
+	}
+	_ = listener.Close()
+	return nil
 }
 
 func waitForLauncherSingleInstanceLock(debugPort uint16, timeout time.Duration) (launcherSingleInstanceLock, bool, error) {

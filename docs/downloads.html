@@ -214,27 +214,27 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.2.4</strong>
+          <strong>Version 1.2.5</strong>
           <ul>
-            <li>Adds reliable support for the unified Windows ChatGPT/Codex Microsoft Store app by resolving official OpenAI MSIX manifests, using declared launch entrypoints, and verifying the package, process, and debugging connection.</li>
-            <li>Synchronizes conversation-history ownership when switching official, mixed API, or relay modes, with visible status, backup locations, manual retry, and a reapply-current-provider action.</li>
-            <li>Makes history synchronization failure-safe with shared maintenance locks, complete backups, atomic writes, SQLite transactions, concurrent-change checks, and rollback across session, index, and global state files.</li>
-            <li>Separates saving a relay profile from applying it, reloads current Windows relay settings without rewriting mode files, normalizes legacy profile data, and reports upstream disconnect and failover errors clearly.</li>
-            <li>Expands privacy-safe diagnostics with stronger credential redaction, sanitized app references, structured Windows launch attempts, and clearer launch and relay failure categories.</li>
-            <li>Waits for backend confirmation before committing injected setting changes, restores the previous UI state on save failure, and preserves TOML byte-order marks and line endings during mode updates.</li>
-            <li>Adds extensive regression coverage for Windows activation, mode round trips, provider synchronization, rollback behavior, relay settings, diagnostics, and asynchronous UI state.</li>
+            <li>Makes Windows full restart safer by coalescing duplicate restart requests, releasing the restart lock once the new launcher is ready, and avoiding parallel restarts that could fight over the same ChatGPT/Codex instance.</li>
+            <li>Only closes a Windows debugging port through CDP when the target really belongs to the selected ChatGPT/Codex app, and records an explicit diagnostic when an unrelated process owns the port.</li>
+            <li>Adds Windows-specific restart cleanup that identifies the target packaged app or executable, waits briefly for a graceful exit, then stops remaining ChatGPT/Codex process trees before relaunch when needed.</li>
+            <li>Replaces the generic debug-port wait with a Windows-aware release check that verifies bindability, live TCP acceptance, LISTENING owners, and pre-LISTEN bound owners before reusing the port.</li>
+            <li>Improves diagnostics for restart failures by reporting coalesced retries, skipped unowned CDP shutdown, stopped Windows target PIDs, unavailable debug ports, and temporary CDP outages without flooding retry logs.</li>
+            <li>Keeps the bridge watchdog calmer on Windows by suppressing repetitive retry noise and only logging the first and last injection retry unless the platform can safely tolerate full retry traces.</li>
+            <li>Adds regression coverage for the new Windows restart guard and debug-port release logic so restart behavior stays predictable across packaged and unpackaged desktop installs.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.2.4</strong>
+          <strong>版本 1.2.5</strong>
           <ul>
-            <li>可靠支持 Windows 合并版 ChatGPT/Codex 商店应用：读取官方 OpenAI MSIX 清单，只使用已声明的启动入口，并校验包身份、进程与调试连接。</li>
-            <li>切换官方、混合 API 或中转模式时同步对话历史归属，并显示同步状态、备份位置、手动重试入口和“重新应用当前供应商”操作。</li>
-            <li>强化历史同步安全性：统一维护锁、完整备份、原子写入、SQLite 事务、并发改动检测，以及会话、索引和全局状态的整体回滚。</li>
-            <li>将“保存供应商配置”与“应用供应商”分开；Windows 当前中转可直接加载新服务器参数，同时修复旧配置规范化，并清楚说明上游断连和故障切换结果。</li>
-            <li>扩展隐私安全诊断：更严格地隐藏密钥与认证信息，净化应用引用，记录结构化 Windows 启动尝试，并给出更明确的启动和中转失败分类。</li>
-            <li>注入设置只有在后端确认保存成功后才更新，失败时恢复原 UI 状态；模式写入时保留 TOML 的 BOM 与换行格式。</li>
-            <li>大幅补充 Windows 激活、模式往返、供应商同步、回滚、中转设置、诊断和异步 UI 状态的回归测试。</li>
+            <li>强化 Windows 完整重启流程：合并重复重启请求，在新 launcher 真正准备好后立即释放重启锁，避免多个重启流程同时争抢同一个 ChatGPT/Codex 实例。</li>
+            <li>Windows 下只有在调试端口确实属于当前选中的 ChatGPT/Codex 应用时才通过 CDP 请求关闭；如果端口被其他程序占用，会记录明确诊断而不是误杀无关进程。</li>
+            <li>新增 Windows 重启前清理逻辑：识别目标商店包或桌面可执行文件，先等待短暂的正常退出窗口，必要时再结束剩余的 ChatGPT/Codex 进程树后重新拉起。</li>
+            <li>将通用调试端口等待升级为 Windows 感知释放检查：重启前同时确认端口是否可重新绑定、是否仍在接受连接、是否存在 LISTENING 进程，以及是否存在尚未 LISTEN 的 BOUND 占用者。</li>
+            <li>改进重启失败诊断：补充重复重启合并、跳过未归属 CDP 关闭、已停止的 Windows 目标 PID、调试端口不可用以及临时 CDP 不可达等结构化日志，同时避免刷屏。</li>
+            <li>降低 Windows bridge 重试噪音：注入重试默认只记录第一次和最后一次，只有适合的平台才保留完整重试轨迹，方便排查又不淹没有效日志。</li>
+            <li>补充新的 Windows 重启互斥与调试端口释放回归测试，让打包版和非打包版桌面安装在重启时都保持可预测行为。</li>
           </ul>
         </div>
       </section>
