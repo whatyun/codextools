@@ -950,7 +950,7 @@ func applyRelayConfig(home string, relay relayProfile, pure bool) error {
 	if strings.TrimSpace(relay.APIKey) == "" && relay.RelayMode != "aggregate" {
 		return errors.New("中转 Key 不能为空")
 	}
-	if relay.ImageGenerationEnabled && relay.ImageGenerationUseSeparateAPI {
+	if relay.Protocol == "responses" && relay.ImageGenerationEnabled && relay.ImageGenerationUseSeparateAPI {
 		if strings.TrimSpace(relay.ImageGenerationBaseURL) == "" {
 			return errors.New("图片 Base URL 不能为空")
 		}

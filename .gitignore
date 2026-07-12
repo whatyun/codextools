@@ -6,5 +6,6 @@ codextools.exe
 dist/build/
 dist/cache/
 dist/releases/
+promo-video/
 *.log
 .DS_Store

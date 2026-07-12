@@ -1703,7 +1703,7 @@ func relayProfileAPIReady(profile relayProfile) bool {
 	if strings.TrimSpace(profile.BaseURL) == "" || strings.TrimSpace(profile.APIKey) == "" {
 		return false
 	}
-	if profile.ImageGenerationEnabled && profile.ImageGenerationUseSeparateAPI {
+	if profile.Protocol == "responses" && profile.ImageGenerationEnabled && profile.ImageGenerationUseSeparateAPI {
 		return strings.TrimSpace(profile.ImageGenerationBaseURL) != "" && strings.TrimSpace(profile.ImageGenerationAPIKey) != ""
 	}
 	return true

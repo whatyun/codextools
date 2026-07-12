@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="$ROOT/dist/releases"
 BUILD="$ROOT/dist/build/macos"
 VERSION="${VERSION:-1.2.5}"
+ARTIFACT_VERSION="${ARTIFACT_VERSION:-$VERSION}"
 TARGET_ARCHES="${TARGET_ARCHES:-arm64 amd64}"
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 NPM_CACHE="${NPM_CACHE:-$ROOT/dist/cache/npm}"
@@ -189,13 +190,15 @@ build_arch() {
   local arch_build="$BUILD/$label"
   local app_dir="$arch_build/$APP_NAME.app"
   local launcher_app_dir="$arch_build/$LAUNCHER_NAME.app"
-  local package_name="ChatGPT-Codex-Tools-${VERSION}-macos-${label}"
+  local package_name="ChatGPT-Codex-Tools-${ARTIFACT_VERSION}-macos-${label}"
   local package_dir="$arch_build/$package_name"
   local zip_path="$DIST/${package_name}.zip"
   local pkg_root="$arch_build/pkg-root"
   local component_pkg="$arch_build/${package_name}-component.pkg"
   local component_plist="$arch_build/component.plist"
   local pkg_path="$DIST/${package_name}.pkg"
+  local checksum_path="$DIST/${package_name}.sha256"
+  local checksum_tmp_path="$arch_build/${package_name}.sha256.tmp"
   local pkg_resources="$arch_build/pkg-resources"
   local distribution_xml="$arch_build/distribution.xml"
 
@@ -288,8 +291,15 @@ XML
     --resources "$pkg_resources" \
     "$pkg_path" >/dev/null
 
+  (
+    cd "$DIST"
+    shasum -a 256 "$(basename "$pkg_path")" "$(basename "$zip_path")" > "$checksum_tmp_path"
+  )
+  mv -f "$checksum_tmp_path" "$checksum_path"
+
   echo "$pkg_path"
   echo "$zip_path"
+  echo "$checksum_path"
 }
 
 pushd "$ROOT/web" >/dev/null

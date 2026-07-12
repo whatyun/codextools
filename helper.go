@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -35,9 +36,6 @@ func (r *launcherRuntime) setRuntimeSettings(settings backendSettings) {
 
 func (r *launcherRuntime) relaySettingsForRequest() backendSettings {
 	settings := r.runtimeSettingsSnapshot()
-	if currentRuntimeGOOS() != "windows" {
-		return settings
-	}
 	return loadRuntimeRelaySettings(settings)
 }
 
@@ -348,7 +346,7 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 	apiKey := strings.TrimSpace(profile.APIKey)
 	decision := relayRouteDecision{body: body, route: "text", reason: "default_text"}
 	if profile.Protocol == "responses" && profile.needsLocalRelayProxy() {
-		decision = decideRelayRoute(body, profile)
+		decision = decideRelayRouteForPath(req.URL.Path, body, profile)
 		body = decision.body
 		if decision.useImageAPI && usesSeparateImageGenerationAPI(profile) {
 			baseURL = relayProxyBaseURL(profile.ImageGenerationBaseURL, profile.Protocol)
@@ -364,6 +362,9 @@ func forwardRelayProxyAttempt(settings backendSettings, w http.ResponseWriter, r
 		return true
 	}
 	target := relayTargetURL(baseURL, req.URL.Path)
+	if decision.useImageAPI {
+		target = relayImageTargetURL(baseURL, req.URL.Path)
+	}
 	startedAt := time.Now()
 	method := req.Method
 	if method == "" {
@@ -504,15 +505,47 @@ func relayProxyBaseURL(baseURL, protocol string) string {
 }
 
 func relayTargetURL(baseURL, path string) string {
-	path = "/" + strings.TrimLeft(path, "/")
-	switch {
-	case strings.HasSuffix(path, "/responses") || path == "/responses":
-		return baseURL + "/responses"
-	case strings.HasSuffix(path, "/models") || path == "/models":
-		return baseURL + "/models"
-	default:
-		return baseURL + path
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	path = relayUpstreamPath(path)
+	if path == "" {
+		return baseURL
 	}
+	if strings.HasSuffix(baseURL, path) {
+		return baseURL
+	}
+	return baseURL + path
+}
+
+func relayImageTargetURL(baseURL, path string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if relayURLHasCompleteImageEndpoint(baseURL) {
+		return baseURL
+	}
+	return relayTargetURL(baseURL, path)
+}
+
+func relayUpstreamPath(path string) string {
+	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	if path == "/" || path == "/v1" {
+		return ""
+	}
+	if strings.HasPrefix(path, "/v1/") {
+		return strings.TrimPrefix(path, "/v1")
+	}
+	return path
+
+}
+
+func relayURLHasCompleteImageEndpoint(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	return path == "/responses" || strings.HasSuffix(path, "/responses") ||
+		path == "/images/generations" || strings.HasSuffix(path, "/images/generations") ||
+		path == "/images/edits" || strings.HasSuffix(path, "/images/edits") ||
+		path == "/images/variations" || strings.HasSuffix(path, "/images/variations")
 }
 
 func copyProxyHeaders(source http.Header, target http.Header) {
@@ -579,10 +612,20 @@ func copyRelayResponseBody(w http.ResponseWriter, body io.Reader) (int64, error)
 }
 
 func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
+	return decideRelayRouteForPath("", body, profile)
+}
+
+func decideRelayRouteForPath(path string, body []byte, profile relayProfile) relayRouteDecision {
 	decision := relayRouteDecision{body: body, route: "text", reason: "default_text", keySource: "default"}
 	var value map[string]any
 	if json.Unmarshal(body, &value) != nil {
 		decision.reason = "invalid_json"
+		if usesSeparateImageGenerationAPI(profile) && relayPathRequestsImageGeneration(path) {
+			decision.useImageAPI = true
+			decision.route = "image"
+			decision.reason = "image_endpoint"
+			decision.keySource = "image"
+		}
 		return decision
 	}
 
@@ -593,6 +636,13 @@ func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
 	}
 
 	if usesSeparateImageGenerationAPI(profile) {
+		if relayPathRequestsImageGeneration(path) {
+			decision.useImageAPI = true
+			decision.route = "image"
+			decision.reason = "image_endpoint"
+			decision.keySource = "image"
+			return decision
+		}
 		if relayToolChoiceRequestsImage(value["tool_choice"]) {
 			decision.useImageAPI = true
 			decision.route = "image"
@@ -600,14 +650,16 @@ func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
 			decision.keySource = "image"
 			return decision
 		}
-		if relayBodyContainsImageGenerationCall(value) {
+		latestUserTexts := relayLatestUserTextFragments(value["input"])
+		if len(latestUserTexts) == 0 && relayBodyContainsImageGenerationCall(value) {
 			decision.useImageAPI = true
 			decision.route = "image"
 			decision.reason = "image_generation_call"
 			decision.keySource = "image"
 			return decision
 		}
-		if relayLatestUserInputRequestsImage(value["input"]) {
+		if relayBodyDeclaresImageGenerationTool(value) && (relayTextFragmentsRequestImage(latestUserTexts, value["input"]) ||
+			relayLatestUserInputContainsImage(value["input"]) && relayTextFragmentsRequestImageEdit(latestUserTexts, value["input"])) {
 			decision.useImageAPI = true
 			decision.route = "image"
 			decision.reason = "latest_user_image_intent"
@@ -621,6 +673,24 @@ func decideRelayRoute(body []byte, profile relayProfile) relayRouteDecision {
 		decision.reason = "text_with_image_tool_stripped"
 	}
 	return decision
+}
+
+func relayPathRequestsImageGeneration(path string) bool {
+	path = strings.ToLower(strings.TrimRight("/"+strings.TrimLeft(strings.TrimSpace(path), "/"), "/"))
+	return strings.HasSuffix(path, "/images/generations") || strings.HasSuffix(path, "/images/edits") || strings.HasSuffix(path, "/images/variations")
+}
+
+func relayBodyDeclaresImageGenerationTool(value map[string]any) bool {
+	tools, ok := value["tools"].([]any)
+	if !ok {
+		return false
+	}
+	for _, tool := range tools {
+		if relayToolIsImageGeneration(tool) {
+			return true
+		}
+	}
+	return false
 }
 
 func stripImageGenerationTools(value map[string]any, fallback []byte) ([]byte, bool) {
@@ -710,11 +780,27 @@ func relayNodeContainsImageGenerationCall(node any) bool {
 
 func relayLatestUserInputRequestsImage(input any) bool {
 	texts := relayLatestUserTextFragments(input)
+	return relayTextFragmentsRequestImage(texts, input)
+}
+
+func relayTextFragmentsRequestImage(texts []string, fallback any) bool {
 	if len(texts) == 0 {
-		texts = relayTextFragments(input)
+		texts = relayTextFragments(fallback)
 	}
 	for _, text := range texts {
 		if relayTextRequestsImage(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func relayTextFragmentsRequestImageEdit(texts []string, fallback any) bool {
+	if len(texts) == 0 {
+		texts = relayTextFragments(fallback)
+	}
+	for _, text := range texts {
+		if relayTextRequestsImageEdit(text) {
 			return true
 		}
 	}
@@ -740,6 +826,46 @@ func relayLatestUserTextFragments(input any) []string {
 		}
 	}
 	return nil
+}
+
+func relayLatestUserInputContainsImage(input any) bool {
+	messages, ok := input.([]any)
+	if !ok {
+		return relayNodeContainsImageInput(input)
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		message, ok := messages[index].(map[string]any)
+		if !ok || strings.ToLower(stringFromAny(message["role"])) != "user" {
+			continue
+		}
+		return relayNodeContainsImageInput(firstNonNil(message["content"], message["input"]))
+	}
+	return relayNodeContainsImageInput(input)
+}
+
+func relayNodeContainsImageInput(node any) bool {
+	switch value := node.(type) {
+	case []any:
+		for _, child := range value {
+			if relayNodeContainsImageInput(child) {
+				return true
+			}
+		}
+	case map[string]any:
+		kind := strings.ToLower(stringFromAny(value["type"]))
+		if kind == "input_image" || kind == "image_url" {
+			return true
+		}
+		if stringFromAny(value["image_url"]) != "" && !strings.Contains(kind, "output") {
+			return true
+		}
+		for _, key := range []string{"content", "input"} {
+			if relayNodeContainsImageInput(value[key]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func relayTextFragments(node any) []string {
@@ -774,30 +900,312 @@ func relayTextRequestsImage(text string) bool {
 	if normalized == "" {
 		return false
 	}
-	chineseActions := []string{"生成", "画", "绘制", "创建", "设计", "做"}
-	chineseTargets := []string{"图片", "图像", "图标", "logo"}
-	for _, action := range chineseActions {
-		if strings.Contains(normalized, action) {
-			for _, target := range chineseTargets {
-				if strings.Contains(normalized, target) {
+	for _, negative := range []string{
+		"不要生成图片", "不生成图片", "无需生成图片", "不用生成图片", "不要画图", "无需画图", "不用画图",
+		"do not generate an image", "do not generate images", "don't generate an image", "don't generate images",
+		"without generating an image", "without generating images", "no image generation",
+	} {
+		if strings.Contains(normalized, negative) {
+			return false
+		}
+	}
+	return relayChineseTextRequestsImage(normalized) || relayEnglishTextRequestsImage(normalized)
+}
+
+func relayTextRequestsImageEdit(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	for _, negative := range []string{
+		"不要编辑图片", "不修改图片", "无需修改图片", "不用修改图片",
+		"do not edit the image", "don't edit the image", "do not modify the image", "without editing the image",
+	} {
+		if strings.Contains(normalized, negative) {
+			return false
+		}
+	}
+	return relayChineseTextRequestsImageEdit(normalized) || relayEnglishTextRequestsImageEdit(normalized)
+}
+
+func relayChineseTextRequestsImage(text string) bool {
+	actions := []string{"生成", "画", "绘制", "创建", "设计", "做", "制作"}
+	targets := []string{"架构图", "示意图", "缩略图", "图片", "图像", "图标", "插画", "海报", "照片", "头像", "封面", "logo", "图"}
+	for _, action := range actions {
+		for search := 0; search < len(text); {
+			actionIndex := strings.Index(text[search:], action)
+			if actionIndex < 0 {
+				break
+			}
+			actionIndex += search
+			if relayChineseImageActionPrefixAllowed(text[:actionIndex]) {
+				targetIndex, target := relayFirstTextTarget(text, actionIndex+len(action), targets, false)
+				if targetIndex >= 0 && relayChineseImageObjectGapAllowed(text[actionIndex+len(action):targetIndex]) && relayChineseImageTargetSuffixAllowed(text[targetIndex+len(target):]) {
+					return true
+				}
+				if targetIndex < 0 && (action == "画" || action == "绘制") && relayChineseDrawObjectAllowed(text[:actionIndex], text[actionIndex+len(action):]) {
 					return true
 				}
 			}
-		}
-	}
-	englishActions := []string{"generate", "create", "draw", "make", "design"}
-	englishTargets := []string{"image", "picture", "icon", "logo", "illustration"}
-	for _, action := range englishActions {
-		if !strings.Contains(normalized, action) {
-			continue
-		}
-		for _, target := range englishTargets {
-			if strings.Contains(normalized, target) {
-				return true
-			}
+			search = actionIndex + len(action)
 		}
 	}
 	return false
+}
+
+func relayChineseTextRequestsImageEdit(text string) bool {
+	actions := []string{"编辑", "修改", "修复"}
+	targets := []string{"架构图", "示意图", "缩略图", "图片", "图像", "图标", "插画", "海报", "照片", "头像", "封面", "logo", "图"}
+	for _, action := range actions {
+		for search := 0; search < len(text); {
+			actionIndex := strings.Index(text[search:], action)
+			if actionIndex < 0 {
+				break
+			}
+			actionIndex += search
+			if relayChineseImageActionPrefixAllowed(text[:actionIndex]) {
+				targetIndex, target := relayFirstTextTarget(text, actionIndex+len(action), targets, false)
+				if targetIndex >= 0 && relayChineseImageObjectGapAllowed(text[actionIndex+len(action):targetIndex]) && relayChineseImageTargetSuffixAllowed(text[targetIndex+len(target):]) {
+					return true
+				}
+			}
+			search = actionIndex + len(action)
+		}
+	}
+	return false
+}
+
+func relayEnglishTextRequestsImage(text string) bool {
+	actions := []string{"generate", "create", "draw", "make", "design"}
+	targets := []string{
+		"illustrations", "illustration", "thumbnails", "thumbnail", "pictures", "picture", "diagrams", "diagram",
+		"graphics", "graphic", "artworks", "artwork", "posters", "poster", "avatars", "avatar",
+		"images", "image", "icons", "icon", "logos", "logo", "photo", "photos",
+	}
+	for _, action := range actions {
+		for search := 0; search < len(text); {
+			actionIndex := relayASCIIWordIndex(text, action, search)
+			if actionIndex < 0 {
+				break
+			}
+			if relayEnglishImageActionPrefixAllowed(text[:actionIndex]) {
+				targetIndex, target := relayFirstTextTarget(text, actionIndex+len(action), targets, true)
+				if targetIndex >= 0 && relayEnglishImageObjectGapAllowed(text[actionIndex+len(action):targetIndex]) && relayEnglishImageTargetSuffixAllowed(text[targetIndex+len(target):]) {
+					return true
+				}
+				if targetIndex < 0 && action == "draw" && relayEnglishDrawObjectAllowed(text[:actionIndex], text[actionIndex+len(action):]) {
+					return true
+				}
+			}
+			search = actionIndex + len(action)
+		}
+	}
+	return false
+}
+
+func relayEnglishTextRequestsImageEdit(text string) bool {
+	actions := []string{"edit", "modify", "transform", "fix"}
+	targets := []string{
+		"illustrations", "illustration", "thumbnails", "thumbnail", "pictures", "picture", "diagrams", "diagram",
+		"graphics", "graphic", "artworks", "artwork", "posters", "poster", "avatars", "avatar",
+		"images", "image", "icons", "icon", "logos", "logo", "photo", "photos",
+	}
+	for _, action := range actions {
+		for search := 0; search < len(text); {
+			actionIndex := relayASCIIWordIndex(text, action, search)
+			if actionIndex < 0 {
+				break
+			}
+			if relayEnglishImageActionPrefixAllowed(text[:actionIndex]) {
+				targetIndex, target := relayFirstTextTarget(text, actionIndex+len(action), targets, true)
+				if targetIndex >= 0 && relayEnglishImageObjectGapAllowed(text[actionIndex+len(action):targetIndex]) && relayEnglishImageTargetSuffixAllowed(text[targetIndex+len(target):]) {
+					return true
+				}
+			}
+			search = actionIndex + len(action)
+		}
+	}
+	return false
+}
+
+func relayFirstTextTarget(text string, start int, targets []string, asciiWords bool) (int, string) {
+	bestIndex := -1
+	bestTarget := ""
+	for _, target := range targets {
+		index := strings.Index(text[start:], target)
+		if index < 0 {
+			continue
+		}
+		index += start
+		if asciiWords && !relayASCIIWordAt(text, index, len(target)) {
+			continue
+		}
+		if bestIndex < 0 || index < bestIndex || index == bestIndex && len(target) > len(bestTarget) {
+			bestIndex = index
+			bestTarget = target
+		}
+	}
+	return bestIndex, bestTarget
+}
+
+func relayEnglishImageActionPrefixAllowed(text string) bool {
+	prefix := relayImageRequestClausePrefix(text)
+	for _, allowed := range []string{
+		"", "please", "please help me", "help me", "can you", "can you please", "could you", "could you please",
+		"would you", "will you", "i want you to", "i'd like you to", "use imagegen to", "please use imagegen to",
+	} {
+		if prefix == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func relayChineseImageActionPrefixAllowed(text string) bool {
+	prefix := relayImageRequestClausePrefix(text)
+	for _, allowed := range []string{
+		"", "请", "请你", "帮我", "请帮我", "给我", "请给我", "能否", "可以", "可以帮我", "麻烦", "麻烦帮我",
+		"我想", "我要", "我希望你", "使用imagegen", "请使用imagegen", "使用技能imagegen", "请使用技能imagegen",
+	} {
+		if prefix == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func relayImageRequestClausePrefix(text string) string {
+	if index := strings.LastIndexAny(text, ".!?;\n。！？；"); index >= 0 {
+		text = text[index+1:]
+	}
+	return strings.Trim(strings.TrimSpace(text), " ,，:-")
+}
+
+func relayEnglishImageTargetSuffixAllowed(text string) bool {
+	suffix := strings.TrimSpace(strings.TrimLeft(text, " ,.!?;:)]}'\""))
+	if suffix == "" {
+		return true
+	}
+	for _, technical := range []string{"in code", "in react", "in html", "in css", "in svg", "using code", "using canvas", "with code"} {
+		if strings.HasPrefix(suffix, technical) {
+			return false
+		}
+	}
+	for _, prefix := range []string{
+		"of ", "for ", "showing ", "depicting ", "that shows ", "which shows ", "with ", "in the style of ",
+		"based on ", "at ", "please", "for me", "now",
+	} {
+		if strings.HasPrefix(suffix, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func relayEnglishImageObjectGapAllowed(gap string) bool {
+	if strings.ContainsAny(gap, ".!?;:\n") {
+		return false
+	}
+	words := strings.Fields(strings.Trim(gap, " ,()[]{}'\""))
+	if len(words) > 8 {
+		return false
+	}
+	for _, word := range words {
+		switch strings.Trim(word, " ,()[]{}'\"") {
+		case "for", "to", "of", "from", "that", "which", "where", "whose", "into", "about",
+			"docker", "container", "oci", "vm", "virtual", "machine", "disk", "system", "base", "iso":
+			return false
+		}
+	}
+	return true
+}
+
+func relayChineseImageObjectGapAllowed(gap string) bool {
+	if strings.ContainsAny(gap, "。！？；：.!?;:\n") {
+		return false
+	}
+	for _, relation := range []string{"用于", "为了", "给", "为", "关于", "针对", "支持", "处理", "加载", "上传", "写入"} {
+		if strings.Contains(gap, relation) {
+			return false
+		}
+	}
+	return true
+}
+
+func relayEnglishDrawObjectAllowed(prefix, text string) bool {
+	object := strings.TrimSpace(strings.Trim(text, " ,.!?;:()[]{}'\""))
+	if object == "" {
+		return false
+	}
+	requestPrefix := relayImageRequestClausePrefix(prefix)
+	if !strings.Contains(requestPrefix, "imagegen") && !strings.HasPrefix(object, "me ") {
+		return false
+	}
+	for _, technical := range []string{"data", "record", "information", "code", "canvas", "svg", "html", "css", "react", "component", "function", "api"} {
+		if strings.Contains(object, technical) {
+			return false
+		}
+	}
+	return true
+}
+
+func relayChineseDrawObjectAllowed(prefix, text string) bool {
+	object := strings.TrimSpace(strings.Trim(text, " ，。！？；：,.!?;:()[]{}'\""))
+	if object == "" {
+		return false
+	}
+	requestPrefix := relayImageRequestClausePrefix(prefix)
+	if !strings.Contains(requestPrefix, "imagegen") && requestPrefix != "帮我" && requestPrefix != "请帮我" && requestPrefix != "给我" && requestPrefix != "请给我" {
+		return false
+	}
+	for _, technical := range []string{"数据", "记录", "信息", "代码", "画布", "组件", "函数", "接口", "api", "svg", "html", "css", "react"} {
+		if strings.Contains(object, technical) {
+			return false
+		}
+	}
+	return true
+}
+
+func relayChineseImageTargetSuffixAllowed(text string) bool {
+	suffix := strings.TrimSpace(strings.TrimLeft(text, " ，。！？；：,.!?;:"))
+	if suffix == "" {
+		return true
+	}
+	for _, prefix := range []string{
+		"展示", "描绘", "表现", "用于", "作为", "关于", "包含", "带有", "风格", "比例", "尺寸", "分辨率", "背景", "颜色", "请", "给我", "一下", "吧",
+	} {
+		if strings.HasPrefix(suffix, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func relayASCIIWordIndex(text, word string, start int) int {
+	for start < len(text) {
+		index := strings.Index(text[start:], word)
+		if index < 0 {
+			return -1
+		}
+		index += start
+		if relayASCIIWordAt(text, index, len(word)) {
+			return index
+		}
+		start = index + len(word)
+	}
+	return -1
+}
+
+func relayASCIIWordAt(text string, index, length int) bool {
+	if index > 0 && relayASCIIWordCharacter(text[index-1]) {
+		return false
+	}
+	end := index + length
+	return end >= len(text) || !relayASCIIWordCharacter(text[end])
+}
+
+func relayASCIIWordCharacter(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9' || value == '_'
 }
 
 func relayImageKind(kind string) bool {

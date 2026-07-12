@@ -68,7 +68,7 @@ func TestNormalizeSettingsRepairsUnknownActiveRelayID(t *testing.T) {
 	}
 }
 
-func TestWindowsRelayRuntimeReloadsSavedSettingsWithoutChangingMacSnapshot(t *testing.T) {
+func TestRelayRuntimeReloadsSavedSettingsOnWindowsAndMac(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -90,6 +90,12 @@ func TestWindowsRelayRuntimeReloadsSavedSettingsWithoutChangingMacSnapshot(t *te
 	saved.RelayProfiles = append([]relayProfile(nil), cached.RelayProfiles...)
 	saved.RelayProfiles[0].BaseURL = "https://new-relay.example.test/v1"
 	saved.RelayProfiles[0].APIKey = "new-key"
+	saved.RelayProfiles[0].ImageGenerationEnabled = true
+	saved.RelayProfiles[0].ImageGenerationUseSeparateAPI = true
+	saved.RelayProfiles[0].ImageGenerationBaseURL = "https://images.example.test/v1"
+	saved.RelayProfiles[0].ImageGenerationAPIKey = "image-key"
+	saved.RelayProfiles[0].ProxyEnabled = true
+	saved.RelayProfiles[0].ProxyURL = "http://127.0.0.1:7890"
 	if err := saveSettings(saved); err != nil {
 		t.Fatalf("save updated relay settings: %v", err)
 	}
@@ -106,11 +112,32 @@ func TestWindowsRelayRuntimeReloadsSavedSettingsWithoutChangingMacSnapshot(t *te
 	if got, want := windowsProfile.APIKey, "new-key"; got != want {
 		t.Fatalf("Windows relay did not reload the saved key: got %q want %q", got, want)
 	}
+	if got, want := windowsProfile.ImageGenerationBaseURL, "https://images.example.test/v1"; got != want {
+		t.Fatalf("Windows relay did not reload the image base URL: got %q want %q", got, want)
+	}
+	if got, want := windowsProfile.ImageGenerationAPIKey, "image-key"; got != want {
+		t.Fatalf("Windows relay did not reload the image key: got %q want %q", got, want)
+	}
+	if !windowsProfile.ProxyEnabled || windowsProfile.ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("Windows relay did not reload the HTTP proxy: %#v", windowsProfile)
+	}
 
 	currentRuntimeGOOS = func() string { return "darwin" }
 	macProfile := activeRelayProfile(runtimeState.relaySettingsForRequest())
-	if got, want := macProfile.BaseURL, "https://api.example.com/v1"; got != want {
-		t.Fatalf("macOS runtime snapshot changed: got %q want %q", got, want)
+	if got, want := macProfile.BaseURL, "https://new-relay.example.test/v1"; got != want {
+		t.Fatalf("macOS relay did not reload the saved base URL: got %q want %q", got, want)
+	}
+	if got, want := macProfile.APIKey, "new-key"; got != want {
+		t.Fatalf("macOS relay did not reload the saved key: got %q want %q", got, want)
+	}
+	if got, want := macProfile.ImageGenerationBaseURL, "https://images.example.test/v1"; got != want {
+		t.Fatalf("macOS relay did not reload the image base URL: got %q want %q", got, want)
+	}
+	if got, want := macProfile.ImageGenerationAPIKey, "image-key"; got != want {
+		t.Fatalf("macOS relay did not reload the image key: got %q want %q", got, want)
+	}
+	if !macProfile.ProxyEnabled || macProfile.ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("macOS relay did not reload the HTTP proxy: %#v", macProfile)
 	}
 }
 

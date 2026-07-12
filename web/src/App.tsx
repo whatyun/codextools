@@ -3877,7 +3877,7 @@ function RelayScreen({
         }}
       />
       <Panel>
-        <CardHead title="供应商列表" detail={`${normalized.relayProfiles.length} 个供应商配置；可拖动排序，点编辑进入详情`} />
+        <CardHead title="供应商列表" detail={`${normalized.relayProfiles.length} 个供应商配置；可拖动排序，点击供应商进入详情`} />
         <CardContent>
           <label className="switch-row relay-master-switch">
             <input
@@ -4971,9 +4971,14 @@ function SortableRelayProfileCard({
       data-relay-profile-id={profile.id}
       key={profile.id}
       onKeyDown={(event) => {
-        if (event.key === "Enter") onEdit(profile.id);
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onEdit(profile.id);
+        }
       }}
+      onClick={() => onEdit(profile.id)}
       ref={setNodeRef}
+      role="button"
       style={style}
       tabIndex={0}
     >
@@ -4982,6 +4987,7 @@ function SortableRelayProfileCard({
         className="relay-drag"
         title="拖动排序"
         type="button"
+        onClick={(event) => event.stopPropagation()}
         {...attributes}
         {...listeners}
       >
@@ -5137,6 +5143,12 @@ function RelayProfileDetail({
     profile.officialAuthUpdatedAt,
     profile.configContents,
     profile.authContents,
+    profile.imageGenerationEnabled,
+    profile.imageGenerationUseSeparateApi,
+    profile.imageGenerationBaseUrl,
+    profile.imageGenerationApiKey,
+    profile.proxyEnabled,
+    profile.proxyUrl,
   ]);
   const saveDraftSettings = async () => {
     const next = isNew ? addRelayProfile(form, draft) : updateRelayProfile(form, profile.id, draft);
@@ -6079,29 +6091,6 @@ function RelayProfileEditor({
                 placeholder="留空使用默认值"
               />
             </Field>
-            {showApiFields ? (
-              <>
-                <label className="switch-row compact-switch relay-proxy-switch">
-                  <input
-                    checked={profile.proxyEnabled}
-                    onChange={(event) => updateDraft({ proxyEnabled: event.currentTarget.checked })}
-                    type="checkbox"
-                  />
-                  <span>
-                    <strong>启用 HTTP 代理</strong>
-                    <small>开启后，此供应商的测试、模型列表和运行时请求都会通过该代理访问上游；未填写代理 URL 时保持直连。</small>
-                  </span>
-                </label>
-                <Field className="relay-proxy-url-field" label="代理 URL">
-                  <Input
-                    disabled={!profile.proxyEnabled}
-                    value={profile.proxyUrl}
-                    onChange={(event) => updateDraft({ proxyUrl: event.currentTarget.value })}
-                    placeholder="http://127.0.0.1:7890"
-                  />
-                </Field>
-              </>
-            ) : null}
           </div>
         ) : null}
         {profile.relayMode === "aggregate" ? (
@@ -6192,67 +6181,7 @@ function RelayProfileEditor({
         </div>
       ) : null}
       <RelayContextSelectionEditor profile={profile} form={form} onChange={(contextSelection) => updateDraft({ contextSelection })} onUseCommonConfigChange={(useCommonConfig) => updateDraft({ useCommonConfig })} />
-      {showApiFields ? (
-        <div className="image-relay-settings">
-          <label className="switch-row compact-switch">
-            <input
-              checked={profile.imageGenerationEnabled}
-              onChange={(event) =>
-                updateDraft({
-                  imageGenerationEnabled: event.currentTarget.checked,
-                  imageGenerationUseSeparateApi: event.currentTarget.checked
-                    ? profile.imageGenerationUseSeparateApi
-                    : false,
-                })
-              }
-              type="checkbox"
-            />
-            <span>
-              <strong>允许当前中转使用图片生成</strong>
-              <small>关闭时会通过本地代理裁剪 image_generation 工具，避免无图片权限的中转返回 403。</small>
-            </span>
-          </label>
-          {profile.imageGenerationEnabled ? (
-            <>
-              <label className="switch-row compact-switch">
-                <input
-                  checked={profile.imageGenerationUseSeparateApi}
-                  disabled={profile.protocol !== "responses"}
-                  onChange={(event) =>
-                    updateDraft({
-                      imageGenerationUseSeparateApi: event.currentTarget.checked,
-                    })
-                  }
-                  type="checkbox"
-                />
-                <span>
-                  <strong>图片生成使用独立 API 和 Key</strong>
-                  <small>仅 Responses API 上游支持；明确图片生成请求才会转发到下方图片 API，普通对话默认走当前中转。</small>
-                </span>
-              </label>
-              {profile.imageGenerationUseSeparateApi && profile.protocol === "responses" ? (
-                <div className="relay-fields image-fields">
-                  <Field label="图片 Base URL">
-                    <Input
-                      value={profile.imageGenerationBaseUrl}
-                      onChange={(event) => updateDraft({ imageGenerationBaseUrl: event.currentTarget.value })}
-                      placeholder="填写支持图片生成的 Base URL"
-                    />
-                  </Field>
-                  <Field label="图片 Key">
-                    <Input
-                      type="password"
-                      value={profile.imageGenerationApiKey}
-                      onChange={(event) => updateDraft({ imageGenerationApiKey: event.currentTarget.value })}
-                      placeholder="输入图片生成 API Key"
-                    />
-                  </Field>
-                </div>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      <ImageRelaySettings onChange={updateDraft} profile={profile} />
       {showApiFields && profile.protocol === "chatCompletions" ? (
         <div className="hint-line relay-protocol-hint">
           <MessageCircle className="h-4 w-4" />
@@ -6264,6 +6193,130 @@ function RelayProfileEditor({
         <span>{relayProfileModeHelp(profile)}</span>
       </div>
     </div>
+  );
+}
+
+function ImageRelaySettings({
+  profile,
+  onChange,
+}: {
+  profile: RelayProfile;
+  onChange: (patch: Partial<RelayProfile>) => void;
+}) {
+  const apiMode = profile.relayMode === "mixedApi" || profile.relayMode === "pureApi";
+  const separateApiSupported = profile.protocol === "responses";
+  const controlsDisabled = !apiMode;
+  const separateFieldsVisible = profile.imageGenerationUseSeparateApi && separateApiSupported;
+  const proxyStatus = !apiMode
+    ? "仅混合 API 或中转 API 可配置"
+    : profile.proxyEnabled && profile.proxyUrl.trim()
+      ? "默认中转与图片 API 共用"
+      : profile.proxyEnabled
+        ? "代理 URL 为空，保持直连"
+        : "默认中转与图片 API 均直连";
+
+  return (
+    <section className="image-relay-settings" aria-label="图片生成路由">
+      <div className="image-relay-heading">
+        <div>
+          <strong>
+            <Image className="h-4 w-4" />
+            图片生成路由
+          </strong>
+          <span>{`当前供应商：${profile.name || profile.id}`}</span>
+        </div>
+        <span className={`image-chip ${profile.imageGenerationEnabled ? "enabled" : ""}`}>
+          {relayImageModeLabel(profile)}
+        </span>
+      </div>
+      <div className="relay-grid compact image-route-status">
+        <Metric label="普通请求" value="当前默认中转" />
+        <Metric label="HTTP 代理" value={proxyStatus} />
+      </div>
+      {!apiMode ? (
+        <div className="hint-line image-route-hint">
+          <Info className="h-4 w-4" />
+          <span>官方模式和聚合轮转不在这里配置图片 API；请先切换为混合 API 或中转 API。</span>
+        </div>
+      ) : null}
+      <label className="switch-row compact-switch">
+        <input
+          checked={profile.imageGenerationEnabled}
+          disabled={controlsDisabled}
+          onChange={(event) => onChange({ imageGenerationEnabled: event.currentTarget.checked })}
+          type="checkbox"
+        />
+        <span>
+          <strong>允许当前中转使用图片生成</strong>
+          <small>关闭时会通过本地代理裁剪 image_generation 工具；已填写的独立图片 API 和 Key 会保留。</small>
+        </span>
+      </label>
+      <label className="switch-row compact-switch">
+        <input
+          checked={profile.imageGenerationUseSeparateApi}
+          disabled={controlsDisabled || !profile.imageGenerationEnabled || !separateApiSupported}
+          onChange={(event) => onChange({ imageGenerationUseSeparateApi: event.currentTarget.checked })}
+          type="checkbox"
+        />
+        <span>
+          <strong>图片生成使用独立 API 和 Key</strong>
+          <small>只有明确的图片生成请求使用独立图片 API；代码开发、普通对话和其他工具请求继续走当前默认中转。</small>
+        </span>
+      </label>
+      {!separateApiSupported && apiMode ? (
+        <div className="hint-line image-route-hint">
+          <Info className="h-4 w-4" />
+          <span>独立图片 API 仅支持 Responses API 上游；当前 Chat Completions 仍可让图片生成走默认中转。</span>
+        </div>
+      ) : null}
+      {separateFieldsVisible ? (
+        <div className="relay-fields image-fields">
+          <Field label="图片 Base URL">
+            <Input
+              disabled={controlsDisabled || !profile.imageGenerationEnabled}
+              value={profile.imageGenerationBaseUrl}
+              onChange={(event) => onChange({ imageGenerationBaseUrl: event.currentTarget.value })}
+              placeholder="填写支持图片生成的 Base URL"
+            />
+          </Field>
+          <Field label="图片 Key">
+            <Input
+              disabled={controlsDisabled || !profile.imageGenerationEnabled}
+              type="password"
+              value={profile.imageGenerationApiKey}
+              onChange={(event) => onChange({ imageGenerationApiKey: event.currentTarget.value })}
+              placeholder="输入图片生成 API Key"
+            />
+          </Field>
+        </div>
+      ) : null}
+      <div className="image-proxy-settings">
+        <label className="switch-row compact-switch relay-proxy-switch">
+          <input
+            checked={profile.proxyEnabled}
+            disabled={controlsDisabled}
+            onChange={(event) => onChange({ proxyEnabled: event.currentTarget.checked })}
+            type="checkbox"
+          />
+          <span>
+            <strong>图片与默认中转共用 HTTP 代理</strong>
+            <small>供应商测试、模型列表、默认中转请求和独立图片请求共用此代理；关闭或 URL 为空时保持直连。</small>
+          </span>
+        </label>
+        <Field className="relay-proxy-url-field" label="代理 URL">
+          <Input
+            disabled={controlsDisabled || !profile.proxyEnabled}
+            value={profile.proxyUrl}
+            onChange={(event) => onChange({ proxyUrl: event.currentTarget.value })}
+            placeholder="http://127.0.0.1:7890"
+          />
+        </Field>
+      </div>
+      <div className="hint-line image-route-hint">
+        <Save className="h-4 w-4" />
+        <span>图片路由属于当前供应商；修改后使用详情页顶部的“保存”。当前供应商如需重写 config.toml，再点击“重新应用”。</span>
+      </div>
+    </section>
   );
 }
 
@@ -7165,7 +7218,8 @@ function relayProfileGuideReady(profile: RelayProfile, connection?: InstallGuide
   }
   const officialReady = profile.authContents.trim().length > 0 || profile.officialAuthContents.trim().length > 0 || relayOfficialAuthenticated(relay ?? null);
   const apiReady = profile.baseUrl.trim().length > 0 && profile.apiKey.trim().length > 0 &&
-    (!profile.imageGenerationEnabled || !profile.imageGenerationUseSeparateApi || (!!profile.imageGenerationBaseUrl.trim() && !!profile.imageGenerationApiKey.trim()));
+    (profile.protocol !== "responses" || !profile.imageGenerationEnabled || !profile.imageGenerationUseSeparateApi ||
+      (!!profile.imageGenerationBaseUrl.trim() && !!profile.imageGenerationApiKey.trim()));
   if (profile.relayMode === "aggregate") return true;
   if (profile.relayMode === "official") return officialReady;
   if (profile.relayMode === "mixedApi") return officialReady && apiReady;
@@ -7350,7 +7404,7 @@ function relayProfileSwitchValidation(profile: RelayProfile): string | null {
   if (!profile.apiKey.trim()) {
     return `供应商「${profile.name || profile.id}」缺少 API Key，已停止切换。`;
   }
-  if (profile.imageGenerationEnabled && profile.imageGenerationUseSeparateApi) {
+  if (profile.protocol === "responses" && profile.imageGenerationEnabled && profile.imageGenerationUseSeparateApi) {
     if (!profile.imageGenerationBaseUrl.trim()) return `供应商「${profile.name || profile.id}」缺少图片 Base URL，已停止切换。`;
     if (!profile.imageGenerationApiKey.trim()) return `供应商「${profile.name || profile.id}」缺少图片 Key，已停止切换。`;
   }

@@ -274,7 +274,14 @@ func TestRelayProfileHTTPProxyUIAndStateAreWired(t *testing.T) {
 		`proxyUrl: "",`,
 		`"proxyEnabled",`,
 		`"proxyUrl",`,
-		`启用 HTTP 代理`,
+		`function ImageRelaySettings({`,
+		`图片生成路由`,
+		`允许当前中转使用图片生成`,
+		`图片生成使用独立 API 和 Key`,
+		`图片与默认中转共用 HTTP 代理`,
+		`图片路由属于当前供应商`,
+		`<ImageRelaySettings onChange={updateDraft} profile={profile} />`,
+		`onClick={() => onEdit(profile.id)}`,
 		`代理 URL`,
 		`http://127.0.0.1:7890`,
 		`LOCAL_RELAY_PROXY_BASE_URL`,
@@ -283,6 +290,14 @@ func TestRelayProfileHTTPProxyUIAndStateAreWired(t *testing.T) {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("relay profile HTTP proxy UI/state should include %q", expected)
 		}
+	}
+	mainScreenStart := strings.Index(source, "function RelayScreen({")
+	detailStart := strings.Index(source, "function RelayProfileDetail({")
+	if mainScreenStart < 0 || detailStart <= mainScreenStart {
+		t.Fatal("relay screen/provider detail boundaries were not found")
+	}
+	if strings.Contains(source[mainScreenStart:detailStart], "<ImageRelaySettings") {
+		t.Fatal("image relay settings must live in provider details, not the relay overview")
 	}
 }
 
@@ -3921,6 +3936,41 @@ func TestRelayProxyBaseURLKeepsExistingResponsesPath(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsIgnoresStoredSeparateImageSettingsForReadiness(t *testing.T) {
+	profile := relayProfile{
+		Protocol:                      "chatCompletions",
+		BaseURL:                       "https://api.example.com/v1",
+		APIKey:                        "text-key",
+		ImageGenerationEnabled:        true,
+		ImageGenerationUseSeparateAPI: true,
+	}
+
+	if !relayProfileAPIReady(profile) {
+		t.Fatal("Chat Completions readiness must ignore Responses-only separate image settings")
+	}
+}
+
+func TestChatCompletionsApplyIgnoresStoredSeparateImageSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	profile := relayProfile{
+		ID:                            "chat-completions",
+		Name:                          "Chat Completions",
+		RelayMode:                     "pureApi",
+		Protocol:                      "chatCompletions",
+		BaseURL:                       "https://api.example.com/v1",
+		APIKey:                        "text-key",
+		ImageGenerationEnabled:        true,
+		ImageGenerationUseSeparateAPI: true,
+	}
+
+	if err := applyRelayConfig(filepath.Join(home, ".codex"), profile, true); err != nil {
+		t.Fatalf("Chat Completions apply must ignore Responses-only separate image settings: %v", err)
+	}
+}
+
 func TestEffectiveBaseURLUsesLocalProxyWhenHTTPProxyEnabledForResponses(t *testing.T) {
 	profile := relayProfile{
 		ID:           "relay",
@@ -4048,6 +4098,10 @@ func TestFetchModelsFromSourceUsesConfiguredHTTPProxy(t *testing.T) {
 }
 
 func TestAggregateRelayUsesSelectedMemberHTTPProxy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	clearRelayRotationSelector()
 	t.Cleanup(clearRelayRotationSelector)
 	proxyHits := 0
@@ -4079,6 +4133,9 @@ func TestAggregateRelayUsesSelectedMemberHTTPProxy(t *testing.T) {
 		Strategy: "failover",
 		Members:  []aggregateRelayMember{{RelayID: "member", Weight: 1}},
 	}}
+	if err := saveSettings(settings); err != nil {
+		t.Fatalf("save aggregate relay settings: %v", err)
+	}
 	runtime := &launcherRuntime{settings: settings}
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:57321/v1/responses", strings.NewReader(`{"input":"hi"}`))
 	rec := httptest.NewRecorder()
