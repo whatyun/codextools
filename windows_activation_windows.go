@@ -696,21 +696,28 @@ func runningWindowsRestartTargetProcessIDs(processIDs []uint32, spec windowsRest
 	return remaining
 }
 
-func applyProxyEnvironment(env []string) [3]savedEnvironmentValue {
-	keys := [3]string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"}
-	var previous [3]savedEnvironmentValue
-	for i, key := range keys {
-		current, exists := os.LookupEnv(key)
-		previous[i] = savedEnvironmentValue{key: key, value: current, ok: exists}
-		value, ok := lookupEnvFromList(env, key)
-		if ok {
-			_ = os.Setenv(key, value)
+func applyProxyEnvironment(env []string) []savedEnvironmentValue {
+	previous := make([]savedEnvironmentValue, 0, len(env))
+	seen := map[string]struct{}{}
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		key = strings.TrimSpace(key)
+		canonicalKey := strings.ToUpper(key)
+		if !ok || key == "" {
+			continue
 		}
+		if _, exists := seen[canonicalKey]; exists {
+			continue
+		}
+		seen[canonicalKey] = struct{}{}
+		current, exists := os.LookupEnv(key)
+		previous = append(previous, savedEnvironmentValue{key: key, value: current, ok: exists})
+		_ = os.Setenv(key, value)
 	}
 	return previous
 }
 
-func restoreProxyEnvironment(previous [3]savedEnvironmentValue) {
+func restoreProxyEnvironment(previous []savedEnvironmentValue) {
 	for _, saved := range previous {
 		if saved.ok {
 			_ = os.Setenv(saved.key, saved.value)

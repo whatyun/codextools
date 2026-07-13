@@ -13,7 +13,7 @@ const (
 	managerName              = "ChatGPT Codex 管理工具"
 	silentBinary             = "codextools-launcher"
 	managerBinary            = "codextools"
-	version                  = "1.2.5"
+	version                  = "1.2.6"
 	stateDirName             = ".codex-session-delete"
 	settingsFileName         = "settings.json"
 	latestStatusFileName     = "latest-status.json"
@@ -21,6 +21,7 @@ const (
 	relayProvider            = "CodexPlusPlus"
 	legacyRelayProvider      = "CodexPP"
 	aggregateRelayAPIKey     = "codex-plus-aggregate"
+	imageRelayCLIAPIKey      = "codex-plus-image-relay"
 	localRelayProxyPort      = 57323
 	protocolProxyBaseURL     = "http://127.0.0.1:57321/v1"
 	defaultMobileRelayURL    = "ws://127.0.0.1:57323"

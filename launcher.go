@@ -595,7 +595,7 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 		directLaunchBlocked := len(command) > 0 && isWindowsProtectedCodexDirectLaunchPath(appPath, command[0])
 		activation := buildWindowsPackagedActivationForSettings(appPath, debugPort, settings.CodexExtraArgs, settings)
 		if len(command) > 0 && strings.TrimSpace(command[0]) != "" && fileExists(command[0]) && !directLaunchBlocked {
-			handle, err := startCodexProcess(command)
+			handle, err := startCodexProcess(command, settings)
 			if err == nil {
 				return handle, nil
 			}
@@ -615,7 +615,7 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 			var attempts []windowsPackagedLaunchAttempt
 			if alias := windowsPackagedExecutionAlias(activation.appUserModelID); alias != "" {
 				aliasCommand := append([]string{alias}, buildCodexArgumentsForSettings(debugPort, settings.CodexExtraArgs, settings)...)
-				aliasHandle, aliasErr := startVerifiedWindowsPackagedProcess(aliasCommand, activation.appUserModelID, debugPort, true, "App Execution Alias", "launcher.windows_execution_alias", 20*time.Second)
+				aliasHandle, aliasErr := startVerifiedWindowsPackagedProcess(aliasCommand, activation.appUserModelID, debugPort, true, "App Execution Alias", "launcher.windows_execution_alias", 20*time.Second, settings)
 				if aliasErr == nil {
 					return aliasHandle, nil
 				}
@@ -626,7 +626,7 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 			}
 			if executable := windowsPackagedDirectExecutable(activation.appUserModelID); executable != "" {
 				executableCommand := append([]string{executable}, buildCodexArgumentsForSettings(debugPort, settings.CodexExtraArgs, settings)...)
-				executableHandle, executableErr := startVerifiedWindowsPackagedProcess(executableCommand, activation.appUserModelID, debugPort, false, "已注册 MSIX 桌面可执行文件", "launcher.windows_packaged_executable", 20*time.Second)
+				executableHandle, executableErr := startVerifiedWindowsPackagedProcess(executableCommand, activation.appUserModelID, debugPort, false, "已注册 MSIX 桌面可执行文件", "launcher.windows_packaged_executable", 20*time.Second, settings)
 				if executableErr == nil {
 					return executableHandle, nil
 				}
@@ -635,7 +635,7 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 			} else {
 				attempts = append(attempts, windowsPackagedLaunchAttempt{Method: "msix_full_trust_executable", Outcome: "not_available"})
 			}
-			processID, activationErr := activateWindowsPackagedAppWithEnvironment(activation.appUserModelID, activation.arguments, codexLaunchEnvironment())
+			processID, activationErr := activateWindowsPackagedAppWithEnvironment(activation.appUserModelID, activation.arguments, codexLaunchEnvironment(settings))
 			if activationErr == nil {
 				activation.processID = processID
 				if waitForWindowsPackagedCDPPortAvailable(debugPort, processID, activation.appUserModelID, true, 15*time.Second) {
@@ -674,7 +674,7 @@ func startCodexApp(appPath string, debugPort uint16, settings backendSettings) (
 	if runtime.GOOS == "windows" && !isWindowsAppsExecutionAlias(command[0]) && !fileExists(command[0]) {
 		return nil, fmt.Errorf("未找到 ChatGPT.exe 或 Codex.exe：%s", appPath)
 	}
-	handle, err := startCodexProcess(command)
+	handle, err := startCodexProcess(command, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -713,8 +713,8 @@ func windowsPackagedAttemptOutcome(err error) string {
 	}
 }
 
-func startVerifiedWindowsPackagedProcess(command []string, appUserModelID string, debugPort uint16, requirePackageIdentity bool, method, eventPrefix string, timeout time.Duration) (codexLaunchHandle, error) {
-	handle, err := startCodexProcess(command)
+func startVerifiedWindowsPackagedProcess(command []string, appUserModelID string, debugPort uint16, requirePackageIdentity bool, method, eventPrefix string, timeout time.Duration, settings backendSettings) (codexLaunchHandle, error) {
+	handle, err := startCodexProcess(command, settings)
 	if err != nil {
 		appendDiagnosticLog(eventPrefix+"_failed", map[string]any{
 			"appUserModelId": appUserModelID,
@@ -875,13 +875,51 @@ func quoteWindowsArgument(arg string) string {
 	return output.String()
 }
 
-func codexLaunchEnvironment() []string {
+func codexLaunchEnvironment(settingsValues ...backendSettings) []string {
+	var environment []string
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{"PATH=" + defaultGUIPath}
-	default:
+		environment = append(environment, "PATH="+defaultGUIPath)
+	}
+	if len(settingsValues) > 0 {
+		environment = append(environment, imageRelayCLIEnvironment(settingsValues[0])...)
+	}
+	return environment
+}
+
+func imageRelayCLIEnvironment(settings backendSettings) []string {
+	profile := activeRelayProfile(normalizeSettings(settings))
+	if profile.Protocol != "responses" || !usesSeparateImageGenerationAPI(profile) {
 		return nil
 	}
+	return []string{
+		"OPENAI_API_KEY=" + imageRelayCLIAPIKey,
+		fmt.Sprintf("OPENAI_BASE_URL=http://127.0.0.1:%d/v1", localRelayProxyPort),
+	}
+}
+
+func mergeLaunchEnvironment(base, overrides []string) []string {
+	if len(overrides) == 0 {
+		return append([]string(nil), base...)
+	}
+	keys := map[string]struct{}{}
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && strings.TrimSpace(key) != "" {
+			keys[strings.ToUpper(key)] = struct{}{}
+		}
+	}
+	merged := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, replaced := keys[strings.ToUpper(key)]; replaced {
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	return append(merged, overrides...)
 }
 
 func shouldQuitRunningCodexBeforeLaunch(appPath string, debugPort uint16, restart bool) bool {
@@ -1134,9 +1172,9 @@ type codexProcessLaunch struct {
 	debugPort                     uint16
 }
 
-func startCodexProcess(command []string) (codexLaunchHandle, error) {
+func startCodexProcess(command []string, settingsValues ...backendSettings) (codexLaunchHandle, error) {
 	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Env = append(os.Environ(), codexLaunchEnvironment()...)
+	cmd.Env = mergeLaunchEnvironment(os.Environ(), codexLaunchEnvironment(settingsValues...))
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	hideSubprocessWindow(cmd)

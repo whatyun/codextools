@@ -5129,6 +5129,7 @@ function RelayProfileDetail({
   actions: Actions;
 }) {
   const [draft, setDraft] = useState<RelayProfile>(profile);
+  const [imageSettingsApplying, setImageSettingsApplying] = useState(false);
   const isActive = !isNew && profile.id === form.activeRelayId;
   useEffect(() => {
     setDraft(profile);
@@ -5203,6 +5204,31 @@ function RelayProfileDetail({
     });
     void actions.switchRelayProfile(next);
   };
+  const saveAndApplyImageSettings = async () => {
+    if (isNew) {
+      actions.showNotice("图片生成路由", "请先保存新供应商，再应用图片路由。", "failed");
+      return;
+    }
+    const next = updateRelayProfile(form, profile.id, draft);
+    setImageSettingsApplying(true);
+    try {
+      if (isActive) {
+        const applied = await actions.switchRelayProfile(next);
+        if (applied) {
+          actions.showNotice("图片生成路由", "图片路由已保存并应用；重启 ChatGPT 后 Imagegen CLI fallback 会自动使用独立图片中转。", "ok");
+        }
+        return;
+      }
+      const result = await actions.saveSettingsValue(next, true);
+      if (!result) return;
+      const savedSettings = normalizeSettings(result.settings);
+      onFormChange(savedSettings);
+      syncDraftFromSettings(savedSettings);
+      actions.showNotice("图片生成路由", "图片路由已保存；切换到此供应商时生效。", result.status);
+    } finally {
+      setImageSettingsApplying(false);
+    }
+  };
   return (
     <div className="relay-detail-page">
       <Toolbar>
@@ -5221,6 +5247,8 @@ function RelayProfileDetail({
         isNew={isNew}
         onFormPatch={(patch) => onFormChange({ ...form, ...patch })}
         onProfileChange={setDraft}
+        onApplyImageSettings={() => void saveAndApplyImageSettings()}
+        imageSettingsApplying={imageSettingsApplying}
         onSwitch={switchDraft}
         actions={actions}
       />
@@ -5954,6 +5982,8 @@ function RelayProfileEditor({
   isNew = false,
   onFormPatch,
   onProfileChange,
+  onApplyImageSettings,
+  imageSettingsApplying = false,
   onSwitch,
   actions,
 }: {
@@ -5962,6 +5992,8 @@ function RelayProfileEditor({
   isNew?: boolean;
   onFormPatch: (patch: Partial<BackendSettings>) => void;
   onProfileChange: (value: RelayProfile) => void;
+  onApplyImageSettings: () => void;
+  imageSettingsApplying?: boolean;
   onSwitch: () => void;
   actions: Actions;
 }) {
@@ -6181,7 +6213,13 @@ function RelayProfileEditor({
         </div>
       ) : null}
       <RelayContextSelectionEditor profile={profile} form={form} onChange={(contextSelection) => updateDraft({ contextSelection })} onUseCommonConfigChange={(useCommonConfig) => updateDraft({ useCommonConfig })} />
-      <ImageRelaySettings onChange={updateDraft} profile={profile} />
+      <ImageRelaySettings
+        applying={imageSettingsApplying}
+        isNew={isNew}
+        onApply={onApplyImageSettings}
+        onChange={updateDraft}
+        profile={profile}
+      />
       {showApiFields && profile.protocol === "chatCompletions" ? (
         <div className="hint-line relay-protocol-hint">
           <MessageCircle className="h-4 w-4" />
@@ -6199,9 +6237,15 @@ function RelayProfileEditor({
 function ImageRelaySettings({
   profile,
   onChange,
+  onApply,
+  applying,
+  isNew,
 }: {
   profile: RelayProfile;
   onChange: (patch: Partial<RelayProfile>) => void;
+  onApply: () => void;
+  applying: boolean;
+  isNew: boolean;
 }) {
   const apiMode = profile.relayMode === "mixedApi" || profile.relayMode === "pureApi";
   const separateApiSupported = profile.protocol === "responses";
@@ -6314,8 +6358,15 @@ function ImageRelaySettings({
       </div>
       <div className="hint-line image-route-hint">
         <Save className="h-4 w-4" />
-        <span>图片路由属于当前供应商；修改后使用详情页顶部的“保存”。当前供应商如需重写 config.toml，再点击“重新应用”。</span>
+        <span>独立图片 Key 只由本地图片代理读取；Imagegen fallback 仅把图片接口请求交给它，普通对话继续走默认中转。</span>
       </div>
+      <Toolbar>
+        <Button disabled={controlsDisabled || applying || isNew} onClick={onApply} type="button">
+          <Save className="h-4 w-4" />
+          {applying ? "正在应用图片路由" : "保存并应用图片路由"}
+        </Button>
+        {isNew ? <span className="image-apply-hint">请先保存新供应商。</span> : null}
+      </Toolbar>
     </section>
   );
 }

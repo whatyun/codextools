@@ -214,27 +214,23 @@
 
       <section class="release-note">
         <div data-lang="en" class="active">
-          <strong>Version 1.2.5</strong>
+          <strong>Version 1.2.6</strong>
           <ul>
-            <li>Makes Windows full restart safer by coalescing duplicate restart requests, releasing the restart lock once the new launcher is ready, and avoiding parallel restarts that could fight over the same ChatGPT/Codex instance.</li>
-            <li>Only closes a Windows debugging port through CDP when the target really belongs to the selected ChatGPT/Codex app, and records an explicit diagnostic when an unrelated process owns the port.</li>
-            <li>Adds Windows-specific restart cleanup that identifies the target packaged app or executable, waits briefly for a graceful exit, then stops remaining ChatGPT/Codex process trees before relaunch when needed.</li>
-            <li>Replaces the generic debug-port wait with a Windows-aware release check that verifies bindability, live TCP acceptance, LISTENING owners, and pre-LISTEN bound owners before reusing the port.</li>
-            <li>Improves diagnostics for restart failures by reporting coalesced retries, skipped unowned CDP shutdown, stopped Windows target PIDs, unavailable debug ports, and temporary CDP outages without flooding retry logs.</li>
-            <li>Keeps the bridge watchdog calmer on Windows by suppressing repetitive retry noise and only logging the first and last injection retry unless the platform can safely tolerate full retry traces.</li>
-            <li>Adds regression coverage for the new Windows restart guard and debug-port release logic so restart behavior stays predictable across packaged and unpackaged desktop installs.</li>
+            <li>Refines relay routing for image-generation endpoints so image creation and image edit requests follow the intended provider path without being mistaken for text-only model calls.</li>
+            <li>Adds regression coverage for image relay routing to keep OpenAI-compatible image endpoints stable across official, hybrid, and relay modes.</li>
+            <li>Refreshes the README feature overview and promotes the English homepage as the main repository entry point.</li>
+            <li>Moves historical release notes into a dedicated release-notes directory and keeps the current GitHub Release description focused on this patch.</li>
+            <li>Removes duplicated release assets from GitHub Pages so the project page stays lighter while GitHub Releases remain the source for installers.</li>
           </ul>
         </div>
         <div data-lang="zh">
-          <strong>版本 1.2.5</strong>
+          <strong>版本 1.2.6</strong>
           <ul>
-            <li>强化 Windows 完整重启流程：合并重复重启请求，在新 launcher 真正准备好后立即释放重启锁，避免多个重启流程同时争抢同一个 ChatGPT/Codex 实例。</li>
-            <li>Windows 下只有在调试端口确实属于当前选中的 ChatGPT/Codex 应用时才通过 CDP 请求关闭；如果端口被其他程序占用，会记录明确诊断而不是误杀无关进程。</li>
-            <li>新增 Windows 重启前清理逻辑：识别目标商店包或桌面可执行文件，先等待短暂的正常退出窗口，必要时再结束剩余的 ChatGPT/Codex 进程树后重新拉起。</li>
-            <li>将通用调试端口等待升级为 Windows 感知释放检查：重启前同时确认端口是否可重新绑定、是否仍在接受连接、是否存在 LISTENING 进程，以及是否存在尚未 LISTEN 的 BOUND 占用者。</li>
-            <li>改进重启失败诊断：补充重复重启合并、跳过未归属 CDP 关闭、已停止的 Windows 目标 PID、调试端口不可用以及临时 CDP 不可达等结构化日志，同时避免刷屏。</li>
-            <li>降低 Windows bridge 重试噪音：注入重试默认只记录第一次和最后一次，只有适合的平台才保留完整重试轨迹，方便排查又不淹没有效日志。</li>
-            <li>补充新的 Windows 重启互斥与调试端口释放回归测试，让打包版和非打包版桌面安装在重启时都保持可预测行为。</li>
+            <li>优化图片生成接口的中转路由，图片创建和图片编辑请求会走正确的 provider 路径，不再被误判为纯文本模型请求。</li>
+            <li>补充图片中转路由回归测试，确保官方、混合 API 和中转模式下的 OpenAI 兼容图片接口保持稳定。</li>
+            <li>刷新 README 功能概览，并将英文首页作为仓库主入口。</li>
+            <li>历史发布说明迁移到独立 release-notes 目录，让当前 GitHub Release 描述聚焦本次补丁。</li>
+            <li>移除 GitHub Pages 中重复托管的 release 大文件，安装包继续以 GitHub Releases 为准，让项目页面更轻。</li>
           </ul>
         </div>
       </section>

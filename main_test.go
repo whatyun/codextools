@@ -41,7 +41,7 @@ func TestParseLaunchRequestReadsRestartFlag(t *testing.T) {
 }
 
 func TestRuntimeVersionMatchesReleaseBuild(t *testing.T) {
-	if version != "1.2.5" {
+	if version != "1.2.6" {
 		t.Fatalf("runtime version should identify the release build, got %q", version)
 	}
 }
@@ -279,8 +279,9 @@ func TestRelayProfileHTTPProxyUIAndStateAreWired(t *testing.T) {
 		`允许当前中转使用图片生成`,
 		`图片生成使用独立 API 和 Key`,
 		`图片与默认中转共用 HTTP 代理`,
-		`图片路由属于当前供应商`,
-		`<ImageRelaySettings onChange={updateDraft} profile={profile} />`,
+		`独立图片 Key 只由本地图片代理读取`,
+		`保存并应用图片路由`,
+		`onApply={onApplyImageSettings}`,
 		`onClick={() => onEdit(profile.id)}`,
 		`代理 URL`,
 		`http://127.0.0.1:7890`,
@@ -298,6 +299,72 @@ func TestRelayProfileHTTPProxyUIAndStateAreWired(t *testing.T) {
 	}
 	if strings.Contains(source[mainScreenStart:detailStart], "<ImageRelaySettings") {
 		t.Fatal("image relay settings must live in provider details, not the relay overview")
+	}
+}
+
+func TestImageRelayCLIEnvironmentUsesLocalProxyWithoutExposingImageKey(t *testing.T) {
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                            "image-relay",
+		Name:                          "Image relay",
+		RelayMode:                     "pureApi",
+		Protocol:                      "responses",
+		BaseURL:                       "https://text.example.test/v1",
+		APIKey:                        "text-secret",
+		ImageGenerationEnabled:        true,
+		ImageGenerationUseSeparateAPI: true,
+		ImageGenerationBaseURL:        "https://image.example.test/v1",
+		ImageGenerationAPIKey:         "image-secret",
+	}}
+	settings.ActiveRelayID = "image-relay"
+
+	environment := imageRelayCLIEnvironment(settings)
+	joined := strings.Join(environment, "\n")
+	for _, expected := range []string{
+		"OPENAI_API_KEY=" + imageRelayCLIAPIKey,
+		fmt.Sprintf("OPENAI_BASE_URL=http://127.0.0.1:%d/v1", localRelayProxyPort),
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("image CLI environment missing %q: %#v", expected, environment)
+		}
+	}
+	for _, secret := range []string{"text-secret", "image-secret", "image.example.test"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("image CLI environment exposed provider secret %q: %#v", secret, environment)
+		}
+	}
+}
+
+func TestImageRelayCLIEnvironmentDisabledForNormalRelay(t *testing.T) {
+	settings := defaultSettings()
+	settings.RelayProfiles = []relayProfile{{
+		ID:                     "text-relay",
+		RelayMode:              "pureApi",
+		Protocol:               "responses",
+		BaseURL:                "https://text.example.test/v1",
+		APIKey:                 "text-secret",
+		ImageGenerationEnabled: true,
+	}}
+	settings.ActiveRelayID = "text-relay"
+
+	if environment := imageRelayCLIEnvironment(settings); len(environment) != 0 {
+		t.Fatalf("normal relay must not inject Imagegen CLI environment: %#v", environment)
+	}
+}
+
+func TestMergeLaunchEnvironmentReplacesExistingOpenAIValues(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "OPENAI_API_KEY=real-secret", "OPENAI_BASE_URL=https://api.openai.com/v1", "OTHER=value"}
+	overrides := []string{"OPENAI_API_KEY=" + imageRelayCLIAPIKey, "OPENAI_BASE_URL=http://127.0.0.1:57323/v1"}
+	merged := mergeLaunchEnvironment(base, overrides)
+	joined := strings.Join(merged, "\n")
+
+	if strings.Contains(joined, "real-secret") || strings.Contains(joined, "api.openai.com") {
+		t.Fatalf("existing OpenAI credentials survived launch environment merge: %#v", merged)
+	}
+	for _, expected := range append([]string{"PATH=/usr/bin", "OTHER=value"}, overrides...) {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("merged launch environment missing %q: %#v", expected, merged)
+		}
 	}
 }
 
